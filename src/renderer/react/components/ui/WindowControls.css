@@ -28,3 +28,22 @@
   border-color: #ff5f57;
   color: #fff;
 }
+
+.cy-page.is-chat-mode .cy-winbtn {
+  background: rgb(246 247 250 / 60%);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 10%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  backdrop-filter: blur(14px) saturate(150%);
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.12s, box-shadow 0.2s;
+}
+
+.cy-page.is-chat-mode .cy-winbtn:hover {
+  border-color: rgb(0 0 0 / 12%);
+  background: rgb(246 247 250 / 60%);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 16%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  color: var(--cy-text);
+  transform: translateY(-1px);
+}
+
+.cy-page.is-chat-mode .cy-winbtn--close:hover {
+  color: #ec4899;
+}

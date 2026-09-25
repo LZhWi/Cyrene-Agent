@@ -47,6 +47,7 @@ import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
 import { appendInternalTranscriptMessage, createInternalTranscriptMessage } from "./internal-transcript";
 import { callLLM, summarizeHistory } from "./harness-llm";
 import { runToolRound, type ToolRoundOutcome } from "./tool-round";
+import { compressLocalTwoPhaseTranscript } from "./local-two-phase-transcript";
 import {
   buildStableSystemPrefix,
   type PromptLayers,
@@ -168,6 +169,9 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       if (outcome === "cancelled") return cancelledResult(run);
       input.onEvent?.({ type: "round_end", roundId });
       run.rounds++;
+      if (input.transcriptPolicy === "local-two-phase") {
+        run.messages = compressLocalTwoPhaseTranscript(run.messages);
+      }
       checkpoint(run);
       continue;
     }
@@ -212,7 +216,9 @@ function handoffResult(
     finalState: deepClone(run.state),
     terminated: false,
     rounds: run.rounds,
-    handoffMessages: run.messages.map((message) => deepClone(message)),
+    handoffMessages: (run.input.transcriptPolicy === "local-two-phase"
+      ? compressLocalTwoPhaseTranscript(run.messages)
+      : run.messages).map((message) => deepClone(message)),
     ...(reason ? { terminateReason: reason } : {}),
   };
 }
@@ -240,8 +246,9 @@ function createRun(input: HarnessInput): HarnessRun {
     ...registryToolSpecs,
     ...getHarnessBuiltinToolSpecs({
       includeInteractive: input.includeInteractiveTools,
-      includeTask: Boolean(input.taskExecutor),
-      planState: input.planState,
+      includeTodo: input.includeTaskOrientedTools,
+      includeTask: input.includeTaskOrientedTools !== false && Boolean(input.taskExecutor),
+      planState: input.includeTaskOrientedTools === false ? undefined : input.planState,
     }),
   ];
 
@@ -323,6 +330,9 @@ function buildRoundPromptLayers(input: HarnessInput): PromptLayers {
  * 保证主循环到首次 LLM fetch 之间保持同步直达。
  */
 function compactIfNeeded(run: HarnessRun, promptLayers: PromptLayers): Promise<void> | undefined {
+  // 本地两阶段循环使用固定 80000 字符窗口规则；不能再让 Harness 摘要压缩
+  // 改写 Soul 将要看到的历史。
+  if (run.input.transcriptPolicy === "local-two-phase") return undefined;
   const { config } = run;
   const roundSystemPrompt = buildStableSystemPrefix(promptLayers);
   const budget = computeTokenBudget(

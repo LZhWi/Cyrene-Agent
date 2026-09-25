@@ -178,8 +178,8 @@ export function createChannelsSubsystem(
         const visionCfg = loadVisionConfig();
         if (!visionCfg) return { ok: false, error: "未配置视觉模型，无法分析图片" };
         try {
-          const { captionImage } = await import("../orchestrator/vision-captioner");
-          const caption = await captionImage(
+          const { captionImageWithRetryAndFallback } = await import("../orchestrator/vision-captioner");
+          const caption = await captionImageWithRetryAndFallback(
             { base64: validated.buffer.toString("base64"), mime: validated.mime },
             IMAGE_CAPTION_PROMPT,
             visionCfg,

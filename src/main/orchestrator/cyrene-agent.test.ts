@@ -571,6 +571,10 @@ describe("CyreneAgent chat tool enhancement branch", () => {
 
     await vi.waitFor(() => expect(mockedRunChatLoop).toHaveBeenCalledOnce());
     expect(mockedRunHarnessWithAdapter).not.toHaveBeenCalled();
+    expect(mockedRunChatLoop).toHaveBeenCalledWith(expect.objectContaining({
+      streaming: false,
+      fallbackRevealIntervalMs: 0,
+    }));
     await vi.waitFor(() => {
       expect(events.find((e) => (e as { type?: string }).type === EventType.RUN_FINISHED)).toBeDefined();
     });
@@ -636,7 +640,11 @@ describe("CyreneAgent chat tool enhancement branch", () => {
     expect(mockedRunChatLoop).toHaveBeenCalledWith(expect.objectContaining({
       messages: [{ role: "user", content: "你好" }],
       soulSystemBaseContent: "SOUL",
-      runtimeContext: "TAIL",
+      systemContext: "MEMORY",
+      tailSystemContext: "TAIL",
+      streaming: false,
+      fallbackRevealIntervalMs: 0,
+      diagnosticFailureReply: true,
     }));
   });
 });

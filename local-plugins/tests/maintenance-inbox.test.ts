@@ -51,4 +51,12 @@ describe("维护候选收件箱", () => {
     expect(inbox.addAutomatically(entries, [])).toBe(0);
     expect([...map.entries()]).toEqual(before);
   });
+
+  it("本地冲突候选保存评分并按 Resolver 优先级排序", () => {
+    const { inbox, entries } = fixture();
+    inbox.addDetected({ leftId: "a", rightId: "c", score: 0.8, reason: "conflict", conflictScore: 76, resolverPriority: "high", scoringSignals: { correctionIntent: true, ragCandidate: true, recentInjection: false, evidenceAvailable: true, localContradiction: true, impactScope: "medium", penalties: [] } }, entries);
+    const items = inbox.view(entries).items;
+    expect(items[0]).toMatchObject({ kind: "conflict", conflictScore: 76, resolverPriority: "high", stale: false });
+    expect(inbox.addDetected({ leftId: "a", rightId: "c", score: 0.8, reason: "conflict", conflictScore: 76, resolverPriority: "high", scoringSignals: { correctionIntent: true, ragCandidate: true, recentInjection: false, evidenceAvailable: true, localContradiction: true, impactScope: "medium", penalties: [] } }, entries)).toBe(items[0].id);
+  });
 });

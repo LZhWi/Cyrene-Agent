@@ -106,7 +106,8 @@ it("只向空插件库导入，先保存备份，状态提交失败不在内存�
   expect(memory.view().entries[0].provenance).toBe("legacy-unverified");
   expect(memory.search("茶")).toContain("旧系统来源片段（未核对原始对话）");
   expect(memory.search("茶")).not.toContain("用户原话：喜欢茶");
-  expect(memory.search("无关")).toContain("旧系统导入，未核对原话");
+  expect(memory.search("无关")).toContain("[用户画像]");
+  expect(memory.search("无关")).not.toContain("旧系统导入，未核对原话");
   expect(() => memory.importLegacy(plan, { revision: 1 })).toThrow("不是空库");
 
   const attestedMap = new Map<string, any>();

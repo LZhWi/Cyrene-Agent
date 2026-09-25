@@ -36,7 +36,9 @@ function load(storage: PluginStorage): DreamState {
 function sameEntry(left: Entry, right: Entry) { return JSON.stringify(left) === JSON.stringify(right); }
 
 export function createDream(storage: PluginStorage) {
-  let injectionEnabled = storage.get<boolean>(INJECTION_KEY) ?? false;
+  // 本地版只要存在 Dream 叙事就会注入；缺省值因此为开启。仍保留显式
+  // 关闭入口，方便用户临时停用，而不会删除已经生成的叙事。
+  let injectionEnabled = storage.get<boolean>(INJECTION_KEY) ?? true;
   if (typeof injectionEnabled !== "boolean") throw new Error("梦境注入设置损坏");
   let state = load(storage);
   const save = (next: Omit<DreamState, "revision">) => {
@@ -97,7 +99,7 @@ export function createDream(storage: PluginStorage) {
     },
     context() {
       if (!injectionEnabled || !state.narratives.length) return "";
-      return `[插件私有梦境反思；是基于旧记忆的模型生成叙事，不是新的事实证据]\n${state.narratives.slice(-3).map((item) => item.text).join("\n")}`;
+      return `[长期陪伴叙事]\n${state.narratives.slice(-3).map((item) => `· ${item.text}`).join("\n")}\n（这是你在梦里沉淀下来的关系印象，可作为语气与默契的背景，不要逐字复述）`;
     },
   };
 }

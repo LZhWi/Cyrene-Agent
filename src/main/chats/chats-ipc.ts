@@ -30,6 +30,7 @@ import { getAdapterForConfig } from "../orchestrator/vendors";
 import { activeChatTargetRegistry } from "../plugin-host/active-chat-target";
 import { callSummarizeModel } from "../orchestrator/context-manager";
 import { buildContextUsageSnapshot } from "../orchestrator/context-usage";
+import { scheduleVisualHistoryCaption } from "../chat/visual-history-caption";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -42,6 +43,30 @@ function broadcastChanged(senderWebContents?: WebContents | null): void {
       // 某些刚创建/未 ready 的窗口 send 可能抛错，忽略即可
     }
   }
+}
+
+function messageSourceFingerprint(message: ChatMessage): string {
+  return JSON.stringify({
+    role: message.role,
+    content: message.content,
+    at: message.at,
+    modelContext: message.modelContext,
+    attachments: message.attachments,
+  });
+}
+
+function invalidatedMessageIds(before: ChatMessage[], after: ChatMessage[]): string[] {
+  const next = new Map(after.map((message) => [message.id, messageSourceFingerprint(message)]));
+  return before
+    .filter((message) => next.get(message.id) !== messageSourceFingerprint(message))
+    .map((message) => message.id);
+}
+
+function changedUserImages(before: ChatMessage[], after: ChatMessage[]): ChatMessage[] {
+  const previous = new Map(before.map((message) => [message.id, messageSourceFingerprint(message)]));
+  return after.filter((message) => message.role === "user"
+    && message.attachments?.some((attachment) => attachment.kind === "image")
+    && previous.get(message.id) !== messageSourceFingerprint(message));
 }
 
 /** 主动压缩的模型窗口大小：与渲染层 ChatPage 每轮 run 的 slice(-16) 保持一致。 */
@@ -60,6 +85,12 @@ export function registerChatsIpc(
       conversationId: string;
       messageId: string;
       action: "ignore";
+    }) => Promise<void>;
+    publishConversationChanged?: (input: {
+      conversationId: string;
+      reason: "messages-replaced" | "message-round-deleted" | "conversation-deleted";
+      allMessages: boolean;
+      invalidatedMessageIds: string[];
     }) => Promise<void>;
   },
 ): void {
@@ -99,17 +130,26 @@ export function registerChatsIpc(
     (event, payload: { id: string; message: ChatMessage }) => {
       if (!payload || !payload.id || !payload.message) return null;
       const session = chatsStore.appendMessage(payload.id, payload.message);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        if (payload.message.role === "user") scheduleVisualHistoryCaption(payload.id, payload.message.id);
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
 
   ipc.handle(
     IPC.CHATS_UPSERT,
-    (event, payload: { id: string; message: ChatMessage } | null | undefined) => {
+    async (event, payload: { id: string; message: ChatMessage } | null | undefined) => {
       if (!payload?.id || !payload.message) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
       const session = chatsStore.upsertMessage(payload.id, payload.message);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        if (changedUserImages(before, [payload.message]).length) scheduleVisualHistoryCaption(payload.id, payload.message.id);
+        const invalidated = invalidatedMessageIds(before, session.messages);
+        if (invalidated.length) await options?.publishConversationChanged?.({ conversationId: payload.id, reason: "messages-replaced", allMessages: false, invalidatedMessageIds: invalidated });
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
@@ -154,19 +194,48 @@ export function registerChatsIpc(
 
   ipc.handle(
     IPC.CHATS_REPLACE_MESSAGES,
-    (event, payload: { id: string; messages: ChatMessage[] }) => {
+    async (event, payload: { id: string; messages: ChatMessage[] }) => {
       if (!payload || !payload.id || !Array.isArray(payload.messages)) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
       const session = chatsStore.replaceMessages(payload.id, payload.messages);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        changedUserImages(before, session.messages)
+          .forEach((message) => scheduleVisualHistoryCaption(payload.id, message.id));
+        const invalidated = invalidatedMessageIds(before, session.messages);
+        if (invalidated.length) await options?.publishConversationChanged?.({ conversationId: payload.id, reason: "messages-replaced", allMessages: false, invalidatedMessageIds: invalidated });
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
   ipc.handle(
     IPC.CHATS_REPLACE_TAIL,
-    (event, payload: { id: string; startIndex: number; messages: ChatMessage[] }) => {
+    async (event, payload: { id: string; startIndex: number; messages: ChatMessage[] }) => {
       if (!payload?.id || !Array.isArray(payload.messages)) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
       const session = chatsStore.replaceMessagesTail(payload.id, payload.startIndex, payload.messages);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        changedUserImages(before, session.messages)
+          .forEach((message) => scheduleVisualHistoryCaption(payload.id, message.id));
+        const invalidated = invalidatedMessageIds(before, session.messages);
+        if (invalidated.length) await options?.publishConversationChanged?.({ conversationId: payload.id, reason: "messages-replaced", allMessages: false, invalidatedMessageIds: invalidated });
+        broadcastChanged(event.sender);
+      }
+      return session;
+    },
+  );
+  ipc.handle(
+    IPC.CHATS_DELETE_MESSAGE,
+    async (event, payload: { id?: unknown; messageId?: unknown } | null | undefined) => {
+      if (typeof payload?.id !== "string" || !payload.id
+        || typeof payload.messageId !== "string" || !payload.messageId) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
+      const session = chatsStore.deleteMessageRound(payload.id, payload.messageId);
+      if (session) {
+        const invalidated = invalidatedMessageIds(before, session.messages);
+        if (invalidated.length) await options?.publishConversationChanged?.({ conversationId: payload.id, reason: "message-round-deleted", allMessages: false, invalidatedMessageIds: invalidated });
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
@@ -299,6 +368,7 @@ export function registerChatsIpc(
     if (!id) return false;
     const ok = chatsStore.deleteSession(id);
     if (ok) {
+      await options?.publishConversationChanged?.({ conversationId: id, reason: "conversation-deleted", allMessages: true, invalidatedMessageIds: [] });
       // 删除当前活动目标会话时使语音输入租约目标失效（登记表内部判断是否命中）
       activeChatTargetRegistry.notifySessionDeleted(id);
       try {

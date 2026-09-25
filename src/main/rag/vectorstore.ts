@@ -19,11 +19,16 @@ export interface MemoryEntry {
 export interface SearchResult {
   entry: MemoryEntry;
   score: number;        // 加权后的综合分数（余弦 × weight × 衰减）
+  /** 自动注入门禁使用的原始检索信号；普通调用方可忽略。 */
+  retrievalSignals?: { vectorScore: number; bm25Score: number };
+  /** 当前 score 的来源，避免把 reranker 分数与归一化 hybrid 分数混用。 */
+  rankingSource?: "hybrid" | "reranker";
 }
 
 export interface VectorSearchOptions {
   importIds?: string[];
   allowedEntryIds?: string[];
+  recordRecall?: boolean;
 }
 
 // ── 余弦相似度（嵌入已归一化，等价于点积） ──
@@ -159,11 +164,17 @@ function buildIvfIndex(
 }
 
 // ── JSON 向量存储 ──
+let nextStoreInstanceId = 0;
+
 export class JsonVectorStore {
   private filePath: string;
   private metaFilePath: string;
+  private readonly instanceId = ++nextStoreInstanceId;
   private entries: MemoryEntry[] = [];
   private dirty = false;
+  private saveTimer: NodeJS.Timeout | null = null;
+  private persisting = false;
+  private writeSeq = 0;
   private indexMeta: EmbeddingIndexMetadata | null = null;
 
   /** IVF 索引，null = 未构建或需要重建 */
@@ -214,13 +225,67 @@ export class JsonVectorStore {
   }
 
   private save(): void {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      void this.persist();
+    }, 1500);
+  }
+
+  private async persist(): Promise<void> {
+    if (this.persisting) {
+      this.save();
+      return;
+    }
+    this.persisting = true;
+    const seq = ++this.writeSeq;
+    const tmpPath = `${this.filePath}.tmp-${process.pid}-${this.instanceId}-${seq}`;
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(this.filePath, JSON.stringify(this.entries, null, 2), "utf8");
+      const handle = await fs.promises.open(tmpPath, "w");
+      try {
+        await handle.write("[");
+        for (let i = 0; i < this.entries.length; i++) {
+          await handle.write(`${i > 0 ? "," : ""}${JSON.stringify(this.entries[i])}`);
+          if (i % 64 === 63) await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        await handle.write("]");
+      } finally {
+        await handle.close();
+      }
+      if (this.writeSeq !== seq) {
+        try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
+        return;
+      }
+      fs.renameSync(tmpPath, this.filePath);
       this.dirty = false;
     } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
       console.warn("[RAG] failed to save vector store:", err);
+    } finally {
+      this.persisting = false;
+      if (this.dirty && !this.saveTimer) this.save();
+    }
+  }
+
+  flushSync(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.dirty) return;
+    this.writeSeq++;
+    try {
+      const dir = path.dirname(this.filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const tmpPath = `${this.filePath}.flush-${process.pid}-${this.instanceId}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(this.entries), "utf8");
+      fs.renameSync(tmpPath, this.filePath);
+      this.dirty = false;
+    } catch (err) {
+      console.warn("[RAG] failed to flush vector store:", err);
     }
   }
 
@@ -510,13 +575,15 @@ export class JsonVectorStore {
     const top = results.slice(0, topK);
 
     // 更新召回时间（仅对 topK 结果）
-    for (const r of top) {
-      r.entry.lastRecalledAt = now;
-      r.entry.weight = Math.min(r.entry.weight + 0.05, 5.0);
-    }
-    if (top.length > 0) {
-      this.dirty = true;
-      this.save();
+    if (options.recordRecall !== false) {
+      for (const r of top) {
+        r.entry.lastRecalledAt = now;
+        r.entry.weight = Math.min(r.entry.weight + 0.05, 5.0);
+      }
+      if (top.length > 0) {
+        this.dirty = true;
+        this.save();
+      }
     }
 
     return top;

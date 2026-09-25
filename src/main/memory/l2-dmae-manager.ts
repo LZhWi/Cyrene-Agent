@@ -175,6 +175,13 @@ export class L2DmaeManager {
     return [...pinned, ...active.map((e) => e.l2)].slice(0, maxCount)
   }
 
+  /** 编辑或删除 L2 时同步移除运行时与持久化的旧激活状态。 */
+  async removeMemory(l2Id: string): Promise<void> {
+    this.dmae.removeEntry(l2Id)
+    this.intrinsicValues.delete(l2Id)
+    await memoryStore.deleteL2DmaeState(l2Id)
+  }
+
   /** 把引擎内所有状态写回 memory.json */
   private async syncToStore(): Promise<void> {
     // 这里用 init/update 组合实现全量同步：

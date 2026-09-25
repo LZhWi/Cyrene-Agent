@@ -73,6 +73,28 @@ describe("settings i18n regressions", () => {
     expect(t("settings.profile.count", { count: 3 })).toBe("3 个档案");
   });
 
+  it("keeps chat image routing and the vision backend as separate controls", () => {
+    const dom = createSettingsDocument();
+    const directImageToggle = dom.window.document.getElementById("multimodal-toggle");
+    const visionBackend = dom.window.document.getElementById("vision-backend-select") as HTMLSelectElement | null;
+
+    expect(directImageToggle?.getAttribute("type")).toBe("checkbox");
+    expect(Array.from(visionBackend?.options ?? []).map((option) => option.value)).toEqual([
+      "main",
+      "independent",
+    ]);
+  });
+
+  it("keeps default mode and segmented output selectable", () => {
+    const dom = createSettingsDocument();
+    const buttons = dom.window.document.querySelectorAll<HTMLButtonElement>(
+      "#default-chat-mode-select .option-block, #segmented-output-select .option-block",
+    );
+
+    expect(buttons).toHaveLength(5);
+    expect(Array.from(buttons).every((button) => !button.disabled)).toBe(true);
+  });
+
   it.each([
     ["settings.preset.websiteTitle", { shortName: "MiniMax" }, "前往 MiniMax 官网"],
     ["settings.profile.editing", { name: "大M" }, "正在编辑「大M」"],

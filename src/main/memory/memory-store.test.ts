@@ -222,6 +222,7 @@ describe("memoryStore", () => {
     const store = await memoryStore.load()
     expect(store.l2.some((item) => item.id === memory.id)).toBe(false)
     expect((store.evidence ?? []).some((item) => item.memoryId === memory.id)).toBe(false)
+    expect((store.l2DmaeStates ?? []).some((item) => item.l2Id === memory.id)).toBe(false)
   })
 
   it("marks L2 sync status and persists rag ids", async () => {

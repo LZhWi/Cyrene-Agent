@@ -22,6 +22,9 @@ export type PluginCapability =
   | "screen-observation"
   | "user-presence"
   | "weather-context"
+  | "companion-context"
+  | "proactive-documents"
+  | "memory-retrieval"
   | "scheduler"
   | "speech-input";
 
@@ -36,6 +39,9 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = [
   "screen-observation",
   "user-presence",
   "weather-context",
+  "companion-context",
+  "proactive-documents",
+  "memory-retrieval",
   "scheduler",
   "speech-input",
 ];
@@ -202,7 +208,7 @@ export interface PluginLlmMessage {
 }
 
 export interface PluginLlmGenerateOptions {
-  /** 1-8192; defaults to 1024. */
+  /** 1-32768; defaults to 1024. */
   maxTokens?: number;
   /** 1000-300000 ms; defaults to the current chat timeout capped at 120s. */
   timeoutMs?: number;
@@ -210,6 +216,8 @@ export interface PluginLlmGenerateOptions {
   signal?: AbortSignal;
   /** Short diagnostic label appended to plugin:<id>. */
   purpose?: string;
+  /** Optional per-request reasoning override. Omit to inherit the selected model profile. */
+  reasoning?: "inherit" | "on" | "off";
 }
 
 /** 无头目标运行的稳定进度投影；不暴露宿主 Harness 内部事件结构。 */
@@ -312,6 +320,19 @@ export interface PluginAssistantMessageFeedbackEvent extends PluginHostEventBase
   conversationId: string;
   messageId: string;
   action: "ignore";
+}
+
+/**
+ * 宿主会话中已经持久化的消息被改写、删除或整段移除。
+ * 事件只暴露稳定 ID，不暴露消息正文；插件可据此使私有历史、证据和索引失效。
+ */
+export interface PluginConversationChangedEvent extends PluginHostEventBase {
+  conversationId: string;
+  reason: "messages-replaced" | "message-round-deleted" | "conversation-deleted";
+  /** conversation-deleted 时为 true，插件应使该会话的全部来源失效。 */
+  allMessages: boolean;
+  /** 被移除或正文/角色/时间发生变化的旧消息 ID。 */
+  invalidatedMessageIds: string[];
 }
 
 interface PluginTurnEventBase extends PluginHostEventBase {
@@ -437,6 +458,8 @@ export interface PluginMessagePageInput {
   conversationId: string;
   cursor?: string;
   limit?: number;
+  /** Use stable retrieval text instead of raw content for this read. */
+  historyProjection?: true;
   /** 可选的包含式起点；与 throughMessageId 一起冻结读取范围。 */
   fromMessageId?: string;
   /** 可选的包含式终点；分页过程中不得越过该消息。 */
@@ -463,11 +486,13 @@ export interface PluginConversationsService {
   getMessages(input: PluginMessagePageInput): Promise<PluginMessagePage>;
 }
 
-/** 插件主动消息投递结果；消息在返回前已经写入宿主原生会话。 */
+/** 插件主动消息投递结果；消息在返回前已经写入所选投递目标。 */
 export interface PluginAssistantDeliveryResult {
   conversationId: string;
   messageId: string;
   at: string;
+  deliveredText?: string;
+  images?: Array<{ name: string; caption: string; summary?: string; indexedAt?: number }>;
 }
 
 export interface PluginAssistantDeliveryOptions {
@@ -476,11 +501,12 @@ export interface PluginAssistantDeliveryOptions {
 }
 
 /**
- * 受限的助手消息投递服务。插件只能向宿主管理的主动消息会话追加纯文本助手消息，
+ * 受限的助手消息投递服务。插件只能向宿主管理的主动消息目标投递纯文本助手消息，
  * 不能指定普通会话、伪造用户消息或改写既有历史。
  */
 export interface PluginAssistantDeliveryService {
   postProactiveMessage(text: string, options?: PluginAssistantDeliveryOptions): Promise<PluginAssistantDeliveryResult>;
+  canPostProactiveMessage?(): Promise<boolean>;
 }
 
 /**
@@ -602,6 +628,13 @@ export interface PluginSpeechInputService {
 export interface PluginScreenObservationService {
   /** 截取当前主屏并由宿主视觉模型分析；图片不写盘，也不会返回给插件。 */
   observe(input?: { focus?: string; signal?: AbortSignal }): Promise<string>;
+  /** 周期观察专用；额外返回是否因排除区域后的位图无变化而复用了上次摘要。 */
+  observeSnapshot(input?: { previousSummary?: string; signal?: AbortSignal }): Promise<{
+    text: string;
+    noChange: boolean;
+  }>;
+  /** 周期监控停止或失败时，撤销对外暴露的连续无变化计数；不清除比较基线。 */
+  markPeriodicUnavailable?(): void;
 }
 
 /** 只读的宿主在场状态；不包含窗口标题、按键、鼠标位置或其他行为明细。 */
@@ -609,6 +642,9 @@ export interface PluginUserPresenceSnapshot {
   at: string;
   idleSeconds: number;
   screenLocked: boolean;
+  localHour?: number;
+  localMinute?: number;
+  lastUserMessageAt?: number | null;
 }
 
 export interface PluginUserPresenceService {
@@ -631,6 +667,95 @@ export interface PluginWeatherContextService {
   snapshot(): Promise<PluginWeatherContextSnapshot | null>;
 }
 
+/** 陪伴聊天可选的宿主只读上下文来源。 */
+export type PluginCompanionContextKind = "call" | "minecraft" | "music";
+
+/**
+ * 宿主已整理好的单段历史上下文。content 只描述已发生或当前可观察的事实，
+ * 插件仍应把它作为非指令资料注入，不能把其中的文本当作系统命令执行。
+ */
+export interface PluginCompanionContextItem {
+  kind: PluginCompanionContextKind;
+  content: string;
+  observedAt?: string;
+}
+
+export interface PluginCompanionContextService {
+  /**
+   * 读取指定会话可见的上下文；只读，不推进游标、激活值或消费状态。
+   * kinds 省略时由宿主返回全部可用来源。
+   */
+  snapshot(input: {
+    conversationId?: string;
+    userText: string;
+    kinds?: PluginCompanionContextKind[];
+    signal?: AbortSignal;
+  }): Promise<{ items: PluginCompanionContextItem[] }>;
+}
+
+export interface PluginProactiveDocumentContextService {
+  search(query: string, signal?: AbortSignal): Promise<string>;
+}
+
+export interface PluginMemoryRetrievalCandidate {
+  id: string;
+  text: string;
+  /** Stable chat-history retrieval text; ordinary conversation readers should use text. */
+  historyText?: string;
+  embedding: number[];
+  /** 与本地 user_memory RAG 条目一致，初始为 1，召回后最多增长至 5。 */
+  weight: number;
+  lastRecalledAt: number;
+}
+
+export interface PluginMemoryQueryRoute {
+  needsExpansion: boolean;
+  retrievalKinds: Array<"commitment" | "preference" | "goal" | "wish" | "experience" | "fact" | "emotion">;
+  scope: "normal" | "scoped_list" | "exhaustive_list";
+  confidence: number;
+  source: "llm" | "fallback";
+}
+
+export interface PluginMemoryRetrievalService {
+  /** 使用宿主当前 BGE-M3 Provider 建立插件私有向量；正文不会写入宿主记忆库。 */
+  embed(texts: string[], options?: { signal?: AbortSignal }): Promise<{
+    vectors: number[][];
+    identity: { provider: string; model: string; dimensions: number };
+  }>;
+  /** 按宿主原生向量 + BM25 + 可用 Reranker 链路排序插件私有候选。 */
+  rank(input: {
+    query: string;
+    candidates: PluginMemoryRetrievalCandidate[];
+    topK: number;
+    /** hybrid 为原生混合检索；semantic 只按原始余弦排序，不使用权重、衰减、BM25 或重排。 */
+    mode?: "hybrid" | "semantic" | "lexical";
+    rawScore?: boolean;
+    /** 历史 V2 多路召回先保留原生混合分，最终候选再统一重排。 */
+    rerank?: boolean;
+    signal?: AbortSignal;
+  }): Promise<{
+    rankedIds: string[];
+    vectorHitIds: string[];
+    /** 可选的原生相关性分数；旧宿主只返回上方两个 ID 数组。 */
+    ranked?: Array<{ id: string; score: number; method: "reranker" | "hybrid" | "semantic" }>;
+  }>;
+  /** 与宿主 chat_history 的 bm25Only 预检共用分词与原始 BM25 算法。 */
+  bm25TopScore?(input: { query: string; documents: string[]; signal?: AbortSignal }): Promise<number>;
+  /** 对插件私有候选使用宿主标准 cross-encoder；未安装时返回 null。 */
+  rerankDocuments?(input: { query: string; documents: string[]; signal?: AbortSignal }): Promise<Array<{ text: string; score: number }> | null>;
+  /** 使用与宿主本地版相同的供应商适配器执行可选记忆查询路由；只发送当前查询。 */
+  routeQuery?(input: {
+    query: string;
+    provider: string;
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    explicitTransport: "auto" | "openai" | "anthropic";
+    reasoning: "auto" | "off" | "low";
+    signal?: AbortSignal;
+  }): Promise<PluginMemoryQueryRoute>;
+}
+
 export interface PluginDeps {
   /** Read-only channel discovery. Registration must use PluginContext methods. */
   channels?: { has(id: string): boolean };
@@ -640,6 +765,9 @@ export interface PluginDeps {
   screenObservation?: PluginScreenObservationService;
   userPresence?: PluginUserPresenceService;
   weatherContext?: PluginWeatherContextService;
+  companionContext?: PluginCompanionContextService;
+  proactiveDocuments?: PluginProactiveDocumentContextService;
+  memoryRetrieval?: PluginMemoryRetrievalService;
   secrets?: PluginSecretsService;
   workspace?: PluginWorkspaceService;
   scheduler?: PluginSchedulerService;
@@ -665,6 +793,8 @@ interface PluginPromptBuildInputCommon {
   timezone?: string;
   /** 桌面轮次的稳定关联 ID；插件可与 host:turn:finished 配对后再提交消费副作用。 */
   runId?: string;
+  /** 动态上下文的模型阶段；缺省为最终 Soul。 */
+  target?: "soul" | "tool";
 }
 
 /** 用户会话轮次；mode 为当前会话模式。 */
@@ -730,6 +860,8 @@ export interface PluginPromptProvider {
    * （与旧版行为一致），参与 moments-post 必须显式声明，防止升级后插件不知情地被扩大调用。
    */
   sources?: PluginPromptSource[];
+  /** 缺省 soul；tool 仅用于工具决策前的动态资料。 */
+  target?: "soul" | "tool";
   /**
    * 请求 host:prompt:accepted 接收回执。旧宿主会忽略该字段但仍正常调用 provide，
    * 因而插件内容可安全降级，只是不提交依赖精确消费确认的副作用。
@@ -744,6 +876,8 @@ export interface PluginStablePromptProviderInput {
   mode: PluginPromptMode;
   conversationId: string;
   channel?: string;
+  /** 宿主当前选择的聊天风格；插件可据此提供同一套稳定人格变体。 */
+  styleId?: string;
   /** 分阶段提示词目标；旧 Provider 缺省只参与 soul。 */
   target: "soul" | "tool" | "tone" | "soul-tail";
   readonly signal: AbortSignal;

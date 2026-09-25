@@ -140,6 +140,20 @@ describe("PluginPromptRegistry", () => {
     await expect(building).resolves.toContain("FAST");
   });
 
+  it("动态与稳定插件提示词均统一允许两分钟内完成", async () => {
+    vi.useFakeTimers();
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    registry.register("demo", { id: "context", provide: () => new Promise<string>((resolve) => setTimeout(() => resolve("MEMORY"), 3_000)) }, signal);
+    registry.registerStable("demo", { id: "stable", provide: () => new Promise<string>((resolve) => setTimeout(() => resolve("STABLE"), 3_000)) }, signal);
+    const dynamic = registry.build({ source: "conversation", mode: "chat", userText: "hi" });
+    const stable = registry.buildStable({ source: "conversation", mode: "chat" });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(dynamic).resolves.toContain("MEMORY");
+    await expect(stable).resolves.toContain("STABLE");
+    expect(PLUGIN_PROMPT_PROVIDER_TIMEOUT_MS).toBe(120_000);
+  });
+
   it("停止信号、所有者注销和单项长度上限均生效", async () => {
     const registry = createPluginPromptRegistry();
     const owner = new AbortController();
@@ -175,6 +189,29 @@ describe("PluginPromptRegistry", () => {
     expect(result).toContain("plugin:demo:context-0");
     expect(result).toContain("plugin:demo:context-1");
     expect(result).not.toContain("plugin:demo:context-2");
+  });
+
+  it("Companion Chat 内建动态段沿用本地拼接，不增加来源标题或通用字符截断", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    const memory = "M".repeat(MAX_PLUGIN_PROMPT_TOTAL_CHARS + 1);
+    registry.register("companion-chat", { id: "life-context", priority: 100, provide: () => "LIFE" }, signal);
+    registry.register("companion-memory", {
+      id: "memory-context", priority: 200, consumptionReceipt: true, provide: () => memory,
+    }, signal);
+    registry.register("companion-chat", { id: "worldbook", priority: 300, provide: () => "WORLD" }, signal);
+
+    const result = await registry.buildDetailed({
+      source: "conversation", mode: "chat", chatBackend: "companion", userText: "hi", runId: "run-local",
+    } as never);
+
+    expect(result.content).toBe(`LIFE\n\n${memory}\n\nWORLD`);
+    expect(result.content).not.toContain("[插件上下文：");
+    expect(result.receipts).toEqual([{
+      providerId: "plugin:companion-memory:memory-context",
+      acceptedChars: memory.length,
+      complete: true,
+    }]);
   });
 
   it("旧 Provider 不产生回执，显式声明后返回完整接收回执", async () => {

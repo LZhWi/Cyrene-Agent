@@ -2,10 +2,10 @@
   "apiVersion": 1,
   "id": "companion-memory",
   "name": "独立记忆引擎",
-  "version": "0.53.0",
-  "description": "独立 L0/L1/L2、证据约束提取、对话连续性、历史来源核验与可选语义检索，不读写宿主记忆",
+  "version": "0.55.0",
+  "description": "独立 L0/L1/L2、证据约束提取、查询路由、消息失效同步、实体图谱与历史检索，不读写宿主记忆",
   "author": "LZhWi",
   "entry": "index.cjs",
   "defaultEnabled": false,
-  "deps": ["llm", "secrets", "conversations"]
+  "deps": ["llm", "secrets", "conversations", "companion-context", "memory-retrieval"]
 }

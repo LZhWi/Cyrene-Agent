@@ -7,7 +7,7 @@ const record: Evidence = { id: "p1", memoryId: "a", quoteSnippet: "独立线索�
 function fixture(evidence: Evidence[] = [record]) {
   const entry = { id: "a", content: "饮品偏好", quote: "", sourceAt: 1, turnId: "t", sessionId: "s", pinned: false, status: "active" };
   let snapshot: any = { version: 2, revision: 0, turns: [], processed: [], profiles: emptyProfiles(), entries: [entry, { ...entry, id: "b", content: "另条" }], evidence };
-  const storage: PluginStorage = { get: () => structuredClone(snapshot), set: (_k,v) => { snapshot = structuredClone(v); }, rootDir: () => "unused" };
+  const storage: PluginStorage = { get: (key) => key === "memory-state" ? structuredClone(snapshot) : undefined, set: (key,v) => { if (key === "memory-state") snapshot = structuredClone(v); }, rootDir: () => "unused" };
   return { memory: createMemory(storage), storage, entry };
 }
 describe("独立证据关联", () => {

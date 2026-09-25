@@ -38,6 +38,32 @@ vi.mock("./ConversationSidebar", () => ({
 import { ChatPageNavigation } from "./ChatPageNavigation";
 
 describe("ChatPageNavigation", () => {
+  it("renders a dedicated titlebar drag region", () => {
+    const html = renderToStaticMarkup(createElement(ChatPageNavigation, {
+      collapsed: false,
+      activePanel: null,
+      mode: "chat",
+      sessions: [],
+      activeSessionId: undefined,
+      onToggleCollapsed: () => undefined,
+      onModeChange: () => undefined,
+      onNewTask: () => undefined,
+      onTogglePanel: () => undefined,
+      onSelectSession: () => undefined,
+      onOpenProject: () => undefined,
+      onRenameSession: () => undefined,
+      onDeleteSession: () => undefined,
+      onTogglePinSession: () => undefined,
+      onMinimize: () => undefined,
+      onMaximize: () => undefined,
+      onCloseWindow: () => undefined,
+      onOpenSettings: () => undefined,
+    }));
+
+    expect(html).toContain('class="cy-page-drag-region"');
+    expect(html).toContain('aria-hidden="true"');
+  });
+
   it("hides the mode switch while a tool panel is open", () => {
     const html = renderToStaticMarkup(createElement(ChatPageNavigation, {
       collapsed: false,
@@ -116,6 +142,8 @@ describe("ChatPageNavigation", () => {
     const work = renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, mode: "work" }));
     expect(chat).toContain("昔涟 · 正在读书");
     expect(chat).toContain("🌸");
+    expect(chat).toContain('class="cy-chat-topfade"');
     expect(work).not.toContain("正在读书");
+    expect(work).not.toContain('class="cy-chat-topfade"');
   });
 });

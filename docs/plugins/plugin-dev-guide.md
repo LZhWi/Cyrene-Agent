@@ -339,6 +339,9 @@ ctx.registerStablePromptProvider?.({
 稳定 Provider 不接收本轮用户正文。上述目标只供桌面 `companion` Chat 使用，不会改变原生后端、
 外部渠道或 Work、Code、Learn；插件停用时会随插件上下文一同注销。
 
+Provider 输入中的可选 `styleId` 是主程序当前 Chat 风格 ID。插件可以用它选择同一套稳定人格的
+内建变体；若为 `custom`，应只提供不含内建风格的基础人格，让主程序自定义风格保持唯一来源。
+
 `sources` 声明 Provider 参与的场景，可选值为 `"conversation"`（用户会话）/ `"scheduler"`（定时任务）/ `"moments-post"`（动态发帖决策）：
 
 - 未声明时默认只参与会话与定时任务两类场景（与旧版行为一致，既有插件无需改动）
@@ -452,7 +455,7 @@ async register(ctx) {
 |---|---|
 | 启用报错“工具 id 必须以 xxx 开头” | 工具 id 没加 `<插件id>_` 前缀 |
 | 启用报错“version 不是 SemVer” | 版本号要写 `1.0.0`，不能是 `1.0` 或 `v1.0` |
-| 启用报错“deps 含未知值” | `deps` 接受 `channels` / `llm` / `secrets` / `workspace` / `conversations` / `assistant-delivery` / `screen-observation` / `user-presence` / `weather-context` / `scheduler` / `speech-input`，检查拼写 |
+| 启用报错“deps 含未知值” | `deps` 接受 `channels` / `llm` / `secrets` / `workspace` / `conversations` / `assistant-delivery` / `screen-observation` / `user-presence` / `weather-context` / `companion-context` / `memory-retrieval` / `scheduler` / `speech-input`，检查拼写 |
 | AI 不用我的工具 | description 没写清楚使用场景，AI 不知道何时该调 |
 | 弹窗图片不显示 | 用相对路径且文件确实打进了包里 |
 | 改了代码没生效 | 聊天窗口插件面板点“刷新插件”（会清模块缓存重新加载） |

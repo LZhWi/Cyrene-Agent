@@ -17,7 +17,7 @@ export const DOCUMENT_CHUNK_OVERLAP = 128;
 // ── Token 估算 ──
 // 注意：这只是估算值，用于决定切分位置。
 // 实际模型的 tokenizer 会略有不同，但滑动窗口的冗余覆盖能容错。
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
   const otherTokens = text
     .replace(/[\u4e00-\u9fff]/g, " ")

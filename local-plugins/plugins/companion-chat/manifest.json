@@ -7,5 +7,5 @@
   "author": "LZhWi",
   "entry": "index.cjs",
   "defaultEnabled": false,
-  "deps": ["llm", "secrets", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context"]
+  "deps": ["llm", "secrets", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context", "companion-context", "proactive-documents"]
 }

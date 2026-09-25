@@ -43,6 +43,7 @@ export interface ShellDependencies {
     togglePetWindow(): void;
   }): Tray;
   flushTokenUsage(): void;
+  flushVectorStore(): void;
   /** banner + 启动日志；测试可覆盖避免控制台噪声。 */
   writeStartupLog(): void;
 }
@@ -135,7 +136,10 @@ export async function startShell(deps: ShellDependencies): Promise<ShellResult> 
   });
   shutdown.register({
     id: "shell-ipc",
-    phase: "stopLocalResources",
+    // 窗口销毁与同阶段任务会并行执行。若这里也放在 stopLocalResources，
+    // 渲染器退出前的最后一次光标查询可能撞上已经移除的 handler。
+    // 延后一阶段注销，保证所有窗口先停止，同时仍在最终退出前释放 IPC。
+    phase: "flushPersistence",
     dispose: async () => { ipc.dispose(); },
   });
   shutdown.register({
@@ -144,6 +148,12 @@ export async function startShell(deps: ShellDependencies): Promise<ShellResult> 
     dispose: async () => { deps.flushTokenUsage(); },
   });
   shutdown.registerEmergencyFlush("token-usage", () => deps.flushTokenUsage());
+  shutdown.register({
+    id: "rag-vector-store",
+    phase: "flushPersistence",
+    dispose: async () => { deps.flushVectorStore(); },
+  });
+  shutdown.registerEmergencyFlush("rag-vector-store", () => deps.flushVectorStore());
 
   // Windows 会话结束（关机/重启/注销）：聊天主窗口上绑定同步紧急落盘
   attachWindowsSessionEndHandlers({

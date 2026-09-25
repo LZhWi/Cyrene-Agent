@@ -7,6 +7,7 @@ import { pluginHostError } from "./errors";
 const MAX_MESSAGE_CHARS = 32_000;
 
 export interface PluginAssistantDeliverySink {
+  canStart?(): boolean;
   append(input: {
     pluginId: string;
     text: string;
@@ -24,6 +25,10 @@ export function createPluginAssistantDeliveryService(options: {
   };
 
   return {
+    async canPostProactiveMessage() {
+      assertActive();
+      return options.sink.canStart?.() ?? true;
+    },
     async postProactiveMessage(text, deliveryOptions) {
       assertActive();
       if (typeof text !== "string" || text.trim().length === 0 || text.length > MAX_MESSAGE_CHARS) {

@@ -39,4 +39,21 @@ describe("插件私有 DMAE 工作记忆", () => {
     expect(data.map.get("dmae-state")).toEqual(before);
     expect(dmae.view()).toMatchObject({ round: 0, tracked: 0 });
   });
+
+  it("常驻补位只记录实际注入轮次，不获得查询命中奖励", () => {
+    const data = storage(), dmae = createDmae(data.value); dmae.set(true);
+    dmae.apply(["topic"], entries);
+    dmae.commit([], ["topic"], entries);
+    expect(data.map.get("dmae-state")).toMatchObject({
+      round: 2,
+      states: { topic: { activation: 34.8, userSilence: 1, modelSilence: 1, lastInjectedRound: 2 } },
+    });
+  });
+
+  it("待复核冲突项不作为常驻补位，但真实查询命中仍可带警告注入", () => {
+    const dmae = createDmae(storage().value); dmae.set(true);
+    dmae.apply(["topic"], entries);
+    expect(dmae.preview([], entries, new Set(["topic"])).selectedIds).toEqual(["pinned"]);
+    expect(dmae.preview(["topic"], entries, new Set(["topic"])).selectedIds).toEqual(["topic", "pinned"]);
+  });
 });

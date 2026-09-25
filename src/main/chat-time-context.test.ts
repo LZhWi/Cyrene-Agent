@@ -61,6 +61,21 @@ describe("chat time context", () => {
     expect(result.timeContext).toContain("must never become part of the user-visible response");
   });
 
+  it("按本地原有格式给用户和助手消息添加方括号时间戳", () => {
+    const result = buildConversationTimeContext([
+      { role: "user", content: "今天有点累", at: Date.UTC(2026, 6, 12, 12, 0) },
+      { role: "assistant", content: "早点休息", at: Date.UTC(2026, 6, 12, 12, 2) },
+      { role: "assistant", content: "没有时间戳" },
+    ], "Asia/Taipei", "local-visible");
+
+    expect(result.messages[0].content).toBe("[2026-07-12 20:00, Asia/Taipei]\n今天有点累");
+    expect(result.messages[1].content).toBe("[2026-07-12 20:02, Asia/Taipei]\n早点休息");
+    expect(result.messages[2].content).toBe("没有时间戳");
+    expect(result.cleanMessages[0].content).toBe("今天有点累");
+    expect(result.timeContext).toContain("[时间戳使用规则]");
+    expect(result.timeContext).not.toContain("## Internal Context Policy");
+  });
+
   it("does not add a gap notice below one hour", () => {
     const result = buildConversationTimeContext([
       { role: "assistant", content: "上一条", at: Date.UTC(2026, 6, 13, 2, 1) },

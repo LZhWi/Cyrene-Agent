@@ -3,6 +3,9 @@
 
 export const chatCompanionBackendEnabledInput = document.getElementById("chat-companion-backend-enabled") as HTMLInputElement | null;
 export const chatCompanionBackendSaveStatus = document.getElementById("chat-companion-backend-save-status") as HTMLElement | null;
+export const companionToolReasoningModeSelect = document.getElementById("companion-tool-reasoning-mode") as HTMLSelectElement | null;
+export const companionToolReasoningEffortSelect = document.getElementById("companion-tool-reasoning-effort") as HTMLSelectElement | null;
+export const companionToolReasoningSaveStatus = document.getElementById("companion-tool-reasoning-save-status") as HTMLElement | null;
 
 export const memoryL0NameInput = document.getElementById("memory-l0-name") as HTMLInputElement | null;
 export const memoryL0OccupationInput = document.getElementById("memory-l0-occupation") as HTMLInputElement | null;

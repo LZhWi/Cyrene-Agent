@@ -57,6 +57,32 @@ describe("聊天界面的模型来源入口", () => {
     expect(calls).toContainEqual({ action: "save-native-integration", data: { captureEnabled: true, autoExtractEnabled: true, promptInjectionEnabled: true, momentsInjectionEnabled: true, socialContextEnabled: true } });
     dom.window.close();
   });
+  it("提取失败且接入队列为空时仍可从界面重试", async () => {
+    const root = path.resolve("plugins/companion-memory/static");
+    const dom = new JSDOM(readFileSync(path.join(root, "ui.html"), "utf8"), { runScripts: "outside-only" });
+    const w = dom.window;
+    const calls: string[] = [];
+    const state = {
+      revision: 0, pending: 10, turns: [], entries: [], evidence: [],
+      profiles: { l0: {}, l1: {}, l0Locked: false },
+      native: {
+        settings: { captureEnabled: true, autoExtractEnabled: true, promptInjectionEnabled: false, momentsInjectionEnabled: false, socialContextEnabled: false },
+        pending: 0, completed: 10, lastError: { eventId: "event-9", kind: "extract", at: Date.now() }, processing: false,
+      },
+    };
+    w.companion = { invoke: async (action: string) => {
+      calls.push(action);
+      if (action === "retry-native-integration") state.native.processing = true;
+      return { ok: true, data: state };
+    } };
+    w.eval(readFileSync(path.join(root, "ui.js"), "utf8"));
+    const button = w.document.getElementById("native-retry") as any;
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    await button.onclick();
+    expect(calls).toContain("retry-native-integration");
+    expect(button.disabled).toBe(true);
+    dom.window.close();
+  });
   it("后台复核、压缩、生命周期扫描和自动降级分别授权", async () => {
     const root = path.resolve("plugins/companion-memory/static");
     const dom = new JSDOM(readFileSync(path.join(root, "ui.html"), "utf8"), { runScripts: "outside-only" });
@@ -289,7 +315,7 @@ describe("聊天界面的模型来源入口", () => {
     expect(calls.some((c) => c.action === "save-embedding" && c.data.apiKey === "ui-secret")).toBe(true); expect((el("embedding-key") as any).value).toBe("");
     dom.window.close();
   });
-  it("新记忆正文外发使用独立开关，拒绝确认时不保存授权", async () => {
+  it("记忆正文自动补向量使用独立开关，拒绝确认时不保存授权", async () => {
     const root = path.resolve("plugins/companion-memory/static");
     const dom = new JSDOM(readFileSync(path.join(root, "ui.html"), "utf8"), { runScripts: "outside-only" });
     const w = dom.window, calls: any[] = [], confirmations: string[] = [];
@@ -312,8 +338,8 @@ describe("聊天界面的模型来源入口", () => {
     w.confirm = (message: string) => { confirmations.push(message); return false; };
     await el("semantic-index-form").onsubmit({ preventDefault() {} });
     expect(calls.some((call) => call.action === "save-semantic-index")).toBe(false);
-    expect(confirmations[0]).toContain("当前已有记忆");
-    expect(confirmations[0]).toContain("不会发送");
+    expect(confirmations[0]).toContain("既有缺失向量");
+    expect(confirmations[0]).toContain("自动补齐");
     expect(confirmations[0]).toContain("L2 摘要正文");
     expect(confirmations[0]).toContain("不会发送原话、证据");
 
@@ -606,7 +632,7 @@ describe("聊天界面的模型来源入口", () => {
     w.companion = { invoke: async (action: string, data: any) => {
       if (action === "state") return { ok: true, data: {
         chat: { sessions: [{ id: "s", title: "会话", messages: [{ id: "m", role: "assistant", text: '<img src=x onerror="alert(1)">', at: 100 }] }] },
-        model: { mode: "host", reuse: "file", sourcePath: "original/model-settings.json", baseUrl: "", model: "", personaStyle: "04_focused", systemPrompt: "独立提示词", hasCustomKey: false },
+        model: { mode: "host", reuse: "file", sourcePath: "original/model-settings.json", baseUrl: "", model: "", systemPrompt: "独立提示词", hasCustomKey: false },
         life: { enabled: true, importantDatesText: "07-27 认识纪念日" },
       } };
       if (action === "save-model") { saved.push(data); return { ok: true }; }
@@ -625,7 +651,7 @@ describe("聊天界面的模型来源入口", () => {
     el("settings").click();
     await vi.waitFor(() => expect(el("model-dialog").hasAttribute("open")).toBe(true));
     expect(el("reuse").value).toBe("file"); expect(el("source-path").value).toBe("original/model-settings.json");
-    expect(el("persona-style").value).toBe("04_focused");
+    expect(el("persona-style")).toBeNull();
     expect(el("life-enabled").checked).toBe(true); expect(el("important-dates").value).toContain("认识纪念日");
     expect(el("feedback-learning-enabled").checked).toBe(false);
     el("reuse").value = "current"; el("reuse").dispatchEvent(new w.Event("change"));
@@ -636,7 +662,7 @@ describe("聊天界面的模型来源入口", () => {
     el("feedback-learning-enabled").checked = true;
     el("model-form").dispatchEvent(new w.Event("submit", { cancelable: true }));
     await vi.waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0].mode).toBe("custom"); expect(saved[0].personaStyle).toBe("04_focused"); await vi.waitFor(() => expect(el("api-key").value).toBe(""));
+    expect(saved[0].mode).toBe("custom"); expect(saved[0]).not.toHaveProperty("personaStyle"); await vi.waitFor(() => expect(el("api-key").value).toBe(""));
     dom.window.close();
   });
   it("陪伴聊天 preload 只放行界面实际使用的动作", () => {

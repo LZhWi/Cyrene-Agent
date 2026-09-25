@@ -1,7 +1,6 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { PluginContext, PluginLlmMessage } from "@playa0v0/cyrene-plugin-sdk";
-import { parsePersonaStyle, type PersonaStyleId } from "./persona";
 
 export interface ModelConfig {
   mode: "host" | "custom";
@@ -9,12 +8,11 @@ export interface ModelConfig {
   sourcePath: string;
   baseUrl: string;
   model: string;
-  personaStyle: PersonaStyleId;
   systemPrompt: string;
 }
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   mode: "host", reuse: "current", sourcePath: "", baseUrl: "", model: "",
-  personaStyle: "01_default", systemPrompt: "",
+  systemPrompt: "",
 };
 interface DirectConfig { baseUrl: string; model: string; apiKey: string }
 
@@ -61,7 +59,6 @@ export function parseConfig(raw: any): ModelConfig {
     sourcePath: raw.sourcePath.trim(),
     baseUrl: raw.baseUrl.trim(),
     model: raw.model.trim(),
-    personaStyle: parsePersonaStyle(raw.personaStyle),
     systemPrompt: raw.systemPrompt,
   };
 }
@@ -87,24 +84,26 @@ export function createModelService(ctx: PluginContext, fetcher: typeof fetch = f
       ctx.storage.set("model-config", next); config = next;
       return this.view();
     },
-    async generate(messages: PluginLlmMessage[], signal: AbortSignal): Promise<string> {
+    async generate(messages: PluginLlmMessage[], signal: AbortSignal, limits: { maxTokens?: number; timeoutMs?: number } = {}): Promise<string> {
       const snapshot = { ...config };
+      const maxTokens = limits.maxTokens ?? 4096;
+      const timeoutMs = limits.timeoutMs ?? 120000;
       if (signal.aborted || ctx.signal.aborted) throw new Error("请求已取消");
       if (snapshot.mode === "host" && snapshot.reuse === "current") {
         if (!ctx.deps.llm) throw new Error("当前宿主模型服务不可用");
-        try { return await ctx.deps.llm.generateText(messages, { signal, maxTokens: 4096, timeoutMs: 120000, purpose: "companion" }); }
+        try { return await ctx.deps.llm.generateText(messages, { signal, maxTokens, timeoutMs, purpose: "companion" }); }
         catch { throw new Error(signal.aborted ? "请求已取消" : "宿主模型请求失败，请检查主程序模型设置"); }
       }
       const resolved: DirectConfig = snapshot.mode === "host"
         ? readReferencedConfig(snapshot.sourcePath)
         : { baseUrl: snapshot.baseUrl, model: snapshot.model, apiKey: await ctx.deps.secrets?.get("model-key") ?? "" };
       if (!resolved.apiKey.trim()) throw new Error("请先保存自定义模型密钥");
-      const combined = AbortSignal.any([signal, ctx.signal, AbortSignal.timeout(120000)]);
+      const combined = AbortSignal.any([signal, ctx.signal, AbortSignal.timeout(timeoutMs)]);
       try {
         const response = await fetcher(endpoint(resolved.baseUrl), {
           method: "POST", redirect: "error", signal: combined,
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${resolved.apiKey}` },
-          body: JSON.stringify({ model: resolved.model, messages, stream: false, max_tokens: 4096 }),
+          body: JSON.stringify({ model: resolved.model, messages, stream: false, max_tokens: maxTokens }),
         });
         // 不回显服务端错误正文，防止第三方错误内容包含凭据或请求文本。
         if (!response.ok) throw new Error(`HTTP_${response.status}`);

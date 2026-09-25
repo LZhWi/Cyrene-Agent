@@ -46,13 +46,13 @@ export function simulateDmaeTurn(previous: DmaeState, recalledIds: string[], ent
   return { version: 1, round, states };
 }
 
-function select(baseIds: string[], entries: Entry[], state: DmaeState): string[] {
+function select(baseIds: string[], entries: Entry[], state: DmaeState, excludedTopupIds: ReadonlySet<string> = new Set()): string[] {
   const now = Date.now(), byId = new Map(entries.map((entry) => [entry.id, entry])), selected: string[] = [], seen = new Set<string>();
-  const add = (id: string) => { const entry = byId.get(id); if (!seen.has(id) && entry && isRecallable(entry, now)) { seen.add(id); selected.push(id); } };
-  baseIds.forEach(add);
-  entries.filter((entry) => entry.pinned).forEach((entry) => add(entry.id));
+  const add = (id: string, topup = false) => { const entry = byId.get(id); if (!seen.has(id) && entry && isRecallable(entry, now) && !(topup && excludedTopupIds.has(id))) { seen.add(id); selected.push(id); } };
+  baseIds.forEach((id) => add(id));
+  entries.filter((entry) => entry.pinned).forEach((entry) => add(entry.id, true));
   Object.entries(state.states).filter(([id, item]) => !seen.has(id) && item.activation >= DMAE_PARAMS.threshold - DMAE_PARAMS.epsilon && item.userSilence <= DMAE_PARAMS.maxResidentSilence)
-    .sort((a, b) => b[1].activation - a[1].activation).slice(0, DMAE_PARAMS.activeTopK).forEach(([id]) => add(id));
+    .sort((a, b) => b[1].activation - a[1].activation).slice(0, DMAE_PARAMS.activeTopK).forEach(([id]) => add(id, true));
   return selected.slice(0, DMAE_PARAMS.maxInject);
 }
 
@@ -64,6 +64,20 @@ export function createDmae(storage: PluginStorage) {
   return {
     view: describe,
     reload() { state = load(storage); return describe(); },
+    remove(id: string) {
+      if (!state.states[id]) return false;
+      const states = { ...state.states };
+      delete states[id];
+      state = { ...state, states };
+      storage.set(STATE_KEY, state);
+      return true;
+    },
+    reconcile(knownIds: string[]) {
+      const known = new Set(knownIds), states = Object.fromEntries(Object.entries(state.states).filter(([id]) => known.has(id)));
+      const removed = Object.keys(state.states).length - Object.keys(states).length;
+      if (removed) { state = { ...state, states }; storage.set(STATE_KEY, state); }
+      return { removed, ...describe() };
+    },
     set(value: unknown) { if (typeof value !== "boolean") throw new Error("DMAE 设置无效"); storage.set(SETTINGS_KEY, value); enabled = value; return describe(); },
     apply(baseIds: string[], entries: Entry[]) {
       if (!enabled) return baseIds;
@@ -75,18 +89,18 @@ export function createDmae(storage: PluginStorage) {
       return selected;
     },
     /** 检索预算确定最终注入条目后才提交，预算外候选不获得奖励或 lastInjectedRound。 */
-    commit(includedIds: string[], entries: Entry[]) {
+    commit(recalledIds: string[], includedIds: string[], entries: Entry[]) {
       if (!enabled) return;
       const byId = new Map(entries.map((entry) => [entry.id, entry]));
-      const recalled = includedIds.filter((id) => byId.has(id) && !byId.get(id)?.pinned);
+      const recalled = recalledIds.filter((id) => byId.has(id) && !byId.get(id)?.pinned);
       const next = simulateDmaeTurn(state, recalled, entries);
       for (const id of includedIds) if (next.states[id]) next.states[id].lastInjectedRound = next.round;
       storage.set(STATE_KEY, next); state = next;
     },
-    preview(baseIds: string[], entries: Entry[]) {
+    preview(baseIds: string[], entries: Entry[], excludedTopupIds: ReadonlySet<string> = new Set()) {
       if (!enabled) return { selectedIds: baseIds, round: state.round, tracked: Object.keys(state.states).length };
       const next = simulateDmaeTurn(state, baseIds.filter((id) => !entries.find((entry) => entry.id === id)?.pinned), entries);
-      return { selectedIds: select(baseIds, entries, next), round: next.round, tracked: Object.keys(next.states).length };
+      return { selectedIds: select(baseIds, entries, next, excludedTopupIds), round: next.round, tracked: Object.keys(next.states).length };
     },
   };
 }

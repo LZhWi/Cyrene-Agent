@@ -47,7 +47,7 @@ function load(storage: PluginStorage): AutoCompressionState {
 }
 
 /**
- * 每 20 个成功桌面 Chat 轮次最多请求一份压缩建议。模型结果只进入既有待确认列表，
+ * 每 20 个成功桌面 Chat 轮次处理一次当前全部互不重叠候选组。模型结果只进入既有待确认列表，
  * 自动应用需要另一项独立授权；具体安全判定和原子事务仍由记忆层负责。
  */
 export function createAutoCompression(
@@ -56,7 +56,7 @@ export function createAutoCompression(
   listCandidates: () => AutoCompressionCandidate[],
   review: (candidate: AutoCompressionCandidate, signal: AbortSignal) => Promise<unknown>,
   now: () => number = Date.now,
-  apply?: (review: unknown) => { applied: boolean; reviewId?: string },
+  apply?: (review: unknown) => { applied: boolean; reviewId?: string } | Promise<{ applied: boolean; reviewId?: string }>,
   isSuppressed: () => boolean = () => false,
 ) {
   let enabled = storage.get<boolean>(SETTINGS_KEY) ?? false;
@@ -79,8 +79,8 @@ export function createAutoCompression(
     const at = now();
     if (state.lastAttemptAt !== undefined && at - state.lastAttemptAt < MIN_INTERVAL_MS) return;
     const handled = new Set(state.handledCandidateIds);
-    const candidate = listCandidates().find((item) => !handled.has(item.id));
-    if (!candidate) {
+    const candidates = listCandidates().filter((item) => !handled.has(item.id));
+    if (!candidates.length) {
       save({ ...state, pendingTurns: 0, lastAttemptAt: at });
       return;
     }
@@ -88,16 +88,26 @@ export function createAutoCompression(
     save({ ...state, pendingTurns: 0, lastAttemptAt: at });
     running = true;
     controller = new AbortController();
+    let lastReviewedItemId: string | undefined, lastAutoAppliedAt: number | undefined, lastAutoAppliedReviewId: string | undefined, lastErrorAt: number | undefined;
     try {
-      const result = await review(candidate, controller.signal);
-      if (stopped || controller.signal.aborted) return;
-      const applied = applyEnabled ? apply?.(result) : undefined;
-      if (applyEnabled && !apply) throw new Error("宿主未提供后台压缩自动应用器");
-      const handledCandidateIds = [...state.handledCandidateIds.filter((id) => id !== candidate.id), candidate.id].slice(-HANDLED_MAX);
+      for (const candidate of candidates) {
+        try {
+          const result = await review(candidate, controller.signal);
+          if (stopped || controller.signal.aborted) return;
+          const applied = applyEnabled ? await apply?.(result) : undefined;
+          if (applyEnabled && !apply) throw new Error("宿主未提供后台压缩自动应用器");
+          handled.add(candidate.id);
+          lastReviewedItemId = candidate.id;
+          if (applied?.applied) { lastAutoAppliedAt = now(); lastAutoAppliedReviewId = applied.reviewId; }
+        } catch {
+          if (stopped || controller.signal.aborted) return;
+          lastErrorAt = now();
+        }
+      }
       const completedAt = now();
-      save({ ...state, handledCandidateIds, lastCompletedAt: completedAt, lastReviewedCandidateId: candidate.id, ...(applied?.applied ? { lastAutoAppliedAt: completedAt, lastAutoAppliedReviewId: applied.reviewId } : {}), lastErrorAt: undefined });
-    } catch {
-      if (!stopped && !controller.signal.aborted) save({ ...state, lastErrorAt: now() });
+      save({ ...state, handledCandidateIds: [...handled].slice(-HANDLED_MAX), lastCompletedAt: completedAt,
+        ...(lastReviewedItemId ? { lastReviewedCandidateId: lastReviewedItemId } : {}),
+        ...(lastAutoAppliedAt !== undefined ? { lastAutoAppliedAt, lastAutoAppliedReviewId } : {}), lastErrorAt });
     } finally {
       running = false;
       controller = undefined;

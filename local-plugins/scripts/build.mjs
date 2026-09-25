@@ -14,7 +14,7 @@ const artifactsRoot = path.join(workspaceRoot, "artifacts");
 const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 const ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".svg"]);
-const LOCAL_HOST_CAPABILITIES = new Set(["assistant-delivery", "screen-observation", "user-presence"]);
+const LOCAL_HOST_CAPABILITIES = new Set(["assistant-delivery", "screen-observation", "user-presence", "proactive-documents"]);
 
 // 本地宿主接口先于公开 SDK 发布时，仅剥离明确登记的扩展能力交给旧 SDK 校验；
 // 其余 manifest 字段和依赖仍由公开 SDK 严格验证，打包时保留真实 deps。

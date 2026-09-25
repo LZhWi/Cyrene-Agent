@@ -60,8 +60,14 @@ describe("createLifecyclePublisher", () => {
       messageId: "message-1",
       action: "ignore",
     });
+    await publisher.publishConversationChanged({
+      conversationId: "session-1",
+      reason: "message-round-deleted",
+      allMessages: false,
+      invalidatedMessageIds: ["user-1", "model-1"],
+    });
 
-    await vi.waitFor(() => expect(published).toHaveLength(6));
+    await vi.waitFor(() => expect(published).toHaveLength(7));
     expect(published[0]).toEqual({
       event: "turn:started",
       payload: {
@@ -118,6 +124,17 @@ describe("createLifecyclePublisher", () => {
         conversationId: "proactive-1",
         messageId: "message-1",
         action: "ignore",
+        eventId: "evt-1",
+        timestamp: "2026-09-03T10:00:00.000Z",
+      },
+    });
+    expect(published[6]).toEqual({
+      event: "conversation:changed",
+      payload: {
+        conversationId: "session-1",
+        reason: "message-round-deleted",
+        allMessages: false,
+        invalidatedMessageIds: ["user-1", "model-1"],
         eventId: "evt-1",
         timestamp: "2026-09-03T10:00:00.000Z",
       },

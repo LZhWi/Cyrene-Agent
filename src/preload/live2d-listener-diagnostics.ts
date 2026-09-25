@@ -7,6 +7,7 @@ export const LIVE2D_IPC_DIAGNOSTIC_CHANNELS = [
   IPC.LIVE2D_PLAY_ACTION,
   IPC.PET_ZOOM,
   IPC.PET_VISIBILITY_CHANGED,
+  IPC.PET_IDLE_MOTIONS_CHANGED,
 ] as const;
 
 export type Live2DIpcListenerCounts = Record<typeof LIVE2D_IPC_DIAGNOSTIC_CHANNELS[number], number>;

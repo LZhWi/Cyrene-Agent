@@ -45,6 +45,51 @@ describe("桌面 Chat 原生记忆设置", () => {
     expect(normalizeGeneralSettings({ chatBackend: "invalid" } as never).chatBackend).toBe("native");
     expect(normalizeGeneralSettings({ nativeChatMemoryEnabled: false } as never).chatBackend).toBe("companion");
   });
+
+  it("Tool 阶段推理默认关闭，并保留合法的显式强度", () => {
+    expect(normalizeGeneralSettings({}).companionToolReasoning).toEqual({ mode: "off" });
+    expect(normalizeGeneralSettings({
+      companionToolReasoning: { mode: "on", effort: "high" },
+    } as never).companionToolReasoning).toEqual({ mode: "on", effort: "high" });
+    expect(normalizeGeneralSettings({ companionToolReasoning: { mode: "invalid" } } as never)
+      .companionToolReasoning).toEqual({ mode: "off" });
+  });
+
+  it("统一归一化 Companion 可选聊天功能", () => {
+    expect(normalizeGeneralSettings({})).toMatchObject({
+      companionFeedbackLearningEnabled: false,
+      companionScreenMonitorEnabled: false,
+      companionLifeEnabled: true,
+      companionImportantDatesText: "",
+    });
+    expect(normalizeGeneralSettings({
+      companionFeedbackLearningEnabled: true,
+      companionScreenMonitorEnabled: true,
+      companionLifeEnabled: false,
+      companionImportantDatesText: " 07-27 认识纪念日\r\n2026-09-21 特别的一天 ",
+    } as never)).toMatchObject({
+      companionFeedbackLearningEnabled: true,
+      companionScreenMonitorEnabled: true,
+      companionLifeEnabled: false,
+      companionImportantDatesText: "07-27 认识纪念日\n2026-09-21 特别的一天",
+    });
+    expect(normalizeGeneralSettings({ companionImportantDatesText: "格式错误" } as never)
+      .companionImportantDatesText).toBe("");
+  });
+
+  it("主动聊天频率默认自然，只接受本地版三档 Desire 增速", () => {
+    expect(normalizeGeneralSettings({}).companionProactivePace).toBe("normal");
+    expect(normalizeGeneralSettings({ companionProactivePace: "quiet" }).companionProactivePace).toBe("quiet");
+    expect(normalizeGeneralSettings({ companionProactivePace: "lively" }).companionProactivePace).toBe("lively");
+    expect(normalizeGeneralSettings({ companionProactivePace: "invalid" } as never).companionProactivePace).toBe("normal");
+  });
+});
+
+describe("桌宠待机动作设置", () => {
+  it("默认关闭并保留用户显式开启", () => {
+    expect(normalizeGeneralSettings({}).petIdleMotionsEnabled).toBe(false);
+    expect(normalizeGeneralSettings({ petIdleMotionsEnabled: true } as never).petIdleMotionsEnabled).toBe(true);
+  });
 });
 
 describe("general Harness tool concurrency settings", () => {

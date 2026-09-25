@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, powerMonitor } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { clearUsage, getUsageReport } from "../token-usage-store";
@@ -9,6 +9,7 @@ import {
   musicPlayerWindow,
 } from "./window-state";
 import type { WindowManager } from "./window-manager";
+import { getScreenObservationNoChangeCount } from "../plugin-host/screen-observation-service";
 
 export interface WindowSystemIpcDependencies {
   get windowManager(): WindowManager | null;
@@ -42,6 +43,10 @@ export function registerWindowSystemIpc(deps: WindowSystemIpcDependencies): void
 
   ipc.handle(IPC.WINDOW_CAPTURE_FRAME, async () => deps.windowManager?.capturePetWindowFrame() ?? null);
   ipc.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => deps.windowManager?.getCursorScreenPosition() ?? { x: 0, y: 0 });
+  ipc.handle(IPC.WINDOW_GET_IDLE_STATE, () => ({
+    systemIdleSeconds: powerMonitor.getSystemIdleTime(),
+    screenNoChangeCount: getScreenObservationNoChangeCount(),
+  }));
 
   ipc.on(IPC.SIDEBAR_MINIMIZE, () => {
     sidebarWindow?.minimize();

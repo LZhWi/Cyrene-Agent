@@ -15,6 +15,8 @@ import {
 } from "../components/run-presentation";
 import { ChatMessageList } from "../components/ChatMessageList";
 import { ChatPageNavigation, type ChatPagePanel } from "../components/ChatPageNavigation";
+import { ReasoningControl } from "../components/ReasoningControl";
+import { StyleControl } from "../components/StyleControl";
 import {
   ContextCompressionNotice,
   FileDropOverlay,
@@ -25,6 +27,7 @@ import { EarlyTtsPlaybackQueue, type EarlyTtsSplitMode } from "../tts/early-tts-
 
 import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
 import { type ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import type { SegmentedOutputMode } from "../../../../../shared/preferences";
 import { ChatPagePanelHost } from "../components/ChatPagePanelHost";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
@@ -102,7 +105,12 @@ export {
 export function ChatPage() {
   const { t } = useTranslation();
   const preferredAddress = useUserCallPreference();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsedByMode, setCollapsedByMode] = useState<Record<ConversationMode, boolean>>({
+    chat: true,
+    work: false,
+    code: false,
+    learn: false,
+  });
   const [activePanel, setActivePanel] = useState<ChatPagePanel | null>(null);
   /** 右侧 Review 检查面板：打开时把白色工作区挤窄 */
   const [reviewInspector, setReviewInspector] = useState<{ runId: string; fileIndex: number } | null>(null);
@@ -131,6 +139,11 @@ export function ChatPage() {
   const [interactionsBySession, setInteractionsBySession] = useState<SessionInteractionState>({});
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
+  const [segmentedOutputMode, setSegmentedOutputMode] = useState<SegmentedOutputMode>("off");
+
+  useEffect(() => {
+    setCollapsedByMode((current) => current.chat ? current : { ...current, chat: true });
+  }, []);
 
   const [todoStateBySession, setTodoStateBySession] = useState<TodoStateBySession>({});
   // 计划模式（Plan Mode 二期）：会话级计划面板内容与阶段（review → executing → completed）。
@@ -460,6 +473,21 @@ export function ChatPage() {
       activeEarlyTtsRef.current = null;
     }
   }, [activeSessionId, mode]);
+
+  useEffect(() => {
+    let active = true;
+    void companionLifeStatusApi()?.getGeneralSettings?.().then((settings) => {
+      if (!active) return;
+      setMode(settings.defaultChatMode === "work" ? "work" : "chat");
+      const value = settings.segmentedOutputMode;
+      setSegmentedOutputMode(value === "all" || value === "chat" ? value : "off");
+    }).catch(() => {
+      if (active) setSegmentedOutputMode("off");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (mode !== "chat") {
@@ -1349,17 +1377,27 @@ export function ChatPage() {
   const latestContextUsage = (activeSessionId ? sessionContextUsageBySession[activeSessionId] : undefined)
     ?? messages.findLast((message) => message.contextUsage)?.contextUsage;
   const activePlan = mode === "code" && activeSessionId ? planReviewBySession[activeSessionId] : null;
+  const activeModelProfileId = activeSession?.id === activeSessionId && activeSession
+    ? activeSession.modelProfileId
+    : pendingModelProfileByMode[mode];
+  const collapsed = collapsedByMode[mode];
 
   return (
-    <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
+    <div className={`cy-page ${collapsed ? "is-collapsed" : ""} ${mode === "chat" ? "is-chat-mode" : ""}`}>
       <ChatPageNavigation
         collapsed={collapsed}
         activePanel={activePanel}
         mode={mode}
         companionLifeStatus={companionLifeStatus}
+        titlebarControls={mode === "chat" ? (
+          <>
+            <StyleControl titlebar />
+            <ReasoningControl titlebar sessionId={activeSessionId} modelProfileId={activeModelProfileId} />
+          </>
+        ) : undefined}
         sessions={sessions}
         activeSessionId={activeSessionId}
-        onToggleCollapsed={() => setCollapsed((value) => !value)}
+        onToggleCollapsed={() => setCollapsedByMode((current) => ({ ...current, [mode]: !current[mode] }))}
         onModeChange={(nextMode) => {
           if (isConversationMode(nextMode)) setMode(nextMode);
         }}
@@ -1434,9 +1472,19 @@ export function ChatPage() {
             mode={mode}
             preferredAddress={preferredAddress}
             stickerSize={stickerSize}
+            segmentedOutputMode={segmentedOutputMode}
             revisionBusy={Boolean(modelBusyByMode[mode]) || lastTurnRevisionStarting}
             onEditLastUserMessage={mode === "chat" ? editLastChatUserMessage : undefined}
             onRegenerateLastResponse={mode === "chat" ? regenerateLastChatResponse : undefined}
+            onDeleteMessage={activeSessionId
+              ? async (messageId) => {
+                  const session = await chatStore()?.deleteMessage(activeSessionId, messageId);
+                  if (!session) return false;
+                  hydrateMessages(activeSessionId, toUiMessages(session), false);
+                  await refreshSessions(mode, false);
+                  return true;
+                }
+              : undefined}
             onIgnorePluginMessage={mode === "chat" && activeSessionId
               ? async (messageId) => (await chatStore()?.ignorePluginMessage(activeSessionId, messageId))?.ok === true
               : undefined}
@@ -1497,11 +1545,8 @@ export function ChatPage() {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
             }}
-            activeModelProfileId={
-              activeSession?.id === activeSessionId && activeSession
-                ? activeSession.modelProfileId
-                : pendingModelProfileByMode[mode]
-            }
+            activeModelProfileId={activeModelProfileId}
+            titlebarControls={mode === "chat"}
             contextUsage={latestContextUsage}
             onSelectModelProfile={(modelProfileId) => {
               // 欢迎页（无会话）：暂存选择，ensureSession 建会话后落地；不再静默丢弃。

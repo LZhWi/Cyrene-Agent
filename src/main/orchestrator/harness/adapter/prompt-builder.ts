@@ -19,12 +19,13 @@ export function materializeHarnessStartTranscript(input: {
   runId: string;
   runtimeContext?: string;
   initialState?: AgentState;
+  includeTodoContext?: boolean;
   kind: "run_start" | "recovery";
 }): ChatMessage[] {
   // 动态上下文在 run_start/recovery 时物化为内部消息，确保 Harness 与恢复流程看到同一份事实。
   const parts = [
     input.runtimeContext,
-    input.initialState?.todoItems.length
+    input.includeTodoContext !== false && input.initialState?.todoItems.length
       ? buildCurrentTodoNotebookContext(input.initialState.todoItems)
       : undefined,
   ].filter((part): part is string => Boolean(part?.trim()));
@@ -58,7 +59,7 @@ export function buildHarnessPromptLayers(
     personaParts.push(harnessPersona);
   }
 
-  personaParts.push(TODO_WORKING_NOTEBOOK_POLICY);
+  if (!toolOnlyChat) personaParts.push(TODO_WORKING_NOTEBOOK_POLICY);
 
   const toolParts: string[] = [];
   if (options.toolSystemContent) {
@@ -73,12 +74,18 @@ export function buildHarnessPromptLayers(
 
   // 这里只收集语义上下文块；最终 prompt 的消息顺序由准备阶段/Harness 统一决定。
   const runtimeParts: string[] = [];
-  if (options.soulRuntimeContext) runtimeParts.push(options.soulRuntimeContext);
-  if (options.planSkillContext) runtimeParts.push(options.planSkillContext);
-  if (options.runtimeEnvironmentContext) runtimeParts.push(options.runtimeEnvironmentContext);
-  if (options.citaContextBlock) runtimeParts.push(options.citaContextBlock);
+  if (toolOnlyChat) {
+    // 两阶段 Chat 的 Tool 模型只负责判断和执行工具。只提供本地 Collab
+    // 同等的环境事实，不让记忆、关系、语气等 Soul 资料反向影响工具选择。
+    if (options.runtimeEnvironmentContext) runtimeParts.push(options.runtimeEnvironmentContext);
+  } else {
+    if (options.soulRuntimeContext) runtimeParts.push(options.soulRuntimeContext);
+    if (options.planSkillContext) runtimeParts.push(options.planSkillContext);
+    if (options.runtimeEnvironmentContext) runtimeParts.push(options.runtimeEnvironmentContext);
+    if (options.citaContextBlock) runtimeParts.push(options.citaContextBlock);
+  }
   if (options.recoveryContext) runtimeParts.push(`[RECOVERY_CONTEXT]\n${options.recoveryContext}`);
-  if (options.responseContext) runtimeParts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
+  if (!toolOnlyChat && options.responseContext) runtimeParts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
 
   const stablePrefix = [...personaParts, ...toolParts].join("\n\n---\n\n");
   // 调用方可能把同一段内容同时放进静态层和运行时层；这里去重，避免模型收到重复上下文。

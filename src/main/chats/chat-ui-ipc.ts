@@ -185,8 +185,8 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     }
 
     try {
-      const { captionImage } = await import("../orchestrator/vision-captioner");
-      const caption = await captionImage(
+      const { captionImageWithRetryAndFallback } = await import("../orchestrator/vision-captioner");
+      const caption = await captionImageWithRetryAndFallback(
         { base64: validated.buffer.toString("base64"), mime: validated.mime },
         buildImageCaptionPrompt(hasAnnotations),
         visionCfg,

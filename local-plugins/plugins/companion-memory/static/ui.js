@@ -14,7 +14,7 @@ function evidenceText(records, memoryId) {
   return linked.map((e) => `关联片段（${e.provenance === "verified" ? "已核对来源" : "未核对原始对话"}；${e.sourceStatus === "archived" ? "来源已归档" : "来源记录有效"}；记录时间 ${new Date(e.createdAt).toLocaleString()}）\n${e.quoteSnippet}`).join("\n");
 }
 function recallable(e) { const now = Date.now(); return ["active", "aging"].includes(e.status) && !e.supersededBy && !e.mergedInto && (e.validFrom === undefined || e.validFrom <= now) && (e.validTo === undefined || e.validTo > now); }
-function importTargetEmpty(state) { return state && !state.turns.length && !state.entries.length && !(state.evidence ?? []).length && !Object.keys(state.profiles.l0).length && !Object.keys(state.profiles.l1).length && !(state.profileChanges ?? []).length && !(state.entryReviews ?? []).length && !state.legacyImport; }
+function importTargetEmpty(state) { return state && !state.turns.length && !state.entries.length && !(state.evidence ?? []).length && !Object.keys(state.profiles.l0).length && !Object.keys(state.profiles.l1).length && !(state.profileChanges ?? []).length && !(state.entryReviews ?? []).length && !(state.conflictChanges ?? []).length && !state.legacyImport; }
 function renderRecentCompressionGroups(reviews) {
   const container = $("recent-compression-groups"); container.replaceChildren();
   const recent = (reviews ?? []).filter((review) => ["applied", "undone"].includes(review.status))
@@ -86,7 +86,8 @@ async function refresh() {
     $("native-prompt-injection").checked = nativeSettings.promptInjectionEnabled;
     $("native-social-context").checked = nativeSettings.socialContextEnabled;
     $("native-moments-injection").checked = nativeSettings.momentsInjectionEnabled;
-    $("native-retry").disabled = !(state.native?.pending > 0);
+    $("native-retry").disabled = Boolean(state.native?.processing) || !nativeSettings.captureEnabled
+      || !(state.native?.pending > 0 || (nativeSettings.autoExtractEnabled && state.native?.lastError?.kind === "extract"));
     const nativeError = state.native?.lastError ? ` · 上次${state.native.lastError.kind === "read" ? "读取" : "提取"}失败，可安全重试` : "";
     $("native-status").textContent = `读取${nativeSettings.captureEnabled ? "已启用" : "已关闭"} · 自动提取${nativeSettings.autoExtractEnabled ? "已启用" : "已关闭"} · 回复注入${nativeSettings.promptInjectionEnabled ? "已启用" : "已关闭"} · 对话连续性${nativeSettings.socialContextEnabled ? "已启用" : "已关闭"}（有效 ${state.social?.active ?? 0}） · 动态发帖记忆${nativeSettings.momentsInjectionEnabled ? "已启用" : "已关闭"} · 待处理 ${state.native?.pending ?? 0} · 已接收事件 ${state.native?.completed ?? 0}${nativeError}`;
     if (legacyPreview) $("legacy-import").disabled = !legacyPreview.canImport || !importTargetEmpty(state);
@@ -119,7 +120,7 @@ async function refresh() {
     for (const review of state.compressionReviews ?? []) {
       const article = document.createElement("article"), body = document.createElement("div");
       const verdict = { mergeable: "模型认为可无损合并", different: "模型认为不应合并", uncertain: "证据不足" }[review.verdict];
-      const status = { pending: "待处理", dismissed: "已关闭", applied: "已应用", undone: "已撤销" }[review.status];
+      const status = { pending: "待处理", dismissed: "已关闭", stale: "已失效并重新排队", applied: "已应用", undone: "已撤销" }[review.status];
       const safety = `置信度 ${review.confidence === undefined ? "未提供" : review.confidence.toFixed(2)} · 完整覆盖 ${review.coverageConfirmed === true ? "已确认" : "未确认"}`;
       body.textContent = `${verdict} · ${status}\n${safety}\n${review.reason}${review.summary ? `\n候选总结：${review.summary}` : ""}\n${review.entries.map((entry, index) => `${index + 1}. ${entry.content}（来源 ${new Date(entry.sourceAt).toLocaleString()}${entry.sourceEndAt !== undefined ? ` 至 ${new Date(entry.sourceEndAt).toLocaleString()}` : ""}）`).join("\n")}`;
       article.append(body);
@@ -171,6 +172,15 @@ async function refresh() {
       $("entry-reviews").append(article);
     }
     $("query-expansion").checked = Boolean(state.queryExpansion);
+    const router = state.queryRouter ?? {};
+    $("query-router-enabled").checked = Boolean(router.enabled);
+    $("query-router-provider").value = router.provider ?? "自定义";
+    $("query-router-url").value = router.baseUrl ?? "";
+    $("query-router-model").value = router.model ?? "";
+    $("query-router-transport").value = router.explicitTransport ?? "auto";
+    $("query-router-reasoning").value = router.reasoning ?? "off";
+    $("query-router-key").value = "";
+    $("query-router-status").textContent = router.enabled ? `已启用 · ${router.model || "未配置模型"} · ${router.hasKey ? "已保存密钥" : "未保存密钥"}` : `已关闭${router.hasKey ? " · 已保存密钥" : ""}`;
     $("reranker-enabled").checked = Boolean(state.reranker?.enabled);
     $("reranker-status").textContent = state.reranker?.enabled ? `已启用：仅重排非置顶 L2 候选${state.reranker?.lastError ? ` · 上次${state.reranker.lastError.kind === "invalid" ? "输出无效" : "请求失败"}，已使用基础顺序` : ""}` : "已关闭";
     $("dmae-enabled").checked = Boolean(state.dmae?.enabled);
@@ -241,7 +251,8 @@ async function refresh() {
     for (const item of state.maintenanceInbox?.items ?? []) {
       const left = state.entries.find((entry) => entry.id === item.leftId), right = state.entries.find((entry) => entry.id === item.rightId);
       const article = document.createElement("article"), body = document.createElement("div");
-      body.textContent = `${item.kind === "normalized-duplicate" ? "规范化正文相同" : `向量相似 ${item.score?.toFixed(3)}`} · ${item.status === "open" ? "待处理" : "已关闭"}${item.stale ? " · 来源已变化" : ""}\n左：${left?.content ?? item.leftId}\n右：${right?.content ?? item.rightId}`;
+      const kind = item.kind === "normalized-duplicate" ? "规范化正文相同" : item.kind === "conflict" ? `疑似冲突 · 分数 ${item.conflictScore ?? 0} · 优先级 ${item.resolverPriority ?? "none"}` : `向量相似 ${item.score?.toFixed(3)}`;
+      body.textContent = `${kind} · ${item.status === "open" ? "待处理" : "已关闭"}${item.stale ? " · 来源已变化" : ""}${item.reason ? `\n规则依据：${item.reason}` : ""}\n左：${left?.content ?? item.leftId}\n右：${right?.content ?? item.rightId}`;
       article.append(body);
       if (item.status === "open" && !item.stale && left && right) {
         const pickLabel = document.createElement("label"), pick = document.createElement("input"); pick.type = "checkbox"; pick.className = "maintenance-inbox-pick"; pick.value = item.id; pickLabel.append(pick, document.createTextNode("加入本次批量复核")); article.append(pickLabel);
@@ -254,6 +265,18 @@ async function refresh() {
         article.append(conflict, compression, dismiss);
       }
       $("maintenance-inbox").append(article);
+    }
+    $("conflict-changes").replaceChildren();
+    for (const change of (state.conflictChanges ?? []).slice().reverse()) {
+      const article = document.createElement("article"), body = document.createElement("div");
+      body.textContent = `${change.action === "fast-supersede" ? "显式纠正：旧事实已取代" : "疑似冲突：旧事实降为 aging"} · ${change.status === "applied" ? "已应用" : "已撤销"} · ${new Date(change.createdAt).toLocaleString()}\n新：${change.entries[0]?.content ?? ""}\n旧：${change.entries[1]?.content ?? ""}`;
+      article.append(body);
+      if (change.status === "applied") {
+        const undo = document.createElement("button"); undo.textContent = "撤销这次冲突变更";
+        undo.onclick = async () => { if (!window.confirm("仅当两条记忆此后未被编辑或改变状态时，才恢复冲突判断前的精确状态。确认撤销？")) return; try { await invoke("undo-detected-conflict", { id: change.id, revision: currentState.revision }); await refresh(); } catch (e) { $("status").textContent = e.message; } };
+        article.append(undo);
+      }
+      $("conflict-changes").append(article);
     }
     $("profiles").replaceChildren();
     $("profile-changes").replaceChildren();
@@ -315,10 +338,16 @@ async function refresh() {
           catch (err) { $("status").textContent = err.message; }
         }; article.append(button);
       }
-      const input = document.createElement("textarea"); input.value = e.content; input.maxLength = 1500; input.setAttribute("aria-label", "编辑记忆摘要");
+      const input = document.createElement("textarea"); input.value = e.content; input.maxLength = 2000; input.setAttribute("aria-label", "编辑记忆摘要");
       const save = document.createElement("button"); save.textContent = "保存摘要";
       save.onclick = async () => { try { await invoke("edit-entry", { id: e.id, content: input.value, pinned: e.pinned, status: e.status, revision }); await refresh(); } catch (err) { $("status").textContent = err.message; } };
-      article.append(input, save); $("entries").append(article);
+      const remove = document.createElement("button"); remove.textContent = "永久删除";
+      remove.onclick = async () => {
+        if (!window.confirm("将永久删除这条插件私有记忆、关联证据、向量、DMAE 与生命周期状态。原始宿主聊天不会被删除。此操作不可撤销，确认？")) return;
+        try { await invoke("delete-entry", { id: e.id, revision }); await refresh(); }
+        catch (err) { $("status").textContent = err.message; }
+      };
+      article.append(input, save, remove); $("entries").append(article);
     }
   } catch (e) { $("status").textContent = e.message; }
 }
@@ -352,7 +381,7 @@ $("native-integration-form").onsubmit = async (event) => {
   catch (e) { await refresh(); $("status").textContent = e.message; }
 };
 $("native-retry").onclick = async () => {
-  try { await invoke("retry-native-integration"); await refresh(); $("status").textContent = "已开始重试待处理轮次。"; }
+  try { await invoke("retry-native-integration"); await refresh(); $("status").textContent = "已开始重试未完成的读取或记忆提取。"; }
   catch (e) { $("status").textContent = e.message; }
 };
 $("history-load-conversations").onclick = async () => {
@@ -445,7 +474,7 @@ $("vector-import").onclick = async () => {
 };
 $("embedding-form").onsubmit = async (event) => {
   event.preventDefault(); const enabled = $("embedding-enabled").checked;
-  if (enabled && !window.confirm("启用 Provider 后，每次聊天或手动检索会把当前查询文本发送到此 Embedding 服务，可能产生费用和延迟。此操作本身不会发送记忆库；只有另行启用“新记忆语义索引”后，后续新增或编辑的摘要才会外发。确认保存并启用？")) return;
+  if (enabled && !window.confirm("启用 Provider 后，每次聊天或手动检索会把当前查询文本发送到此 Embedding 服务，可能产生费用和延迟。此操作本身不会发送记忆库；另行启用“记忆语义索引”后，既有缺失向量及后续新增或编辑的摘要才会外发。确认保存并启用？")) return;
   try {
     await invoke("save-embedding", { enabled, baseUrl: $("embedding-url").value, model: $("embedding-model").value, dimensions: Number($("embedding-dimensions").value), apiKey: $("embedding-key").value });
     await refresh(); $("status").textContent = "Embedding Provider 设置已保存；尚未发送测试请求。";
@@ -461,8 +490,8 @@ $("semantic-index-form").onsubmit = async (event) => {
   event.preventDefault();
   const enabled = $("semantic-index-enabled").checked;
   const wasEnabled = Boolean(currentState?.semanticIndex?.enabled);
-  if (enabled && !wasEnabled && !window.confirm("启用时，当前已有记忆只会在插件私有存储中记录内容哈希作为本地基线，不会发送。此后每条新提取或手动编辑且可检索的 L2 摘要正文会发送给已配置的 Embedding Provider，可能产生费用和延迟；不会发送原话、证据、消息 ID或聊天历史。确认启用？")) { await refresh(); return; }
-  try { await invoke("save-semantic-index", { enabled }); await refresh(); $("status").textContent = enabled ? "新记忆语义索引已启用；现有记忆未发送。" : "新记忆语义索引已关闭；不会继续外发摘要。"; }
+  if (enabled && !wasEnabled && !window.confirm("启用后，会与本地版一致，把既有缺失向量以及此后新增或编辑且可检索的 L2 摘要正文发送给已配置的 Embedding Provider，可能产生费用和延迟；不会发送原话、证据、消息 ID 或聊天历史。确认启用并自动补齐？")) { await refresh(); return; }
+  try { await invoke("save-semantic-index", { enabled }); await refresh(); $("status").textContent = enabled ? "记忆语义索引已启用；正在自动补齐缺失向量。" : "记忆语义索引已关闭；不会继续外发摘要。"; }
   catch (e) { await refresh(); $("status").textContent = e.message; }
 };
 $("semantic-index-retry").onclick = async () => {
@@ -557,6 +586,29 @@ $("query-expansion").onchange = async () => {
   if (enabled && !window.confirm("开启后，每次聊天或手动检索将额外向当前宿主官方模型服务发送当前查询，以生成扩展词，可能增加费用和延迟。不发送整个记忆库。是否开启？")) { $("query-expansion").checked = false; return; }
   try { await invoke("query-expansion", enabled); }
   catch (e) { $("query-expansion").checked = !enabled; $("status").textContent = e.message; }
+};
+$("query-router-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const enabled = $("query-router-enabled").checked;
+  if (enabled && !window.confirm("启用后，每次记忆或历史自动检索都会先把当前查询发送给此路由模型；不发送记忆正文、历史或证据。可能增加一次小模型请求，确认？")) return;
+  try {
+    await invoke("save-query-router", {
+      enabled,
+      provider: $("query-router-provider").value,
+      baseUrl: $("query-router-url").value,
+      model: $("query-router-model").value,
+      explicitTransport: $("query-router-transport").value,
+      reasoning: $("query-router-reasoning").value,
+      apiKey: $("query-router-key").value,
+    });
+    await refresh();
+  } catch (e) { $("query-router-status").textContent = e.message; }
+};
+$("query-router-test").onclick = async () => {
+  try {
+    const result = await invoke("test-query-router");
+    $("query-router-status").textContent = `测试成功：${result.needsExpansion ? `扩大 ${result.retrievalKinds.join("/")} · ${result.scope}` : "保持语义 Top 5"} · 置信度 ${result.confidence}`;
+  } catch (e) { $("query-router-status").textContent = e.message; }
 };
 $("reranker-enabled").onchange = async () => {
   const enabled = $("reranker-enabled").checked;

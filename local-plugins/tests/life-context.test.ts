@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import { createLifeContext, localDateKey } from "../plugins/companion-chat/src/life-context";
 
@@ -13,7 +13,8 @@ function storage(initial?: unknown): PluginStorage {
 }
 
 function stripCurrent(text: string): string {
-  return text.split("\n").filter((line) => !line.startsWith("你现在正在做：")).join("\n");
+  return text.split("[角色世界已发生的生活片段]")[0].split("使用规则：")[0]
+    .split("\n").filter((line) => !line.startsWith("你现在正在做：")).join("\n");
 }
 
 function slotItems(text: string, label: string): string[] {
@@ -68,5 +69,88 @@ describe("陪伴插件生活日程", () => {
     expect(life.status()).toBeNull();
     expect(() => createLifeContext(storage({ version: 1, enabled: true, importantDates: "bad" })))
       .toThrow("生活日程设置损坏");
+  });
+
+  it("已过去的模拟日程记为角色世界已发生，重启后不重复写入", () => {
+    const store = storage();
+    let at = new Date(2026, 6, 27, 8).getTime();
+    const life = createLifeContext(store, () => at);
+    expect(life.build()).not.toContain("[角色世界已发生的生活片段]");
+    at = new Date(2026, 6, 27, 13).getTime();
+    const prompt = life.build();
+    expect(prompt).not.toContain("[角色世界已发生的生活片段]");
+    expect(life.view().continuity.events).toEqual([expect.objectContaining({
+      id: "2026-07-27:上午", worldLayer: "simulated_world", status: "materialized",
+    })]);
+    expect(createLifeContext(store, () => at).build("今天做了什么")).not.toContain("[角色世界已发生的生活片段]");
+    expect(createLifeContext(store, () => at).build("你昨天做了什么")).toContain("[生活记录] 所问时段没有逐项保存的活动；不要编造具体经历。");
+    expect(createLifeContext(store, () => at).view().continuity.events).toHaveLength(1);
+  });
+
+  it("长时间离线只保留概括，关闭日程期间不补算", () => {
+    const store = storage();
+    let at = new Date(2026, 6, 1, 9).getTime();
+    const life = createLifeContext(store, () => at);
+    life.build();
+    at = new Date(2026, 6, 20, 9).getTime();
+    const resumed = createLifeContext(store, () => at);
+    expect(resumed.build()).not.toContain("未逐项保存活动");
+    expect(resumed.build("之前做了什么")).toContain("未逐项保存活动");
+    expect(resumed.view().continuity.events).toHaveLength(1);
+    resumed.configure(false, "");
+    at = new Date(2026, 6, 21, 9).getTime();
+    expect(resumed.build()).toBe("");
+    resumed.configure(true, "");
+    expect(resumed.view().continuity.events).toHaveLength(1);
+  });
+
+  it("系统时间倒退时不补造新活动，时间恢复后不重复记录", () => {
+    const store = storage();
+    let at = new Date(2026, 6, 27, 13).getTime();
+    const life = createLifeContext(store, () => at);
+    life.build();
+    expect(life.view().continuity.events).toHaveLength(1);
+    at = new Date(2026, 6, 27, 10).getTime();
+    life.build();
+    expect(life.view().continuity.events).toHaveLength(1);
+    at = new Date(2026, 6, 27, 13).getTime();
+    life.build();
+    expect(life.view().continuity.events).toHaveLength(1);
+  });
+
+  it("运行期间按时钟推进，历史询问按日期取记录", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 6, 27, 8));
+      const life = createLifeContext(storage());
+      life.start();
+      vi.advanceTimersByTime(5 * 60 * 60 * 1000);
+      expect(life.view().continuity.events).toEqual([expect.objectContaining({ id: "2026-07-27:上午" })]);
+      vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+      expect(life.view().continuity.events.length).toBeGreaterThanOrEqual(4);
+      const yesterday = life.build("你昨天做了什么").split("[角色世界已发生的生活片段]")[1].split("使用规则：")[0];
+      expect(yesterday).toContain("2026-07-27 上午：");
+      expect(yesterday).not.toContain("2026-07-28 上午：");
+      life.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("保存的生活记录不再只保留最近 30 条", () => {
+    const store = storage();
+    let at = new Date(2026, 6, 1, 23, 30).getTime();
+    const life = createLifeContext(store, () => at);
+    life.build();
+    for (let day = 2; day <= 12; day++) {
+      at = new Date(2026, 6, day, 23, 30).getTime();
+      life.build();
+    }
+    expect(life.view().continuity.events).toHaveLength(36);
+    expect(life.build()).not.toContain("[角色世界已发生的生活片段]");
+    expect(life.build("你2026-07-01做了什么")).toContain("2026-07-01 上午：");
+    const lastWeek = life.build("你上周做了什么").split("[角色世界已发生的生活片段]")[1].split("使用规则：")[0];
+    expect(lastWeek).toContain("2026-07-01 上午：");
+    expect(lastWeek).not.toContain("2026-07-06 上午：");
   });
 });

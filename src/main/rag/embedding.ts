@@ -2,6 +2,7 @@
 import { checkEmbeddingModelInstalled, getProjectModelBaseDir } from "./model-status";
 import * as path from "path";
 import * as os from "os";
+import { applyOnnxCpuSessionPolicy } from "./onnx-session-policy";
 
 // ── 错误类型 ──
 export class EmbeddingDimensionMismatchError extends Error {
@@ -95,6 +96,7 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
 
   const load = (async () => {
     localPipelineInitCount += 1;
+    await applyOnnxCpuSessionPolicy();
     const { pipeline, env } = await importEsm("@xenova/transformers");
     env.allowLocalModels = true;
     env.allowRemoteModels = false;

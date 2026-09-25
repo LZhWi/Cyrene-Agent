@@ -22,8 +22,8 @@ export type DocumentIndexProgress = {
 };
 
 export type DocumentIndexJobResult =
-  | { kind: "indexed"; name: string; chunks: number; importId: string; cached?: boolean }
-  | { kind: "text"; name: string; text: string }
+  | { kind: "indexed"; name: string; chunks: number; importId: string; cached?: boolean; text?: string }
+  | { kind: "text"; name: string; text: string; indexReason?: string }
   | { kind: "empty"; name: string }
   | { kind: "unsupported"; name: string; reason: string }
   | { kind: "error"; name: string; reason: string };

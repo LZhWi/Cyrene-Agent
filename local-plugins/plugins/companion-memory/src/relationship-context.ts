@@ -1,6 +1,16 @@
+import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import type { Turn } from "../../companion-chat/src/chat";
 
 const MAX_ENTRIES = 500;
+const MAX_DAILY_SUMMARIES = 90;
+const STORAGE_KEY = "relationship-log";
+
+interface RelationshipEntry {
+  turnId: string; userText: string; assistantText: string; date: string; createdAt: number;
+  userMood: string; relationshipSignal: string; importantMoment?: string; nextCareCue: string;
+}
+interface RelationshipDailySummary { date: string; updatedAt: number; summary: string; nextCareCue: string }
+interface RelationshipState { version: 1; entries: RelationshipEntry[]; dailySummaries: RelationshipDailySummary[] }
 
 function localDate(timestamp: number): string {
   const date = new Date(timestamp);
@@ -82,4 +92,65 @@ export function buildRelationshipContext(turns: Turn[]): string {
   if (preference) lines.push(`- 重要互动偏好：${preference}`);
   lines.push(`- 当前回应参考：${latest.cue}`);
   return lines.join("\n");
+}
+
+function buildState(turns: Turn[]): RelationshipState {
+  const entries: RelationshipEntry[] = turns.slice(-MAX_ENTRIES).map((turn) => {
+    const userMood = detectUserMood(turn.user), cue = deriveSignal(turn.user, userMood);
+    return {
+      turnId: turn.id, userText: compact(turn.user, 500), assistantText: compact(turn.assistant, 500),
+      date: localDate(turn.assistantAt), createdAt: turn.assistantAt, userMood,
+      relationshipSignal: cue.signal, ...(cue.important ? { importantMoment: cue.important } : {}), nextCareCue: cue.cue,
+    };
+  });
+  const dates = [...new Set(entries.map((entry) => entry.date))].slice(-MAX_DAILY_SUMMARIES);
+  const dailySummaries = dates.map((date) => {
+    const rows = entries.filter((entry) => entry.date === date), latest = rows.at(-1)!;
+    const mood = [...rows].reverse().find((entry) => entry.userMood !== "未知")?.userMood ?? "平稳";
+    const important = [...rows].reverse().find((entry) => entry.importantMoment)?.importantMoment;
+    return {
+      date, updatedAt: latest.createdAt,
+      summary: `${date}：用户最近状态偏「${mood}」。 ${important ? `重要偏好：${important}` : latest.relationshipSignal}`,
+      nextCareCue: latest.nextCareCue,
+    };
+  });
+  return { version: 1, entries, dailySummaries };
+}
+
+function validateState(value: unknown): RelationshipState {
+  if (!value || typeof value !== "object" || (value as RelationshipState).version !== 1
+    || !Array.isArray((value as RelationshipState).entries) || !Array.isArray((value as RelationshipState).dailySummaries)) throw new Error("关系日志损坏");
+  return structuredClone(value as RelationshipState);
+}
+
+function contextFromState(state: RelationshipState): string {
+  const recent = state.entries.slice(-8);
+  if (!recent.length) return "";
+  const lastMood = [...recent].reverse().find((entry) => entry.userMood !== "未知")?.userMood ?? "平稳";
+  const latestSummary = state.dailySummaries.at(-1)?.summary;
+  const preference = [...recent].reverse().find((entry) => entry.importantMoment)?.importantMoment;
+  const latestCue = recent.at(-1)?.nextCareCue;
+  const lines = ["【近期关系线索】", `- 用户最近状态：${lastMood}`];
+  if (latestSummary) lines.push(`- 最近日记摘要：${latestSummary}`);
+  if (preference) lines.push(`- 重要互动偏好：${preference}`);
+  if (latestCue) lines.push(`- 当前回应参考：${latestCue}`);
+  return lines.join("\n");
+}
+
+export function createRelationshipLog(storage: PluginStorage) {
+  let state = storage.get<unknown>(STORAGE_KEY) === undefined
+    ? { version: 1 as const, entries: [], dailySummaries: [] }
+    : validateState(storage.get<unknown>(STORAGE_KEY));
+  return {
+    reconcile(turns: Turn[]) {
+      const next = buildState(turns);
+      if (JSON.stringify(next.entries) !== JSON.stringify(state.entries)) {
+        state = next;
+        storage.set(STORAGE_KEY, state);
+      }
+      return state.entries.length;
+    },
+    context() { return contextFromState(state); },
+    view() { return { entries: state.entries.length, dailySummaries: state.dailySummaries.length }; },
+  };
 }

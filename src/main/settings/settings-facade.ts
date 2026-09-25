@@ -18,6 +18,7 @@ import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
+  normalizeCompanionProactivePace,
   normalizeProactiveDeliveryTarget,
   normalizeSegmentedOutputMode,
 } from "../../shared/preferences";
@@ -30,6 +31,7 @@ import type { ToolModeOverrides } from "../orchestrator/tools/registry/tool-regi
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillModeOverrides } from "../skills/types";
 import { normalizeLspServerOverrides } from "../lsp/server-catalog";
+import { normalizeReasoningPreference } from "../../shared/reasoning";
 import {
   applyInstallerLaunchAtLoginSelection,
   consumeInstallerLaunchAtLoginSelection,
@@ -42,6 +44,11 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   citaSemanticEngine: "remote",
   chatSocialContextEnabled: false,
   chatBackend: "native",
+  companionToolReasoning: { mode: "off" },
+  companionFeedbackLearningEnabled: false,
+  companionScreenMonitorEnabled: false,
+  companionLifeEnabled: true,
+  companionImportantDatesText: "",
   momentsEnabled: true,
   chatMomentsContextEnabled: true,
   cyreneMomentsPostingEnabled: false,
@@ -51,6 +58,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   petAlwaysOnTop: true,
   petVisible: true,
   petZoom: 1,
+  petIdleMotionsEnabled: false,
   sidebarVisible: true,
   tasksVisible: true,
   toastSoundEnabled: true,
@@ -67,6 +75,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
   proactiveChatMode: "off",
+  companionProactivePace: "normal",
   proactiveDeliveryTarget: "local",
   ttsEngine: "off",
   ttsAutoRead: true,
@@ -136,6 +145,17 @@ function normalizeMosslandTtsModel(value: unknown): string {
   return model && model !== "moss-tts" ? model : DEFAULT_MOSSLAND_TTS_MODEL;
 }
 
+function normalizeCompanionImportantDatesText(value: unknown): string {
+  if (typeof value !== "string" || value.length > 20_000) return "";
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 100 || lines.some((line) => {
+    const match = /^(\d{2}-\d{2}|\d{4}-\d{2}-\d{2})\s+(.+)$/.exec(line);
+    const labelLength = match?.[2].trim().length ?? 0;
+    return !match || labelLength === 0 || labelLength > 200;
+  })) return "";
+  return lines.join("\n");
+}
+
 const listeners = new Set<(before: GeneralSettings, after: GeneralSettings) => void>();
 
 let generalSettingsCache: GeneralSettings | null = null;
@@ -197,6 +217,14 @@ export function normalizeGeneralSettings(
       : legacyNativeChatMemoryEnabled === false
         ? "companion"
         : DEFAULT_GENERAL_SETTINGS.chatBackend,
+    companionToolReasoning: normalizeReasoningPreference(input?.companionToolReasoning)
+      ?? DEFAULT_GENERAL_SETTINGS.companionToolReasoning,
+    companionFeedbackLearningEnabled: input?.companionFeedbackLearningEnabled === true,
+    companionScreenMonitorEnabled: input?.companionScreenMonitorEnabled === true,
+    companionLifeEnabled: input?.companionLifeEnabled === undefined
+      ? DEFAULT_GENERAL_SETTINGS.companionLifeEnabled
+      : input.companionLifeEnabled === true,
+    companionImportantDatesText: normalizeCompanionImportantDatesText(input?.companionImportantDatesText),
     momentsEnabled: input?.momentsEnabled === undefined
       ? DEFAULT_GENERAL_SETTINGS.momentsEnabled
       : Boolean(input.momentsEnabled),
@@ -225,6 +253,9 @@ export function normalizeGeneralSettings(
     petZoom: typeof input?.petZoom === "number"
       ? Math.max(0.5, Math.min(2, input.petZoom))
       : DEFAULT_GENERAL_SETTINGS.petZoom,
+    petIdleMotionsEnabled: input?.petIdleMotionsEnabled === undefined
+      ? DEFAULT_GENERAL_SETTINGS.petIdleMotionsEnabled
+      : Boolean(input.petIdleMotionsEnabled),
     petWindowX: typeof input?.petWindowX === "number" && isFinite(input.petWindowX)
       ? Math.round(input.petWindowX)
       : undefined,
@@ -250,6 +281,7 @@ export function normalizeGeneralSettings(
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
+    companionProactivePace: normalizeCompanionProactivePace(input?.companionProactivePace),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo", "mossland"].includes(input?.ttsEngine as string)
       ? input?.ttsEngine

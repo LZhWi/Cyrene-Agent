@@ -44,12 +44,13 @@ function snapshotHarnessRequest(
   options: CyreneRunOptions,
   promptLayers: PromptLayers,
   tools: ToolDefinition[],
+  vendorConfig: VendorConfig,
 ): HarnessRequestSnapshot {
   return {
     provider: options.settings.provider,
     model: options.settings.model,
     contextWindowTokens: options.settings.contextWindowTokens,
-    ...(options.settings.reasoning ? { reasoning: JSON.stringify(options.settings.reasoning) } : {}),
+    ...(vendorConfig.reasoning ? { reasoning: JSON.stringify(vendorConfig.reasoning) } : {}),
     ...(options.conversationMode ? { mode: options.conversationMode } : {}),
     promptFingerprint: fingerprint(promptLayers.stablePrefix),
     toolSchemaFingerprint: fingerprint(tools.map((tool) => ({
@@ -97,13 +98,16 @@ export async function prepareHarnessRun(
 
   console.log(`${"[HarnessAdapter]"} starting harness run, mode=${options.conversationMode ?? "work"}${planState ? ` plan=${planState}` : ""}`);
 
+  const toolOnlyChat = options.conversationMode === "chat" && options.chatResponseMode === "two-phase";
   const vendorConfig: VendorConfig = {
     provider: options.settings.provider,
     baseUrl: options.settings.baseUrl,
     model: options.settings.model,
     apiKey: options.settings.apiKey,
     explicitTransport: options.settings.explicitTransport,
-    reasoning: options.settings.reasoning,
+    // Tool 阶段默认关闭 reasoning，与本地两阶段循环保持一致；用户也可通过
+    // Chat/Collab 专用设置单独开启并选择强度，不影响 Soul 阶段偏好。
+    reasoning: toolOnlyChat ? (options.toolReasoning ?? { mode: "off" }) : options.settings.reasoning,
   };
 
   const tools = [...(options.capabilities?.tools ?? options.tools ?? toolRegistry.getEnabledTools())];
@@ -136,14 +140,19 @@ export async function prepareHarnessRun(
   const runMessages = materializeHarnessStartTranscript({
     messages: baseRunMessages,
     runId,
-    runtimeContext: promptLayers.runtimeContext,
+    // 本地两阶段 Tool 环境属于 system，不应作为 user/internal 消息流入 Soul。
+    runtimeContext: toolOnlyChat ? undefined : promptLayers.runtimeContext,
     initialState: recovered?.state,
+    includeTodoContext: !toolOnlyChat,
     kind: recovered ? "recovery" : "run_start",
   });
   // create 必须发生在 Harness 启动前，并使用最终消息/提示词/工具指纹，供 checkpoint 和恢复校验复用。
+  const sessionPrefix = toolOnlyChat
+    ? [promptLayers.sessionPrefix, promptLayers.runtimeContext].filter(Boolean).join("\n\n---\n\n")
+    : promptLayers.sessionPrefix;
   const harnessPromptLayers: PromptLayers = {
     stablePrefix: promptLayers.stablePrefix,
-    ...(promptLayers.sessionPrefix ? { sessionPrefix: promptLayers.sessionPrefix } : {}),
+    ...(sessionPrefix ? { sessionPrefix } : {}),
     ...(promptLayers.mode ? { mode: promptLayers.mode } : {}),
   };
   const systemPrompt = harnessPromptLayers.stablePrefix;
@@ -151,7 +160,7 @@ export async function prepareHarnessRun(
     conversationId: threadId,
     runId,
     messages: runMessages,
-    request: snapshotHarnessRequest(options, harnessPromptLayers, tools),
+    request: snapshotHarnessRequest(options, harnessPromptLayers, tools, vendorConfig),
     ...(recovered ? { state: recovered.state, cache: recovered.cache } : {}),
     ...(options.resumeFromRunId ? { resumedFromRunId: options.resumeFromRunId } : {}),
   });

@@ -1,7 +1,7 @@
 // 工具注册表 — 统一管理所有可被 LLM Router 调度的工具
 // Worldbook 不在此注册，它走独立常驻检索路径
 
-import { searchMemory } from "../../../rag/index";
+import { formatImportedDocumentChunk, searchImportedDocumentChunks, searchMemory } from "../../../rag/index";
 import type { ToolRiskLevel } from "../../../permission";
 import type { ToolContext } from "./tool-context";
 import type { ConversationMode } from "../../../../shared/chat-types";
@@ -218,8 +218,8 @@ toolRegistry.register({
     required: ['query'],
   },
   execute: async (args) => {
-    const results = await searchMemory(String(args.query), 'imported_doc', Number(args.topK) || 5);
-    return results.map((r: unknown) => String(r)).join('\n');
+    const results = await searchImportedDocumentChunks(String(args.query), Number(args.topK) || 5);
+    return results.map(formatImportedDocumentChunk).join('\n');
   },
 });
 

@@ -55,7 +55,6 @@ html, body {
   border-radius: var(--cy-window-radius, 24px);
   overflow: hidden;
   user-select: none;
-  app-region: drag;
 }
 
 .cy-page button,
@@ -63,8 +62,43 @@ html, body {
 .cy-page input,
 .cy-page select,
 .cy-page textarea,
-.cy-workspace {
-  app-region: no-drag;
+.cy-page:not(.is-chat-mode) .cy-workspace {
+  -webkit-app-region: no-drag;
+}
+
+.cy-page-drag-region {
+  display: none;
+}
+
+.cy-page.is-chat-mode .cy-page-drag-region {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: block;
+  height: 58px;
+  -webkit-app-region: drag;
+}
+
+.cy-chat-topfade {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 10px;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / 70%), transparent 100%);
+  mask-image: linear-gradient(to bottom, rgb(0 0 0 / 70%), transparent 100%);
+}
+
+.cy-chat-topfade__blur {
+  position: absolute;
+  inset: 0;
+  background: #f5f5f7;
+  -webkit-backdrop-filter: blur(9px) saturate(140%);
+  backdrop-filter: blur(9px) saturate(140%);
 }
 
 .cy-file-drop-overlay {
@@ -95,12 +129,15 @@ html, body {
 
 .cy-page-toggle {
   position: absolute;
+  z-index: 5;
   top: 10px;
   left: 8px;
+  -webkit-app-region: no-drag;
 }
 
 .cy-page-top-center {
   position: absolute;
+  z-index: 5;
   top: 7px;
   left: 50%;
   transform: translateX(-50%);
@@ -108,21 +145,31 @@ html, body {
   align-items: center;
   gap: 12px;
   transition: left 0.25s ease;
+  -webkit-app-region: no-drag;
+}
+
+.cy-page-title-meta {
+  position: absolute;
+  z-index: 5;
+  top: 10px;
+  left: 68px;
+  -webkit-app-region: no-drag;
 }
 
 .cy-companion-life-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 210px;
-  padding: 6px 10px;
-  border: 1px solid rgb(236 178 199 / 48%);
+  max-width: 280px;
+  padding: 5px 14px;
+  border: 1px solid rgb(0 0 0 / 7%);
   border-radius: 999px;
-  background: rgb(255 255 255 / 72%);
-  color: #775b68;
+  background: rgb(246 247 250 / 60%);
+  color: #6f6876;
   font-size: 12px;
-  line-height: 1;
-  box-shadow: 0 2px 10px rgb(193 91 132 / 8%);
+  line-height: 24px;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 10%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  backdrop-filter: blur(14px) saturate(150%);
   white-space: nowrap;
 }
 
@@ -133,8 +180,51 @@ html, body {
 
 .cy-page-windows {
   position: absolute;
+  z-index: 5;
   top: 10px;
   right: 20px;
+  -webkit-app-region: no-drag;
+}
+
+.cy-page-title-controls {
+  position: absolute;
+  z-index: 5;
+  top: 10px;
+  right: 140px;
+  display: flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.cy-page-title-controls .cy-composer__agent-button {
+  min-height: 34px;
+  padding: 4px 9px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 8px;
+  background: rgb(246 247 250 / 60%);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 10%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  backdrop-filter: blur(14px) saturate(150%);
+}
+
+.cy-page-title-controls .cy-composer__agent-button:hover {
+  border-color: rgb(0 0 0 / 12%);
+  background: rgb(246 247 250 / 60%);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 16%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  transform: translateY(-1px);
+}
+
+.cy-page-title-controls .cy-title-control-label {
+  color: #6f6876;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.cy-page-title-controls .cy-title-control-value {
+  color: #db2777;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* 用户头像与设置按钮已移入 .cy-page-sidebar-bottom */
@@ -282,6 +372,56 @@ html, body {
 
 .cy-workspace.has-messages .cy-workspace-composer {
   padding: 22px 24px;
+}
+
+/* Chat-only compatibility layer sourced from Cyrene-Agent/chat. */
+.cy-page.is-chat-mode {
+  --cy-bg-page: #fdf9fb;
+  --cy-bg-workspace: transparent;
+  padding: 0;
+  gap: 0;
+  border-radius: var(--cy-window-radius, 32px);
+}
+
+.cy-page.is-chat-mode .cy-page-toggle {
+  z-index: 5;
+  left: 18px;
+}
+
+.cy-page.is-chat-mode .cy-page-top-center {
+  z-index: 5;
+  top: 10px;
+}
+
+.cy-page.is-chat-mode.is-collapsed .cy-page-top-center {
+  left: 50%;
+}
+
+.cy-page.is-chat-mode .cy-page-windows {
+  z-index: 5;
+  top: 14px;
+  right: 18px;
+}
+
+.cy-page.is-chat-mode .cy-page-sidebar {
+  box-sizing: border-box;
+  padding-top: 58px;
+  background: rgb(253 249 251 / 88%);
+  backdrop-filter: blur(14px) saturate(150%);
+}
+
+.cy-page.is-chat-mode .cy-workspace {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.cy-page.is-chat-mode .cy-workspace::before {
+  background-image: none;
+}
+
+.cy-page.is-chat-mode .cy-workspace.has-messages .cy-workspace-composer {
+  padding: 8px 128px 20px;
 }
 
 .cy-compressing-context {

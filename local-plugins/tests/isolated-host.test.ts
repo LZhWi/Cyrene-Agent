@@ -55,11 +55,21 @@ function createHarness(caseName: string, pluginIds: string[], conversationMessag
         },
         screenObservation: {
           observe: async ({ focus } = {}) => `隔离屏幕摘要:${focus ?? ""}`,
+          observeSnapshot: async () => ({
+            text: "类型：工作\n与上次比较：延续\n概括：隔离屏幕摘要。",
+            noChange: false,
+          }),
         },
+        companionContext: { snapshot: async () => ({ items: [] }) },
         userPresence: {
           snapshot: async () => ({ at: new Date(0).toISOString(), idleSeconds: 0, screenLocked: false }),
         },
         weatherContext: { snapshot: async () => null },
+        proactiveDocuments: { search: async () => "" },
+        memoryRetrieval: {
+          embed: async (texts) => ({ vectors: texts.map(() => Array(1024).fill(0)), identity: { provider: "isolated", model: "deterministic", dimensions: 1024 } }),
+          rank: async ({ candidates, topK }) => ({ rankedIds: candidates.slice(0, topK).map((candidate) => candidate.id), vectorHitIds: candidates.slice(0, topK * 3).map((candidate) => candidate.id) }),
+        },
       };
     },
   };
@@ -139,8 +149,8 @@ describe.runIf(enabled)("上游真实 PluginManager 隔离加载", () => {
       expect(await invoke(h, "companion-memory", "auto-lifecycle", false)).toMatchObject({ ok: true, data: { enabled: false } });
       expect(await invoke(h, "companion-memory", "auto-dream", true)).toMatchObject({ ok: true, data: { enabled: true, idleMs: 900_000, minIntervalMs: 86_400_000 } });
       expect(await invoke(h, "companion-memory", "auto-dream-apply", true)).toMatchObject({ ok: true, data: { enabled: true, applyEnabled: true } });
-      expect(await invoke(h, "companion-memory", "auto-compression", true)).toMatchObject({ ok: true, data: { enabled: true, suppressed: true } });
-      expect((await invoke(h, "companion-memory", "state")).data.autoCompression).toMatchObject({ enabled: true, suppressed: true, pendingTurns: 0 });
+      expect(await invoke(h, "companion-memory", "auto-compression", true)).toMatchObject({ ok: true, data: { enabled: true, suppressed: false } });
+      expect((await invoke(h, "companion-memory", "state")).data.autoCompression).toMatchObject({ enabled: true, suppressed: false, pendingTurns: 0 });
       expect(await invoke(h, "companion-memory", "auto-dream", false)).toMatchObject({ ok: true, data: { enabled: false, applyEnabled: false } });
       expect((await invoke(h, "companion-memory", "state")).data.autoCompression).toMatchObject({ enabled: true, suppressed: false });
       expect(await invoke(h, "companion-memory", "auto-compression", false)).toMatchObject({ ok: true, data: { enabled: false } });
@@ -224,8 +234,8 @@ describe.runIf(enabled)("上游真实 PluginManager 隔离加载", () => {
         source: "conversation", mode: "chat", chatBackend: "companion",
         userText: "白厄是谁", conversationId: "fresh-install", runId: "fresh-install-run",
       });
-      expect(prompt).toContain("plugin:companion-chat:life-context");
-      expect(prompt).toContain("plugin:companion-chat:worldbook");
+      expect(prompt).toContain("[你的生活]");
+      expect(prompt).toContain("【白厄 / Phainon】");
     } finally { await h.manager.stop(); }
     expect(h.ipc.size).toBe(0);
   });
@@ -255,12 +265,13 @@ describe.runIf(enabled)("上游真实 PluginManager 隔离加载", () => {
         source: "conversation", mode: "chat", chatBackend: "companion",
         userText: "白厄也喜欢乌龙茶吗", conversationId: "chat-order", runId: "run-order",
       });
-      const life = prompt.indexOf("plugin:companion-chat:life-context");
-      const memory = prompt.indexOf("plugin:companion-memory:memory-context");
-      const worldbook = prompt.indexOf("plugin:companion-chat:worldbook");
+      const life = prompt.indexOf("[你的生活]");
+      const memory = prompt.indexOf("用户偏爱乌龙茶");
+      const worldbook = prompt.indexOf("【白厄 / Phainon】");
       expect(life).toBeGreaterThanOrEqual(0);
       expect(memory).toBeGreaterThan(life);
       expect(worldbook).toBeGreaterThan(memory);
+      expect(prompt).not.toContain("[插件上下文：plugin:companion-");
       expect(prompt).toContain("用户偏爱乌龙茶");
       expect(prompt).toContain("【白厄 / Phainon】");
     } finally { await h.manager.stop(); }
@@ -327,7 +338,7 @@ describe.runIf(enabled)("上游真实 PluginManager 隔离加载", () => {
         inputMessageId: "user-1", assistantMessageId: "assistant-1", chatBackend: "companion", startedAt: Date.now() });
       lifecycle.settleTerminal("run-1", { status: "success" });
       const promptInput = { source: "conversation" as const, mode: "chat" as const,
-        chatBackend: "companion" as const, userText: "乌龙茶", conversationId: "chat-1" };
+        chatBackend: "companion" as const, userText: "还记得我喜欢乌龙茶吗", conversationId: "chat-1" };
       expect(await h.promptRegistry.build(promptInput)).toBe("");
       expect((await invoke(h, "companion-memory", "state")).data.turns).toHaveLength(0);
 
@@ -342,7 +353,7 @@ describe.runIf(enabled)("上游真实 PluginManager 隔离加载", () => {
       })]);
       const prompt = await h.promptRegistry.build(promptInput);
       expect(prompt).toContain("我喜欢乌龙茶");
-      expect(prompt).toContain("助手（非用户事实）：记住了");
+      expect(prompt).toContain("昔涟：记住了");
       expect(await h.promptRegistry.build({ ...promptInput, mode: "work" })).toBe("");
       expect(h.llmCalls).toHaveLength(0);
     } finally { lifecycle.disposeAll(); await h.manager.stop(); }

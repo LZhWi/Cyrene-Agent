@@ -44,6 +44,9 @@ export function applyGeneralSettings(
   if (!before || before.petZoom !== settings.petZoom) {
     deps.windowManager?.applyPetWindowZoom(settings.petZoom);
   }
+  if (!before || before.petIdleMotionsEnabled !== settings.petIdleMotionsEnabled) {
+    deps.windowManager?.sendToPetWindow(IPC.PET_IDLE_MOTIONS_CHANGED, settings.petIdleMotionsEnabled);
+  }
 }
 
 export function applyUiIcon(iconSetting: UiIcon, deps: GeneralSettingsLifecycleDependencies): void {

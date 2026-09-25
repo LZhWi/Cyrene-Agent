@@ -59,19 +59,36 @@ export function createLifecycle(storage: PluginStorage, now: () => number = Date
   return {
     view() { return { enabled, revision: state.revision, tracked: Object.keys(state.recalls).length }; },
     reload() { state = load(storage); return this.view(); },
+    remove(id: string) {
+      if (!state.recalls[id]) return false;
+      const recalls = { ...state.recalls };
+      delete recalls[id];
+      state = { ...state, revision: state.revision + 1, recalls };
+      storage.set(STATE_KEY, state);
+      return true;
+    },
+    reconcile(knownIds: string[]) {
+      const known = new Set(knownIds), recalls = Object.fromEntries(Object.entries(state.recalls).filter(([id]) => known.has(id)));
+      const removed = Object.keys(state.recalls).length - Object.keys(recalls).length;
+      if (removed) { state = { ...state, revision: state.revision + 1, recalls }; storage.set(STATE_KEY, state); }
+      return { removed, ...this.view() };
+    },
     set(value: unknown) {
       if (typeof value !== "boolean") throw new Error("生命周期跟踪设置无效");
       storage.set(SETTINGS_KEY, value); enabled = value;
       return this.view();
     },
-    record(ids: string[], entries: Entry[]) {
-      if (!enabled) return;
+    record(ids: string[], entries: Entry[], force = false) {
+      if (!enabled && !force) return { recordedIds: [] as string[], reactivateIds: [] as string[] };
       const known = new Set(entries.map((entry) => entry.id)), unique = [...new Set(ids)].filter((id) => known.has(id));
-      if (!unique.length) return;
+      if (!unique.length) return { recordedIds: [] as string[], reactivateIds: [] as string[] };
       const at = now(), recalls = { ...state.recalls };
       for (const id of unique) recalls[id] = { lastHitAt: at, hitCount: (recalls[id]?.hitCount ?? 0) + 1, weight: Math.min(100, (recalls[id]?.weight ?? 0) + 1) };
+      const byId = new Map(entries.map((entry) => [entry.id, entry]));
+      const reactivateIds = unique.filter((id) => byId.get(id)?.status === "aging" && recalls[id].weight >= 30);
       state = { ...state, version: 1, revision: state.revision + 1, recalls };
       storage.set(STATE_KEY, state);
+      return { recordedIds: unique, reactivateIds };
     },
     decayWeights(entries: Entry[]) {
       if (!enabled) return { changed: 0, lastDecayAt: state.lastDecayAt };

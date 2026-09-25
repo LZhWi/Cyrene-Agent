@@ -169,8 +169,8 @@
 
             <label class="setting-row profile-multimodal-row">
               <div>
-                <strong><span data-i18n="panel.api.field.model.multimodal.title">多模态（能直发图片）</span></strong>
-                <span><span data-i18n="panel.api.field.model.multimodal.desc">开启后图片直发该模型；关闭则走下方视觉模型转述。跟随档案生效。</span></span>
+                <strong><span data-i18n="panel.api.field.model.multimodal.title">聊天图片直接发送</span></strong>
+                <span><span data-i18n="panel.api.field.model.multimodal.desc">开启：原图直接交给当前主模型；关闭：先由下方选择的视觉任务后端转述。跟随档案生效。</span></span>
               </div>
               <span class="switch"><input id="multimodal-toggle" type="checkbox" title="多模态" data-i18n-title="panel.api.field.model.multimodal.toggleTitle" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
             </label>
@@ -238,9 +238,18 @@
               <span class="vision-config-icon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>视觉模型</title><path d="M44 21C44 19.8954 43.1046 19 42 19C40.8954 19 40 19.8954 40 21H44ZM23 8C24.1046 8 25 7.10457 25 6C25 4.89543 24.1046 4 23 4V8ZM39 40H9V44H39V40ZM8 39V9H4V39H8ZM40 21V39H44V21H40ZM9 8H23V4H9V8ZM9 40C8.44772 40 8 39.5523 8 39H4C4 41.7614 6.23857 44 9 44V40ZM39 44C41.7614 44 44 41.7614 44 39H40C40 39.5523 39.5523 40 39 40V44ZM8 9C8 8.44772 8.44771 8 9 8V4C6.23858 4 4 6.23857 4 9H8Z" fill="currentColor"/><path d="M6 35L16.6931 25.198C17.4389 24.5143 18.5779 24.4953 19.3461 25.1538L32 36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 31L32.7735 26.2265C33.4772 25.5228 34.5914 25.4436 35.3877 26.0408L42 31" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33.3 6C31.4775 6 30 7.43473 30 9.20455C30 12.4091 33.9 15.3223 36 16C38.1 15.3223 42 12.4091 42 9.20455C42 7.43473 40.5225 6 38.7 6C37.5839 6 36.5972 6.53804 36 7.3616C35.4028 6.53804 34.4161 6 33.3 6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
               <div>
                 <h2><span data-i18n="panel.api.vision.title">视觉模型（全局）</span></h2>
-                <p><span data-i18n="panel.api.vision.desc">档案未开多模态时，用这里的独立视觉模型转述图片。留空则诚实告知看不了。</span></p>
+                <p><span data-i18n="panel.api.vision.desc">独立选择屏幕观察、图片工具、聊天图片转述和直发失败降级所使用的模型。</span></p>
               </div>
             </div>
+
+            <label class="field field--full">
+              <span><span data-i18n="panel.api.vision.backend.label">视觉任务后端</span></span>
+              <select id="vision-backend-select">
+                <option value="main" data-i18n="panel.api.vision.backend.main">跟随主模型</option>
+                <option value="independent" data-i18n="panel.api.vision.backend.independent">独立 VLM</option>
+              </select>
+              <span class="form-hint"><span data-i18n="panel.api.vision.backend.hint">该选项不影响聊天图片是否直发。</span></span>
+            </label>
 
             <div id="vision-fields-wrap">
               <div class="form-grid vision-fields">
@@ -326,8 +335,8 @@
                 <span><span data-i18n="panel.preferences.chatMode.desc">打开聊天窗口时默认使用的模式；窗口内仍可临时切换。</span></span>
               </div>
               <div class="option-blocks option-blocks--wide" id="default-chat-mode-select" role="radiogroup" aria-label="默认模式">
-                <button type="button" class="option-block" data-value="work" aria-pressed="false" disabled>Work</button>
-                <button type="button" class="option-block is-active" data-value="chat" aria-pressed="true" disabled><span data-i18n="panel.preferences.chatMode.option.chat">Chat</span></button>
+                <button type="button" class="option-block" data-value="work" aria-pressed="false">Work</button>
+                <button type="button" class="option-block is-active" data-value="chat" aria-pressed="true"><span data-i18n="panel.preferences.chatMode.option.chat">Chat</span></button>
               </div>
             </div>
 
@@ -337,9 +346,9 @@
                 <span><span data-i18n="panel.preferences.segmented.desc">控制昔涟回复在聊天气泡中的分段显示；不会改变模型实际回复内容。</span></span>
               </div>
               <div class="option-blocks option-blocks--wide" id="segmented-output-select" role="radiogroup" aria-label="分段输出">
-                <button type="button" class="option-block" data-value="all" aria-pressed="false" disabled><span data-i18n="panel.preferences.segmented.option.all">所有</span></button>
-                <button type="button" class="option-block" data-value="chat" aria-pressed="false" disabled><span data-i18n="panel.preferences.segmented.option.chat">聊天</span></button>
-                <button type="button" class="option-block is-active" data-value="off" aria-pressed="true" disabled><span data-i18n="panel.preferences.segmented.option.off">关闭</span></button>
+                <button type="button" class="option-block" data-value="all" aria-pressed="false"><span data-i18n="panel.preferences.segmented.option.all">所有</span></button>
+                <button type="button" class="option-block" data-value="chat" aria-pressed="false"><span data-i18n="panel.preferences.segmented.option.chat">聊天</span></button>
+                <button type="button" class="option-block is-active" data-value="off" aria-pressed="true"><span data-i18n="panel.preferences.segmented.option.off">关闭</span></button>
               </div>
             </div>
 
@@ -368,12 +377,56 @@
             <div class="setting-row">
               <div>
                 <strong><span data-i18n="panel.preferences.proactive.title">主动聊天</span></strong>
-                <span><span data-i18n="panel.preferences.proactive.desc">昔涟会在合适的时间主动发起对话；深夜无操作、正常聊天中和连续两次未回复时不会打扰。</span></span>
+                <span><span data-i18n="panel.preferences.proactive.desc">使用陪伴聊天后端时，此开关直接控制 Companion 主动聊天；深夜无操作、正常聊天中和连续两次未回复时不会打扰。</span></span>
               </div>
               <div class="option-blocks option-blocks--wide" id="proactive-chat-select" role="radiogroup" aria-label="主动聊天">
                 <button type="button" class="option-block is-active" data-value="off" aria-pressed="true"><span data-i18n="panel.preferences.proactive.option.off">关闭</span></button>
                 <button type="button" class="option-block" data-value="on" aria-pressed="false"><span data-i18n="panel.preferences.proactive.option.on">开启</span></button>
               </div>
+            </div>
+
+            <div class="setting-row companion-chat-setting-row" id="companion-proactive-pace-row" hidden>
+              <div>
+                <strong><span data-i18n="panel.preferences.proactive.pace.title">主动聊天频率</span></strong>
+                <span><span data-i18n="panel.preferences.proactive.pace.desc">与本地版相同的 Desire 增长档位；5 分钟检查间隔保持不变。</span></span>
+              </div>
+              <div class="option-blocks option-blocks--wide" id="companion-proactive-pace-select" role="radiogroup" aria-label="主动聊天频率">
+                <button type="button" class="option-block" data-value="quiet" aria-pressed="false"><span data-i18n="panel.preferences.proactive.pace.option.quiet">冷清</span></button>
+                <button type="button" class="option-block is-active" data-value="normal" aria-pressed="true"><span data-i18n="panel.preferences.proactive.pace.option.normal">自然</span></button>
+                <button type="button" class="option-block" data-value="lively" aria-pressed="false"><span data-i18n="panel.preferences.proactive.pace.option.lively">热闹</span></button>
+              </div>
+            </div>
+
+            <label class="setting-row companion-chat-setting-row" id="companion-feedback-learning-row" hidden>
+              <div>
+                <strong><span data-i18n="panel.preferences.companion.feedback.title">主动消息回应反馈学习</span></strong>
+                <span><span data-i18n="panel.preferences.companion.feedback.desc">根据你对主动消息的回复或忽略，调整类似场景下主动开口的倾向。</span></span>
+              </div>
+              <span class="switch"><input id="companion-feedback-learning-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+            </label>
+
+            <label class="setting-row companion-chat-setting-row" id="companion-screen-monitor-row" hidden>
+              <div>
+                <strong><span data-i18n="panel.preferences.companion.screen.title">后台屏幕观察</span></strong>
+                <span><span data-i18n="panel.preferences.companion.screen.desc">定期获取不落盘的屏幕摘要，只用于主动聊天判断是否适合打扰。</span></span>
+              </div>
+              <span class="switch"><input id="companion-screen-monitor-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+            </label>
+
+            <label class="setting-row companion-chat-setting-row" id="companion-life-row" hidden>
+              <div>
+                <strong><span data-i18n="panel.preferences.companion.life.title">“你的生活”拟态日程</span></strong>
+                <span><span data-i18n="panel.preferences.companion.life.desc">为昔涟生成按本地日期变化的生活背景；不会主动播报日程。</span></span>
+              </div>
+              <span class="switch"><input id="companion-life-enabled" type="checkbox" checked /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+            </label>
+
+            <div class="setting-row companion-chat-setting-row companion-important-dates-row" id="companion-important-dates-row" hidden>
+              <div>
+                <strong><label for="companion-important-dates"><span data-i18n="panel.preferences.companion.dates.title">纪念日</span></label></strong>
+                <span><span data-i18n="panel.preferences.companion.dates.desc">每行填写“MM-DD 标题”或“YYYY-MM-DD 标题”，最多 100 条。</span></span>
+              </div>
+              <textarea id="companion-important-dates" rows="3" maxlength="20000" placeholder="07-27 认识纪念日" data-i18n-placeholder="panel.preferences.companion.dates.placeholder"></textarea>
             </div>
 
             <div class="setting-row proactive-delivery-row" id="proactive-delivery-row" hidden>
@@ -435,12 +488,30 @@
             <label class="setting-row">
               <div>
                 <strong><span data-i18n="panel.preferences.chatSocial.title">聊天上下文增强</span></strong>
-                <span><span data-i18n="panel.preferences.chatSocial.desc">仅在 Chat 模式下使用相关的过去信息和未接话题，让连续交流更自然；每轮最多增加一次异步模型调用。</span></span>
+                <span><span data-i18n="panel.preferences.chatSocial.desc">使用陪伴聊天后端时，启用聊天采集、自动记忆提取及历史与记忆上下文注入。</span></span>
               </div>
               <span class="switch"><input id="chat-social-context-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
             </label>
 
-            <label class="setting-row">
+            <div class="setting-row companion-query-router" id="companion-query-router">
+              <div>
+                <strong>记忆查询路由模型</strong>
+                <span>独立判断记忆检索范围；不使用聊天主模型配置。关闭时使用本地规则。</span>
+              </div>
+              <div class="companion-query-router__fields">
+                <label><input id="companion-query-router-enabled" type="checkbox" /> 启用独立路由</label>
+                <label>服务商<input id="companion-query-router-provider" type="text" autocomplete="off" placeholder="自定义" /></label>
+                <label>API 地址<input id="companion-query-router-base-url" type="url" autocomplete="off" placeholder="https://…" /></label>
+                <label>模型<input id="companion-query-router-model" type="text" autocomplete="off" /></label>
+                <label>API Key<input id="companion-query-router-api-key" type="password" autocomplete="new-password" placeholder="留空则保留已有密钥" /></label>
+                <label>协议<select id="companion-query-router-transport"><option value="auto">自动</option><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
+                <label>推理<select id="companion-query-router-reasoning"><option value="off">关闭</option><option value="auto">自动</option><option value="low">低</option></select></label>
+                <button id="companion-query-router-save" type="button" class="save-btn">保存路由模型</button>
+                <span id="companion-query-router-status" role="status"></span>
+              </div>
+            </div>
+
+            <label class="setting-row" id="cita-enabled-row">
               <div>
                 <strong><span data-i18n="panel.preferences.cita.title">CITA 上下文认知</span></strong>
                 <span><span data-i18n="panel.preferences.cita.desc">辅助昔涟理解跨轮状态、指代和省略表达。</span></span>
@@ -563,6 +634,10 @@
               <label class="setting-row">
                 <div><strong><span data-i18n="panel.appearance.pet.visible.title">桌宠显示</span></strong><span><span data-i18n="panel.appearance.pet.visible.desc">隐藏或显示 Live2D 桌宠本体。</span></span></div>
                 <span class="switch"><input id="pet-visible" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="setting-row">
+                <div><strong>待机动作</strong><span>键鼠空闲后随机播放动作：首次至少 60 秒，后续默认间隔 30–120 秒；朗读期间自动暂停。</span></div>
+                <span class="switch"><input id="pet-idle-motions-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
               </label>
               <label class="setting-row">
                 <div><strong><span data-i18n="panel.appearance.pet.zoom.title">桌宠缩放</span></strong><span><span data-i18n="panel.appearance.pet.zoom.desc">调整 Live2D 模型大小（0.5× ~ 2.0×），窗口与模型同步缩放。</span></span></div>
@@ -819,6 +894,37 @@
               <span class="switch"><input id="chat-companion-backend-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
             </label>
             <p class="memory-card__hint" id="chat-companion-backend-save-status" role="status" aria-live="polite"></p>
+            <div class="memory-card">
+              <div class="memory-card__head">
+                <div>
+                  <h2>Tool 阶段推理</h2>
+                  <p>只控制 Chat/Collab 调用工具前的判断。默认关闭；Soul 最终回复仍使用模型页面中的推理设置。</p>
+                </div>
+              </div>
+              <div class="memory-fields">
+                <div class="memory-field">
+                  <label for="companion-tool-reasoning-mode">是否启用</label>
+                  <select id="companion-tool-reasoning-mode">
+                    <option value="off">关闭（推荐）</option>
+                    <option value="on">开启</option>
+                    <option value="auto">由模型决定</option>
+                  </select>
+                </div>
+                <div class="memory-field">
+                  <label for="companion-tool-reasoning-effort">思考强度</label>
+                  <select id="companion-tool-reasoning-effort">
+                    <option value="minimal">极低</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                    <option value="xhigh">很高</option>
+                    <option value="max">最高</option>
+                  </select>
+                </div>
+              </div>
+              <p class="memory-card__hint">模型不支持关闭或所选档位时，会按该模型的能力自动折叠到可用设置。</p>
+              <p class="memory-card__hint" id="companion-tool-reasoning-save-status" role="status" aria-live="polite"></p>
+            </div>
             <!-- L0 -->
             <div class="memory-card">
               <div class="memory-card__head">
@@ -957,7 +1063,7 @@
                 </div>
                 <div class="tts-field">
                   <label for="user-call-pref"><span data-i18n="panel.user.callPrefLabel">称呼偏好</span></label>
-                  <input type="text" id="user-call-pref" placeholder="例如：伙伴（留空用昵称）" data-i18n-placeholder="panel.user.callPrefPlaceholder" />
+                  <input type="text" id="user-call-pref" placeholder="例如：P宝、主人、哥哥（留空用昵称）" data-i18n-placeholder="panel.user.callPrefPlaceholder" />
                 </div>
                 <div class="tts-field">
                   <label for="user-birthday"><span data-i18n="panel.user.birthdayLabel">生日</span></label>
@@ -965,13 +1071,35 @@
                 </div>
                 <div class="tts-field">
                   <label for="user-default-city"><span data-i18n="panel.user.cityLabel">默认城市</span></label>
-                  <input type="text" id="user-default-city" placeholder="例如：上海、北京、广州（用于天气等）" data-i18n-placeholder="panel.user.cityPlaceholder" />
+                  <input type="text" id="user-default-city" placeholder="自动定位失败时回退，例如：杭州" data-i18n-placeholder="panel.user.cityPlaceholder" />
                 </div>
                 <div class="tts-field">
-                  <label for="user-timezone"><span data-i18n="panel.user.timezoneLabel">时区</span></label>
-                  <select id="user-timezone" data-timezone-select></select>
+                  <label for="weather-location-mode"><span data-i18n="panel.user.weatherLocationLabel">天气位置</span></label>
+                  <select id="weather-location-mode">
+                    <option value="auto" data-i18n="panel.user.weatherLocationAuto">自动定位（推荐）</option>
+                    <option value="fixed" data-i18n="panel.user.weatherLocationFixed">固定使用默认城市</option>
+                    <option value="off" data-i18n="panel.user.weatherLocationOff">不提供位置天气</option>
+                  </select>
                 </div>
-                <p class="user-field-hint"><span data-i18n="panel.user.fieldHint">这些信息会告诉昔涟，让她知道怎么称呼你、你在哪。默认城市用于天气等需要定位的工具；时区仅用于时间计算，不代表所在城市。</span></p>
+                <div class="tts-field" id="location-status-field">
+                  <label><span data-i18n="panel.user.locationStatusLabel">自动定位状态</span></label>
+                  <div class="inline-actions">
+                    <button type="button" class="ghost-btn" id="refresh-location-btn"><span data-i18n="panel.user.locationRefreshButton">获取当前位置</span></button>
+                    <span class="user-field-hint" id="location-status" data-i18n="panel.user.locationNotFetched">尚未获取</span>
+                  </div>
+                </div>
+                <div class="tts-field">
+                  <label for="timezone-mode"><span data-i18n="panel.user.timezoneLabel">时区</span></label>
+                  <select id="timezone-mode">
+                    <option value="system" data-i18n="panel.user.timezoneSystem">跟随系统（推荐）</option>
+                    <option value="manual" data-i18n="panel.user.timezoneManual">手动指定</option>
+                  </select>
+                </div>
+                <div class="tts-field" id="manual-timezone-field" style="display:none">
+                  <label for="user-timezone"><span data-i18n="panel.user.manualTimezoneLabel">手动时区</span></label>
+                  <input type="text" id="user-timezone" placeholder="例如：Asia/Shanghai" data-i18n-placeholder="panel.user.manualTimezonePlaceholder" />
+                </div>
+                <p class="user-field-hint"><span data-i18n="panel.user.fieldHint">定位只用于天气查询，精确坐标不会写入聊天上下文；默认城市会在自动定位失败时回退使用。</span></p>
               </div>
             </div>
           </div>

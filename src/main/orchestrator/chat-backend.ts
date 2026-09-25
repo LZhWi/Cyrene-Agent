@@ -23,8 +23,8 @@ export function shouldUseNativeChatSystems(input: Parameters<typeof resolveChatB
 }
 
 /**
- * 陪伴后端只接管投递到本地 Chat 的主动消息。微信、飞书等渠道不属于桌面 Chat，
- * 即使桌面选择陪伴后端也继续使用上游原生主动消息实现。
+ * 选择陪伴后端后，设置页的主动聊天开关完全归 Companion 所有；投递目标不再
+ * 让上游主动系统重新启动，避免两个主动控制器并行发送。
  */
 export function shouldUseNativeProactiveChat(input: {
   chatBackend?: unknown;
@@ -32,5 +32,5 @@ export function shouldUseNativeProactiveChat(input: {
   proactiveDeliveryTarget?: unknown;
 }): boolean {
   if (input.proactiveChatMode !== "on") return false;
-  return input.chatBackend !== "companion" || input.proactiveDeliveryTarget !== "local";
+  return input.chatBackend !== "companion";
 }

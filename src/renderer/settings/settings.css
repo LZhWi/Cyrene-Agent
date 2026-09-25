@@ -655,6 +655,23 @@ body {
   display: none;
 }
 
+.companion-chat-setting-row[hidden] {
+  display: none;
+}
+
+.companion-important-dates-row textarea {
+  margin-left: auto;
+  width: 360px;
+  min-height: 74px;
+  resize: vertical;
+  border: 1px solid var(--rb-border-faint);
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--rb-text-default);
+  font: var(--rb-text-small);
+}
+
 .setting-row strong {
   display: block;
   margin-bottom: 4px;
@@ -678,6 +695,31 @@ body {
   width: 18px;
   height: 18px;
   accent-color: var(--rb-pink-500);
+}
+
+.companion-query-router__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: min(620px, 100%);
+}
+
+.companion-query-router__fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+}
+
+.companion-query-router__fields input:not([type="checkbox"]),
+.companion-query-router__fields select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--rb-border-faint);
+  border-radius: 8px;
+  padding: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--rb-text-default);
 }
 
 /* 截图热键输入框 */
@@ -1685,9 +1727,16 @@ body {
   flex: 1;
   min-width: 0;
 }
-.memory-record__delete {
+.memory-record__actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.memory-record__edit,
+.memory-record__delete,
+.memory-record__save,
+.memory-record__cancel {
   flex-shrink: 0;
-  width: 32px;
   height: 32px;
   border-radius: 8px;
   border: 1px solid var(--rb-border-strong);
@@ -1699,10 +1748,37 @@ body {
   place-items: center;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
+.memory-record__edit,
+.memory-record__delete {
+  width: 32px;
+}
+.memory-record__save,
+.memory-record__cancel {
+  padding: 0 10px;
+}
+.memory-record__edit:hover,
+.memory-record__save:hover {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border-color: rgba(59, 130, 246, 0.4);
+}
 .memory-record__delete:hover {
   background: rgba(239, 68, 68, 0.12);
   color: #b91c1c;
   border-color: rgba(239, 68, 68, 0.4);
+}
+.memory-record__editor {
+  width: 100%;
+  min-height: 88px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--rb-input-border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: var(--rb-input-bg);
+  color: var(--rb-text-strong);
+  font: var(--rb-text-small);
+  line-height: 1.6;
 }
 .memory-list__empty {
   display: flex;
@@ -1770,6 +1846,13 @@ body {
   color: var(--rb-text-muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* 性别选择器：三档按钮组 */

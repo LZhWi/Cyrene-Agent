@@ -12,6 +12,7 @@ interface AutoReflectionState {
   lastCompletedAt?: number;
   lastErrorAt?: number;
   lastSuggested?: number;
+  lastApplied?: number;
 }
 
 function load(storage: PluginStorage): AutoReflectionState {
@@ -21,15 +22,15 @@ function load(storage: PluginStorage): AutoReflectionState {
   const state = raw as Partial<AutoReflectionState>;
   if (state.version !== 1 || !Number.isSafeInteger(state.pendingTurns) || state.pendingTurns! < 0 || state.pendingTurns! > TURN_INTERVAL
     || [state.lastAttemptAt, state.lastCompletedAt, state.lastErrorAt].some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))
-    || (state.lastSuggested !== undefined && (!Number.isSafeInteger(state.lastSuggested) || state.lastSuggested < 0 || state.lastSuggested > 8))) throw new Error("后台画像反思状态损坏");
+    || [state.lastSuggested, state.lastApplied].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > 8))) throw new Error("后台画像反思状态损坏");
   return structuredClone(state as AutoReflectionState);
 }
 
-/** 每 20 个成功桌面 Chat 轮次最多生成一批画像变更候选；不会直接覆盖 L0/L1。 */
+/** 每 20 个成功桌面 Chat 轮次生成一批画像变更，再由调用方按本地规则原子应用并保留撤销记录。 */
 export function createAutoReflection(
   storage: PluginStorage,
   events: PluginEvents,
-  review: (signal: AbortSignal) => Promise<{ suggested: number }>,
+  review: (signal: AbortSignal) => Promise<{ suggested: number; applied?: number }>,
   now: () => number = Date.now,
 ) {
   let enabled = storage.get<boolean>(SETTINGS_KEY) ?? false;
@@ -46,7 +47,7 @@ export function createAutoReflection(
     try {
       const result = await review(controller.signal);
       if (stopped || controller.signal.aborted) return;
-      save({ ...state, lastCompletedAt: now(), lastSuggested: result.suggested, lastErrorAt: undefined });
+      save({ ...state, lastCompletedAt: now(), lastSuggested: result.suggested, lastApplied: result.applied ?? 0, lastErrorAt: undefined });
     } catch {
       if (!stopped && !controller.signal.aborted) save({ ...state, lastErrorAt: now() });
     } finally { running = false; controller = undefined; }

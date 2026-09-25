@@ -617,13 +617,15 @@ function planToolSpecsFor(planState: import("../plan-mode").PlanStateName | unde
 
 export function getHarnessBuiltinToolSpecs(options?: {
   includeInteractive?: boolean;
+  includeTodo?: boolean;
   includeTask?: boolean;
   planState?: import("../plan-mode").PlanStateName;
 }): ToolSpec[] {
   const interactive = options?.includeInteractive !== false
     ? [askUserToolSpec, confirmUncertainEffectToolSpec]
     : [];
+  const todo = options?.includeTodo === false ? [] : [updateTodoToolSpec];
   const task = options?.includeTask === false ? [] : [taskToolSpec];
   const plan = planToolSpecsFor(options?.planState);
-  return [updateTodoToolSpec, ...interactive, ...task, readToolResultToolSpec, ...plan];
+  return [...todo, ...interactive, ...task, readToolResultToolSpec, ...plan];
 }

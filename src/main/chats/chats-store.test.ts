@@ -40,6 +40,24 @@ describe("chats store", () => {
     expect(page?.session.messageCount).toBe(3);
   });
 
+  it("deletes a selected message together with its adjacent turn partner", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({
+      initialMessages: [
+        { id: "user-1", role: "user", content: "one", at: 1 },
+        { id: "model-1", role: "model", content: "two", at: 2 },
+        { id: "user-2", role: "user", content: "three", at: 3 },
+        { id: "model-2", role: "model", content: "four", at: 4 },
+      ],
+    });
+
+    const updated = store.deleteMessageRound(session.id, "model-1");
+
+    expect(updated?.messages.map((message) => message.id)).toEqual(["user-2", "model-2"]);
+    expect(store.getSession(session.id)?.messages.map((message) => message.id)).toEqual(["user-2", "model-2"]);
+  });
+
   it("upserts a run checkpoint by message id without disturbing conversation order", async () => {
     const store = await import("./chats-store");
     store.initialize();
@@ -324,6 +342,25 @@ describe("chats store", () => {
 
     store.appendMessage(sessions[0].id, { id: "p1", role: "model", content: "主动问候", at: 1 });
     expect(store.getSession(sessions[0].id)?.title).toBe("昔涟的主动消息");
+  });
+
+  it("preserves generated visual summary when the renderer replaces the same message", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const image = { kind: "image" as const, name: "scene.png", filePath: "C:/scene.png",
+      mime: "image/png", status: "done" as const };
+    const session = store.createSession({ mode: "chat", initialMessages: [
+      { id: "photo", role: "user", content: "看看", at: 1, attachments: [image] },
+    ] });
+    expect(store.setImageVisualIndexResult(session.id, "photo", image.filePath,
+      { summary: "蓝色丝带系在小摆件上", caption: "摆件上有一条蓝色丝带" })).toBe(true);
+    const indexedAt = (store.getSession(session.id)?.messages[0].attachments?.[0] as { visualIndexedAt?: number }).visualIndexedAt;
+    expect(indexedAt).toBeTypeOf("number");
+    store.upsertMessage(session.id, { id: "photo", role: "user", content: "看看", at: 1, attachments: [image] });
+    expect(store.getSession(session.id)?.messages[0].attachments?.[0]).toMatchObject({
+      visualIndexSummary: "蓝色丝带系在小摆件上", visualIndexCaption: "摆件上有一条蓝色丝带",
+      visualIndexedAt: indexedAt,
+    });
   });
 
   it("only marks the latest pending plugin proactive message ignored once", async () => {

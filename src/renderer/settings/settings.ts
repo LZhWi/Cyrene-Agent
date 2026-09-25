@@ -8,11 +8,13 @@ import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
+  normalizeCompanionProactivePace,
   normalizeProactiveDeliveryTarget,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
   type MobileMessageSegmentationMode,
   type ProactiveChatMode,
+  type CompanionProactivePace,
   type ProactiveDeliveryTarget,
   type SegmentedOutputMode,
 } from "../../shared/preferences";
@@ -61,7 +63,7 @@ import { channelsState } from "./channels/state";
 import { mountPluginPanels } from "./plugin-panels";
 import { channelsWechatEnabledEl, channelsFeishuEnabledEl, channelsWechatStatusEl, channelsFeishuStatusEl, channelsRateUserEl, channelsRateChannelEl, channelsTtsEl, channelsStickerEl, channelsMirrorEl, channelsToolSandboxOffEl, channelsToolSandboxAllEl, channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn, channelsFeishuSaveBtn, channelsWechatLoginBtn, channelsWechatRestartBtn, channelsWechatFeedbackEl, channelsFeishuFeedbackEl, channelsLogListEl, channelsLogRefreshBtn, channelsLogClearBtn } from "./channels/dom";
 import { memoryState } from "./memory/state";
-import { chatCompanionBackendEnabledInput, chatCompanionBackendSaveStatus, memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
+import { chatCompanionBackendEnabledInput, chatCompanionBackendSaveStatus, companionToolReasoningModeSelect, companionToolReasoningEffortSelect, companionToolReasoningSaveStatus, memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
 import { tokensState } from "./tokens/state";
@@ -70,9 +72,9 @@ import { formatDateTime, escapeHtml } from "./shared/format";
 import { parsePositiveIntOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState, type SavedProfileLite } from "./api/state";
 import { apiForm, apiRuntimeForm, presetCards, profileList, profileListCount, profileEditorTitle, deleteProfileBtn, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, embeddingDimensionsInput, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
-import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
-import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput, toastSoundEnabledInput } from "./appearance/dom";
-import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, momentsEnabledInput, cyreneMomentsPostingEnabledInput, cyreneMomentsReactionsEnabledInput, momentsCharacterReactionsEnabledInput, momentsLivelinessSelect, momentsPostingRow, momentsReactionsRow, momentsCharacterRow, momentsLivelinessRow, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
+import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionBackendSelect, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
+import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petIdleMotionsEnabledInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput, toastSoundEnabledInput } from "./appearance/dom";
+import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, companionProactivePaceRow, companionProactivePaceSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, companionFeedbackLearningRow, companionFeedbackLearningEnabledInput, companionScreenMonitorRow, companionScreenMonitorEnabledInput, companionLifeRow, companionLifeEnabledInput, companionImportantDatesRow, companionImportantDatesInput, momentsEnabledInput, cyreneMomentsPostingEnabledInput, cyreneMomentsReactionsEnabledInput, momentsCharacterReactionsEnabledInput, momentsLivelinessSelect, momentsPostingRow, momentsReactionsRow, momentsCharacterRow, momentsLivelinessRow, citaEnabledInput, citaEnabledRow, citaEngineRow, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
 import { minBtn, closeBtn, preferencesForm, sectionTitle, sectionHint, placeholderPanel, cyrenePanel, disclaimerPanel, pluginsPanel, placeholderIcon, placeholderTitle, placeholderCopy, saveStatus, runtimeSaveStatus, preferencesSaveStatus, cyreneSaveStatus, openStickerManagerBtn, addStickerBtn } from "./shared/shell";
 import { pluginAddBtn, neteaseDetailView, permissionBlocksWrap, permissionNote } from "./plugins/dom";
 import { preferencesState } from "./preferences/state";
@@ -85,6 +87,7 @@ import type {
   MemoryPanelPayload,
   ModelPreset,
   ModelSettings,
+  LocationApi,
   ProviderProfile,
   SettingsApi,
   UserApi,
@@ -152,6 +155,7 @@ declare global {
     settings?: SettingsApi;
     cyreneScheduler?: SchedulerApi;
     user?: UserApi;
+    cyreneLocation?: LocationApi;
     memoryPanel?: MemoryPanelApi;
   }
 }
@@ -181,6 +185,7 @@ if (!window.settings) {
         chatRequestTimeoutSec: 300,
         citaRepairBudgetSec: 8,
         multimodal: true,
+        visionBackend: "main",
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
     getGeneral: () => Promise.resolve({
@@ -190,6 +195,7 @@ if (!window.settings) {
       petAlwaysOnTop: true,
       petVisible: true,
       petZoom: 1,
+      petIdleMotionsEnabled: false,
       chatLineHeight: 1.75,
       assistantBubbleEnabled: false,
       chatParaSpacing: 0.5,
@@ -208,9 +214,15 @@ if (!window.settings) {
       segmentedOutputMode: "off",
       mobileMessageSegmentation: "off",
       proactiveChatMode: "off",
+      companionProactivePace: "normal",
       proactiveDeliveryTarget: "local",
       chatSocialContextEnabled: false,
       chatBackend: "native",
+      companionToolReasoning: { mode: "off" },
+      companionFeedbackLearningEnabled: false,
+      companionScreenMonitorEnabled: false,
+      companionLifeEnabled: true,
+      companionImportantDatesText: "",
       momentsEnabled: true,
       chatMomentsContextEnabled: true,
       cyreneMomentsPostingEnabled: false,
@@ -429,6 +441,14 @@ function getProactiveChatValue(): ProactiveChatMode {
   return normalizeProactiveChatMode(getOptionGroupValue(proactiveChatSelect, "off"));
 }
 
+function applyCompanionProactivePaceSelection(pace: CompanionProactivePace): void {
+  applyOptionGroupValue(companionProactivePaceSelect, pace);
+}
+
+function getCompanionProactivePaceValue(): CompanionProactivePace {
+  return normalizeCompanionProactivePace(getOptionGroupValue(companionProactivePaceSelect, "normal"));
+}
+
 // 朋友圈热闹程度：非法值回落冷清档（与主进程归一化逻辑一致）
 function applyMomentsLivelinessSelection(liveliness: string): void {
   applyOptionGroupValue(momentsLivelinessSelect, liveliness === "natural" || liveliness === "lively" ? liveliness : "quiet");
@@ -564,7 +584,15 @@ function openCustomStyleModal(): void {
 }
 
 function renderProactiveDeliveryVisibility(): void {
+  const companion = chatCompanionBackendEnabledInput?.checked === true;
   proactiveDeliveryRow.hidden = getProactiveChatValue() !== "on";
+  companionProactivePaceRow.hidden = !companion || getProactiveChatValue() !== "on";
+  citaEnabledRow.hidden = companion;
+  citaEngineRow.hidden = companion;
+  companionFeedbackLearningRow.hidden = !companion;
+  companionScreenMonitorRow.hidden = !companion;
+  companionLifeRow.hidden = !companion;
+  companionImportantDatesRow.hidden = !companion || !companionLifeEnabledInput.checked;
 }
 
 // 朋友圈动态总开关关闭时隐藏昔涟行为子开关（与主动消息投递行的显隐模式一致）
@@ -771,7 +799,7 @@ function editProfile(profile: SavedProfileLite, globalMultimodal: boolean): void
   // 档案级字段：未定义 = 老档案，回退全局值显示
   contextWindowInput.value = profile.contextWindowTokens ? String(profile.contextWindowTokens) : "";
   multimodalToggle.checked = profile.multimodal ?? globalMultimodal;
-  applyMultimodalUI();
+  applyVisionBackendUI();
   applyEditingStateUI();
   renderProfileList();
   setSaveStatus(t("settings.profile.editing", { name: profile.displayName || profile.model }));
@@ -787,7 +815,7 @@ function startNewDraft(providerName: string): void {
   contextWindowInput.value = "";
   // 新建草稿默认开多模态；applyPreset 已不再按厂商门控
   multimodalToggle.checked = true;
-  applyMultimodalUI();
+  applyVisionBackendUI();
   applyEditingStateUI();
   renderProfileList();
 }
@@ -797,10 +825,9 @@ function getCurrentModelValue(): string {
   return modelInput.value;
 }
 
-/** 多模态开关 UI：ON 时隐藏视觉配置区，OFF 时显示。不清空输入框值。 */
-function applyMultimodalUI(): void {
-  const on = multimodalToggle.checked;
-  visionFieldsWrap.classList.toggle("is-hidden", on);
+/** 仅在选择独立 VLM 时显示它的连接配置。不清空输入框值。 */
+function applyVisionBackendUI(): void {
+  visionFieldsWrap.classList.toggle("is-hidden", visionBackendSelect.value !== "independent");
 }
 
 /** 填充视觉模型输入框的 datalist 候选。仅渲染候选，不修改 visionModelInput.value。 */
@@ -974,13 +1001,14 @@ export function applyPreset(
   }
 
   apiState.activeProvider = preset.providerName;
-  applyMultimodalUI();
+  applyVisionBackendUI();
 }
 
 async function loadConfig(): Promise<void> {
   try {
     fillPresetOptions();
     const cfg = await window.settings!.getConfig();
+    visionBackendSelect.value = cfg.visionBackend ?? "main";
     // 模式按钮已删除——mode 字段不再用 UI 控制，直接忽略 cfg.mode
     const vision = cfg.vision;
     applyPreset(
@@ -1040,7 +1068,20 @@ async function loadGeneralSettings(): Promise<void> {
     const cita = getCitaUiState({ enabled: cfg.citaEnabled, semanticEngine: cfg.citaSemanticEngine });
     citaEnabledInput.checked = cita.enabled;
     chatSocialContextEnabledInput.checked = normalizeChatSocialContextEnabled(cfg.chatSocialContextEnabled);
+    void loadCompanionQueryRouter();
     if (chatCompanionBackendEnabledInput) chatCompanionBackendEnabledInput.checked = cfg.chatBackend === "companion";
+    companionFeedbackLearningEnabledInput.checked = cfg.companionFeedbackLearningEnabled ?? false;
+    companionScreenMonitorEnabledInput.checked = cfg.companionScreenMonitorEnabled ?? false;
+    companionLifeEnabledInput.checked = cfg.companionLifeEnabled ?? true;
+    companionImportantDatesInput.value = cfg.companionImportantDatesText ?? "";
+    if (companionToolReasoningModeSelect && companionToolReasoningEffortSelect) {
+      const preference = cfg.companionToolReasoning ?? { mode: "off" as const };
+      companionToolReasoningModeSelect.value = preference.mode;
+      companionToolReasoningEffortSelect.value = preference.effort ?? "medium";
+      companionToolReasoningModeSelect.dataset.savedMode = preference.mode;
+      companionToolReasoningEffortSelect.dataset.savedEffort = preference.effort ?? "medium";
+      companionToolReasoningEffortSelect.disabled = preference.mode !== "on";
+    }
     momentsEnabledInput.checked = cfg.momentsEnabled ?? true;
     cyreneMomentsPostingEnabledInput.checked = cfg.cyreneMomentsPostingEnabled ?? false;
     cyreneMomentsReactionsEnabledInput.checked = cfg.cyreneMomentsReactionsEnabled ?? true;
@@ -1059,6 +1100,7 @@ async function loadGeneralSettings(): Promise<void> {
     petAlwaysOnTopInput.checked = cfg.petAlwaysOnTop;
     petVisibleInput.checked = cfg.petVisible;
     petZoomInput.value = String(cfg.petZoom ?? 1);
+    petIdleMotionsEnabledInput.checked = cfg.petIdleMotionsEnabled ?? false;
     petZoomVal.textContent = Math.round((cfg.petZoom ?? 1) * 100) + "%";
     chatLineHeightInput.value = String(cfg.chatLineHeight ?? 1.75);
     chatLineHeightVal.textContent = (cfg.chatLineHeight ?? 1.75).toFixed(2);
@@ -1078,6 +1120,7 @@ async function loadGeneralSettings(): Promise<void> {
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
+    applyCompanionProactivePaceSelection(normalizeCompanionProactivePace(cfg.companionProactivePace));
     applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(cfg.proactiveDeliveryTarget));
     renderProactiveDeliveryVisibility();
     if (screenshotHotkeyInput) {
@@ -1226,6 +1269,14 @@ petZoomInput.addEventListener("input", () => {
 petZoomInput.addEventListener("change", () => {
   window.settings?.setPetZoom(Number(petZoomInput.value));
   setAppearanceSaveStatus(t("settings.status.appliedOk"), "is-ok");
+});
+petIdleMotionsEnabledInput.addEventListener("change", async () => {
+  try {
+    await window.settings?.saveGeneral({ petIdleMotionsEnabled: petIdleMotionsEnabledInput.checked });
+    setAppearanceSaveStatus(t("settings.status.appliedOk"), "is-ok");
+  } catch {
+    setAppearanceSaveStatus(t("settings.status.saveFailed"), "is-error");
+  }
 });
 
 // 行间距滑块
@@ -1401,9 +1452,20 @@ if (testConnectionBtn) {
 }
 
 // ── 视觉模型配置事件 ──────────────────────────────────────
-// 多模态开关：ON 隐藏视觉配置区，OFF 显示
+// 聊天图片直发只决定附件路径，不再隐式切换视觉任务后端。
 multimodalToggle.addEventListener("change", () => {
-  applyMultimodalUI();
+  setSaveStatus(t("settings.status.dirty"));
+});
+
+companionProactivePaceSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applyCompanionProactivePaceSelection(normalizeCompanionProactivePace(button.dataset.value));
+    setPreferencesSaveStatus(t("settings.status.dirty"));
+  });
+});
+
+visionBackendSelect.addEventListener("change", () => {
+  applyVisionBackendUI();
   setSaveStatus(t("settings.status.dirty"));
 });
 
@@ -1441,12 +1503,12 @@ transportSelect.addEventListener("change", () => {
   setSaveStatus(t("settings.status.dirty"));
 });
 
-// 测试视觉模型按钮（仅在多模态开关 OFF 时可见）
+// 测试当前选择的视觉任务后端。
 testVisionBtn.addEventListener("click", async () => {
-  const synced = multimodalToggle.checked;
-  const baseUrl = synced ? baseUrlInput.value : visionBaseUrlInput.value;
-  const apiKey = synced ? apiKeyInput.value : visionApiKeyInput.value;
-  const model = synced ? getCurrentModelValue() : visionModelInput.value;
+  const useMain = visionBackendSelect.value === "main";
+  const baseUrl = useMain ? baseUrlInput.value : visionBaseUrlInput.value;
+  const apiKey = useMain ? apiKeyInput.value : visionApiKeyInput.value;
+  const model = useMain ? getCurrentModelValue() : visionModelInput.value;
   if (!baseUrl) { visionTestStatus.textContent = t("settings.vision.needUrl"); return; }
   if (!model) { visionTestStatus.textContent = t("settings.vision.needModel"); return; }
   visionTestStatus.textContent = t("settings.vision.testing");
@@ -1566,6 +1628,7 @@ apiForm.addEventListener("submit", async (e) => {
         apiKey: visionApiKeyInput.value.trim(),
         model: visionModelInput.value.trim(),
       },
+      visionBackend: visionBackendSelect.value === "independent" ? "independent" : "main",
       thinkingOverride: toggleEnableThinking.checked ? 1 : toggleDisableThinking.checked ? -1 : 0,
       disableMaxToken: toggleDisableMaxToken.checked,
     });
@@ -1783,14 +1846,93 @@ chatCompanionBackendEnabledInput?.addEventListener("change", async () => {
   if (chatCompanionBackendSaveStatus) chatCompanionBackendSaveStatus.textContent = "保存中…";
   try {
     await window.settings!.saveGeneral({ chatBackend: enabled ? "companion" : "native" });
+    renderProactiveDeliveryVisibility();
     if (chatCompanionBackendSaveStatus) chatCompanionBackendSaveStatus.textContent = "已保存";
   } catch {
     chatCompanionBackendEnabledInput.checked = !enabled;
+    renderProactiveDeliveryVisibility();
     if (chatCompanionBackendSaveStatus) chatCompanionBackendSaveStatus.textContent = "保存失败，已恢复原设置";
   } finally {
     chatCompanionBackendEnabledInput.disabled = false;
   }
 });
+
+async function saveCompanionToolReasoning(): Promise<void> {
+  if (!companionToolReasoningModeSelect || !companionToolReasoningEffortSelect) return;
+  const previousMode = companionToolReasoningModeSelect.dataset.savedMode ?? "off";
+  const previousEffort = companionToolReasoningEffortSelect.dataset.savedEffort ?? "medium";
+  const mode = companionToolReasoningModeSelect.value as ReasoningPreference["mode"];
+  const effort = companionToolReasoningEffortSelect.value as NonNullable<ReasoningPreference["effort"]>;
+  companionToolReasoningModeSelect.disabled = true;
+  companionToolReasoningEffortSelect.disabled = true;
+  if (companionToolReasoningSaveStatus) companionToolReasoningSaveStatus.textContent = "保存中…";
+  try {
+    const preference: ReasoningPreference = mode === "on" ? { mode, effort } : { mode };
+    await window.settings!.saveGeneral({ companionToolReasoning: preference });
+    companionToolReasoningModeSelect.dataset.savedMode = mode;
+    companionToolReasoningEffortSelect.dataset.savedEffort = effort;
+    if (companionToolReasoningSaveStatus) companionToolReasoningSaveStatus.textContent = "已保存";
+  } catch {
+    companionToolReasoningModeSelect.value = previousMode;
+    companionToolReasoningEffortSelect.value = previousEffort;
+    if (companionToolReasoningSaveStatus) companionToolReasoningSaveStatus.textContent = "保存失败，已恢复原设置";
+  } finally {
+    companionToolReasoningModeSelect.disabled = false;
+    companionToolReasoningEffortSelect.disabled = companionToolReasoningModeSelect.value !== "on";
+  }
+}
+
+const queryRouterEnabled = document.getElementById("companion-query-router-enabled") as HTMLInputElement;
+const queryRouterProvider = document.getElementById("companion-query-router-provider") as HTMLInputElement;
+const queryRouterBaseUrl = document.getElementById("companion-query-router-base-url") as HTMLInputElement;
+const queryRouterModel = document.getElementById("companion-query-router-model") as HTMLInputElement;
+const queryRouterApiKey = document.getElementById("companion-query-router-api-key") as HTMLInputElement;
+const queryRouterTransport = document.getElementById("companion-query-router-transport") as HTMLSelectElement;
+const queryRouterReasoning = document.getElementById("companion-query-router-reasoning") as HTMLSelectElement;
+const queryRouterStatus = document.getElementById("companion-query-router-status") as HTMLElement;
+
+async function loadCompanionQueryRouter(): Promise<void> {
+  try {
+    const config = await window.memoryPanel!.getQueryRouter();
+    queryRouterEnabled.checked = config.enabled;
+    queryRouterProvider.value = config.provider;
+    queryRouterBaseUrl.value = config.baseUrl;
+    queryRouterModel.value = config.model;
+    queryRouterTransport.value = config.explicitTransport;
+    queryRouterReasoning.value = config.reasoning;
+    queryRouterApiKey.value = "";
+    queryRouterStatus.textContent = config.hasKey ? "API Key 已保存" : "尚未保存 API Key";
+  } catch (error) {
+    queryRouterStatus.textContent = error instanceof Error ? error.message : "路由设置读取失败";
+  }
+}
+
+document.getElementById("companion-query-router-save")!.addEventListener("click", async () => {
+  queryRouterStatus.textContent = "正在保存…";
+  try {
+    await window.memoryPanel!.saveQueryRouter({
+      enabled: queryRouterEnabled.checked,
+      provider: queryRouterProvider.value,
+      baseUrl: queryRouterBaseUrl.value,
+      model: queryRouterModel.value,
+      explicitTransport: queryRouterTransport.value as "auto" | "openai" | "anthropic",
+      reasoning: queryRouterReasoning.value as "auto" | "off" | "low",
+      apiKey: queryRouterApiKey.value,
+    });
+    await loadCompanionQueryRouter();
+    queryRouterStatus.textContent = "已保存";
+  } catch (error) {
+    queryRouterStatus.textContent = error instanceof Error ? error.message : "保存失败";
+  }
+});
+
+companionToolReasoningModeSelect?.addEventListener("change", () => {
+  if (companionToolReasoningEffortSelect) {
+    companionToolReasoningEffortSelect.disabled = companionToolReasoningModeSelect.value !== "on";
+  }
+  void saveCompanionToolReasoning();
+});
+companionToolReasoningEffortSelect?.addEventListener("change", () => void saveCompanionToolReasoning());
 
 memoryL0EditBtn?.addEventListener("click", () => {
   if (memoryState.l0Editing) { saveL0(); } else { enterL0EditMode(); }
@@ -1942,6 +2084,19 @@ deleteProfileBtn?.addEventListener("click", async () => {
 chatSocialContextEnabledInput.addEventListener("change", () => {
   setPreferencesSaveStatus(t("settings.status.dirty"));
 });
+companionFeedbackLearningEnabledInput.addEventListener("change", () => {
+  setPreferencesSaveStatus(t("settings.status.dirty"));
+});
+companionScreenMonitorEnabledInput.addEventListener("change", () => {
+  setPreferencesSaveStatus(t("settings.status.dirty"));
+});
+companionLifeEnabledInput.addEventListener("change", () => {
+  renderProactiveDeliveryVisibility();
+  setPreferencesSaveStatus(t("settings.status.dirty"));
+});
+companionImportantDatesInput.addEventListener("input", () => {
+  setPreferencesSaveStatus(t("settings.status.dirty"));
+});
 momentsEnabledInput.addEventListener("change", () => {
   renderMomentsSubRowsVisibility();
   setPreferencesSaveStatus(t("settings.status.dirty"));
@@ -1977,24 +2132,38 @@ preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus(t("settings.status.saving"));
   try {
+    const importantDateLines = companionImportantDatesInput.value
+      .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (importantDateLines.length > 100 || importantDateLines.some((line) => {
+      const match = /^(\d{2}-\d{2}|\d{4}-\d{2}-\d{2})\s+(.+)$/.exec(line);
+      const labelLength = match?.[2].trim().length ?? 0;
+      return !match || labelLength === 0 || labelLength > 200;
+    })) {
+      throw new Error("纪念日格式无效，请按“MM-DD 标题”或“YYYY-MM-DD 标题”逐行填写");
+    }
     await window.settings!.saveGeneral({
       citaEnabled: citaEnabledInput.checked,
       citaSemanticEngine: "remote",
       chatSocialContextEnabled: chatSocialContextEnabledInput.checked,
+      companionFeedbackLearningEnabled: companionFeedbackLearningEnabledInput.checked,
+      companionScreenMonitorEnabled: companionScreenMonitorEnabledInput.checked,
+      companionLifeEnabled: companionLifeEnabledInput.checked,
+      companionImportantDatesText: importantDateLines.join("\n"),
       momentsEnabled: momentsEnabledInput.checked,
       cyreneMomentsPostingEnabled: cyreneMomentsPostingEnabledInput.checked,
       cyreneMomentsReactionsEnabled: cyreneMomentsReactionsEnabledInput.checked,
       momentsCharacterReactionsEnabled: momentsCharacterReactionsEnabledInput.checked,
       momentsLiveliness: getMomentsLivelinessValue(),
-      defaultChatMode: "chat",
-      segmentedOutputMode: "off",
+      defaultChatMode: getDefaultChatModeValue(),
+      segmentedOutputMode: getSegmentedOutputValue(),
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
       proactiveChatMode: getProactiveChatValue(),
+      companionProactivePace: getCompanionProactivePaceValue(),
       proactiveDeliveryTarget: getProactiveDeliveryValue(),
       screenshotHotkey: screenshotHotkeyInput?.value || "Alt+Shift+S",
     });
     setPreferencesSaveStatus(t("settings.status.saved"), "is-ok");
-  } catch {
-    setPreferencesSaveStatus(t("settings.status.saveFailed"), "is-error");
+  } catch (error) {
+    setPreferencesSaveStatus(error instanceof Error ? error.message : t("settings.status.saveFailed"), "is-error");
   }
 });

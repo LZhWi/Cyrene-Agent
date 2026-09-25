@@ -4,7 +4,7 @@ import { createAutoCompression, type AutoCompressionCandidate } from "../plugins
 
 const candidate: AutoCompressionCandidate = { id: "a\0b\0c", entryIds: ["a", "b", "c"] };
 
-function fixture(opts: { candidates?: AutoCompressionCandidate[]; review?: (item: AutoCompressionCandidate, signal: AbortSignal) => Promise<unknown>; apply?: (review: unknown) => { applied: boolean; reviewId?: string }; suppressed?: () => boolean; map?: Map<string, unknown> } = {}) {
+function fixture(opts: { candidates?: AutoCompressionCandidate[]; review?: (item: AutoCompressionCandidate, signal: AbortSignal) => Promise<unknown>; apply?: (review: unknown) => { applied: boolean; reviewId?: string } | Promise<{ applied: boolean; reviewId?: string }>; suppressed?: () => boolean; map?: Map<string, unknown> } = {}) {
   const map = opts.map ?? new Map<string, unknown>();
   const storage: PluginStorage = {
     get: <T>(key: string) => structuredClone(map.get(key)) as T | undefined,
@@ -23,7 +23,7 @@ function fixture(opts: { candidates?: AutoCompressionCandidate[]; review?: (item
 }
 
 describe("后台压缩建议", () => {
-  it("默认关闭；启用后只按成功 desktop 轮次每二十轮生成一份建议", async () => {
+  it("默认关闭；启用后按成功 desktop 轮次每二十轮处理当前全部候选组", async () => {
     const data = fixture();
     await data.emit(); expect(data.review).not.toHaveBeenCalled();
     data.service.set(true);
@@ -36,6 +36,18 @@ describe("后台压缩建议", () => {
     expect(data.review).toHaveBeenCalledTimes(1);
     expect(data.review.mock.calls[0][0]).toEqual(candidate);
     expect(data.service.view()).toMatchObject({ pendingTurns: 0, lastReviewedCandidateId: candidate.id });
+  });
+
+  it("同一周期逐组处理全部互不重叠候选，单组失败不阻断后续组", async () => {
+    const second = { id: "d\0e\0f", entryIds: ["d", "e", "f"] };
+    const review = vi.fn(async (item: AutoCompressionCandidate) => {
+      if (item.id === candidate.id) throw new Error("第一组失败");
+      return { id: "review-2" };
+    });
+    const data = fixture({ candidates: [candidate, second], review }); data.service.set(true);
+    for (let index = 0; index < 20; index++) await data.emit();
+    expect(review).toHaveBeenCalledTimes(2);
+    expect(data.service.view()).toMatchObject({ lastReviewedCandidateId: second.id, lastErrorAt: expect.any(Number) });
   });
 
   it("忽略 channel、失败和取消轮次，且不重复处理已完成候选", async () => {
@@ -103,6 +115,15 @@ describe("后台压缩建议", () => {
     expect(second.service.view()).toMatchObject({ enabled: true, applyEnabled: true });
     second.service.set(false);
     expect(second.service.view()).toMatchObject({ enabled: false, applyEnabled: false, pendingTurns: 0 });
+  });
+
+  it("等待异步重新复核应用完成后才记录自动应用结果", async () => {
+    const apply = vi.fn(async () => ({ applied: true, reviewId: "replacement-review" }));
+    const data = fixture({ review: async () => ({ id: "stale-review" }), apply });
+    data.service.set(true); data.service.setApply(true);
+    for (let index = 0; index < 20; index++) await data.emit();
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(data.service.view()).toMatchObject({ lastAutoAppliedReviewId: "replacement-review" });
   });
 
   it("完整梦境周期启用时暂停独立二十轮调度，避免同批候选重复处理", async () => {

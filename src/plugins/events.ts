@@ -2,7 +2,7 @@ export type PluginEventBusListener = (payload: unknown) => void | Promise<void>;
 
 const EVENT_SEGMENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
-export const PLUGIN_EVENT_LISTENER_TIMEOUT_MS = 5_000;
+export const PLUGIN_EVENT_LISTENER_TIMEOUT_MS = 120_000;
 
 /** 限制单个第三方事件监听器的执行时间，避免阻塞后续监听器或宿主停止流程。 */
 async function runEventListener(

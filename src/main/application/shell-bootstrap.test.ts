@@ -58,6 +58,7 @@ function makeShellDeps(overrides: Partial<ShellDependencies> = {}): ShellDepende
       return { isDestroyed: () => false, destroy: vi.fn() } as never;
     }),
     flushTokenUsage: vi.fn(),
+    flushVectorStore: vi.fn(),
     writeStartupLog: vi.fn(),
     ...overrides,
   };
@@ -149,5 +150,26 @@ describe("startShell", () => {
     expect(deps.flushTokenUsage).toHaveBeenCalledTimes(1);
     deps.shutdown.emergencyFlush();
     expect(deps.flushTokenUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps shell IPC registered until windows have been disposed", async () => {
+    const order: string[] = [];
+    const deps = makeShellDeps({
+      createIpcScope: () => ({
+        handle: vi.fn(),
+        on: vi.fn(),
+        dispose: vi.fn(() => { order.push("ipc"); }),
+      }),
+      createWindowManager: vi.fn(() => ({
+        createPetWindow: vi.fn(),
+        openReactChatWindow: vi.fn(async () => null),
+        dispose: vi.fn(() => { order.push("windows"); }),
+      }) as never),
+    });
+    await startShell(deps);
+
+    await deps.shutdown.requestControlledShutdown({ reason: "test", finalAction: vi.fn() });
+
+    expect(order).toEqual(["windows", "ipc"]);
   });
 });

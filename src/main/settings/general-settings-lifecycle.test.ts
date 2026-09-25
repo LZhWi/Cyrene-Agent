@@ -18,7 +18,7 @@ vi.mock("./launch-at-login", () => ({ syncLaunchAtLogin: vi.fn() }));
 
 function createHarness(petVisible = true) {
   const settings = {
-    petVisible, petAlwaysOnTop: true, petZoom: 1, launchAtLogin: false,
+    petVisible, petAlwaysOnTop: true, petZoom: 1, petIdleMotionsEnabled: false, launchAtLogin: false,
     asrEngine: "off", searchEngine: "off",
   } as GeneralSettings;
   let visible = petVisible;
@@ -27,6 +27,7 @@ function createHarness(petVisible = true) {
     hidePetWindow: vi.fn(() => { visible = false; }),
     setPetWindowAlwaysOnTop: vi.fn(),
     applyPetWindowZoom: vi.fn(),
+    sendToPetWindow: vi.fn(),
   };
   const deps = {
     windowManager: windowManager as unknown as WindowManager,
@@ -85,6 +86,7 @@ describe("general settings window lifecycle", () => {
     expect(visible ? h.windowManager.showPetWindow : h.windowManager.hidePetWindow).toHaveBeenCalledOnce();
     expect(h.windowManager.setPetWindowAlwaysOnTop).toHaveBeenCalledWith(true);
     expect(h.windowManager.applyPetWindowZoom).toHaveBeenCalledWith(1);
+    expect(h.windowManager.sendToPetWindow).toHaveBeenCalledWith("pet:idle-motions-changed", false);
     expect(syncLaunchAtLogin).toHaveBeenCalledWith(false, {});
   });
 });

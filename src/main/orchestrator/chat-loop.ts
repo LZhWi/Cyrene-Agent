@@ -22,14 +22,21 @@ import { compressConversation } from "./context-manager";
 import { buildContextUsageSnapshot } from "./context-usage";
 import { isExplicitStreamUnsupported } from "./vendors/stream-support";
 import { composePromptLayers } from "./prompt-layers";
+import { logPromptCacheRequest } from "./prompt-cache-diagnostics";
 
 export interface ChatLoopOptions {
   settings: AgentLoopSettings;
   adapter: ChatVendorAdapter;
   messages: ChatMessage[];
   soulSystemBaseContent: string;
+  /** Soul 开头 system 的动态资料；与稳定人格合并，但不写回持久化历史。 */
+  systemContext?: string;
   /** 每次请求才注入的本轮上下文，不能写回对话历史或稳定前缀。 */
   runtimeContext?: string;
+  /** Soul 生成点前的近端 system 锚点；用于对齐本地 2FC 的消息顺序。 */
+  tailSystemContext?: string;
+  /** 两阶段 Soul 失败时按本地版返回可诊断的中断回复，而不是让整轮直接失败。 */
+  diagnosticFailureReply?: boolean;
   soulSampling?: ApprovedStyleSampling;
   timeoutMs: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
@@ -38,6 +45,8 @@ export interface ChatLoopOptions {
   signal?: AbortSignal;
   /** 非流式降级时的展示节奏；测试可设为 0，生产默认 20ms。 */
   fallbackRevealIntervalMs?: number;
+  /** 是否使用流式请求；默认开启，桌面 Chat 的 Soul 阶段会显式关闭以对齐本地 2FC。 */
+  streaming?: boolean;
   /** 默认使用官方 SDK；测试可注入可控流实现。 */
   streamChat?: typeof streamChatWithSdk;
   /** 当前对话模式，用于上下文压缩保留的最近轮数。 */
@@ -74,6 +83,10 @@ async function emitFallbackText(
   intervalMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
+  if (intervalMs <= 0) {
+    if (text) onEvent?.({ type: "text_message_content", messageId, delta: text });
+    return;
+  }
   const chars = Array.from(text);
   // 最长约 1.2 秒；短回复保持逐字感，长回复按小块展示。
   const targetFrames = Math.max(1, Math.min(60, Math.ceil(chars.length / 2)));
@@ -97,16 +110,51 @@ function stripToolProtocol(text: string): string {
     .trim();
 }
 
+function sanitizeDiagnosticReason(reason: string): string {
+  return reason
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
+    .replace(/((?:api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]")
+    .slice(0, 1_000);
+}
+
+function buildDiagnosticFailureReply(messages: readonly ChatMessage[], error: unknown): string {
+  const rawReason = error instanceof Error && error.name === "AbortError"
+    ? "总结请求超时"
+    : error instanceof Error ? error.message : String(error);
+  const lines = [
+    "抱歉，任务执行到一半被中断了。",
+    "",
+    `中断原因：${sanitizeDiagnosticReason(rawReason)}`,
+  ];
+  const completed = messages.filter((message) => message.role === "tool");
+  if (completed.length === 0) {
+    lines.push("", "（暂无已完成的步骤信息）");
+  } else {
+    lines.push("", "以下是中断前已经完成的步骤：");
+    for (const message of completed) {
+      const output = typeof message.content === "string" ? message.content : "";
+      const preview = output.length > 200 ? `${output.slice(0, 200)}…` : output;
+      lines.push(`- 「${message.name || "tool"}」：${preview}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopResult> {
   const startedAt = Date.now();
   const usageRecorder = options.recordUsage ?? ((input, output, calls, cachedInput, cacheCreation) => recordUsage(input, output, calls, cachedInput, options.settings.model, cacheCreation));
   let usedImageCaptionFallback = false;
 
+  const leadingSystemContent = [options.soulSystemBaseContent, options.systemContext]
+    .filter(Boolean).join("\n\n---\n\n");
+  const measuredRuntimeContext = [options.systemContext, options.runtimeContext, options.tailSystemContext]
+    .filter(Boolean).join("\n\n---\n\n");
   const messages = await compressConversation({
     messages: options.messages,
     adapter: options.adapter,
     settings: options.settings,
-    systemContent: options.soulSystemBaseContent,
+    systemContent: [leadingSystemContent, options.tailSystemContext].filter(Boolean).join("\n\n---\n\n"),
     mode: options.mode,
     onEvent: options.onEvent,
     signal: options.signal,
@@ -122,7 +170,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
         phase,
         contextWindowTokens: options.settings.contextWindowTokens,
         personaContent: options.soulSystemBaseContent,
-        ...(options.runtimeContext ? { runtimeContext: options.runtimeContext } : {}),
+        ...(measuredRuntimeContext ? { runtimeContext: measuredRuntimeContext } : {}),
         ...(extraAssistantReply !== undefined
           ? { messages: [...messages, { role: "assistant" as const, content: extraAssistantReply }] }
           : { messages }),
@@ -151,22 +199,30 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     reasoning: options.settings.reasoning,
   };
 
-  const buildRequest = (reqMessages: ChatMessage[], stream: boolean): ChatRequest => ({
-    model: options.settings.model,
-    ...composePromptLayers({
+  const buildRequest = (reqMessages: ChatMessage[], stream: boolean): ChatRequest => {
+    const composed = composePromptLayers({
       stablePrefix: options.soulSystemBaseContent,
+      sessionPrefix: options.systemContext,
       runtimeContext: options.runtimeContext,
       mode: options.mode,
-    }, reqMessages),
-    stream,
-    ...(options.soulSampling ?? {}),
-  });
+    }, reqMessages);
+    return {
+      model: options.settings.model,
+      ...composed,
+      messages: options.tailSystemContext?.trim()
+        ? [...composed.messages, { role: "system", content: options.tailSystemContext.trim() }]
+        : composed.messages,
+      stream,
+      ...(options.soulSampling ?? {}),
+    };
+  };
 
   const invokeNonStreaming = async (messages: ChatMessage[]): Promise<ChatResponse> => {
     const request: ChatRequest = {
       ...buildRequest(messages, false),
     };
     const effectiveRequest = options.adapter.applyCacheHints?.(request, vendorConfig) ?? request;
+    logPromptCacheRequest("soul", effectiveRequest);
     const http = options.adapter.buildRequest(effectiveRequest, options.settings);
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -231,6 +287,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
   }> => {
     const request = buildRequest(messages, true);
     const effectiveRequest = options.adapter.applyCacheHints?.(request, vendorConfig) ?? request;
+    logPromptCacheRequest("soul", effectiveRequest);
     const timePrefixFilter = new ChatTimeStreamPrefixFilter();
     let text = "";
     const emitTextDelta = (delta: string) => {
@@ -292,17 +349,24 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     }
   };
 
+  const invokeModel = async (messages: ChatMessage[]) => {
+    if (options.streaming === false) {
+      return { response: await invokeNonStreaming(messages), needsReveal: true };
+    }
+    return invokeWithStreamFallback(messages);
+  };
+
   options.onEvent?.({ type: "step_started", stepName: "chat" });
   try {
     let result;
     try {
-      result = await invokeWithStreamFallback(options.messages);
+      result = await invokeModel(options.messages);
     } catch (error) {
       if (emittedStreamContent || options.signal?.aborted || !options.imageCaptionFallback || usedImageCaptionFallback) {
         throw error;
       }
       usedImageCaptionFallback = true;
-      result = await invokeWithStreamFallback(await options.imageCaptionFallback());
+      result = await invokeModel(await options.imageCaptionFallback());
     }
 
     const response = result.response;
@@ -340,6 +404,18 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
       reply,
       toolResults: [],
       totalUsage: response.usage,
+      completionReason: "no_tool",
+    };
+  } catch (error) {
+    if (!options.diagnosticFailureReply || options.signal?.aborted) throw error;
+    const reply = buildDiagnosticFailureReply(messages, error);
+    emitContextUsage("terminal", reply);
+    startText();
+    await emitFallbackText(options.onEvent, messageId, reply, 0, options.signal);
+    endText();
+    return {
+      reply,
+      toolResults: [],
       completionReason: "no_tool",
     };
   } finally {

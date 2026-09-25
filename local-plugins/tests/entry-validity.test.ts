@@ -25,6 +25,14 @@ describe("L2 状态与有效期", () => {
     expect(result).toContain("咖啡偏好"); expect(result).toContain("未保存逐字原话");
     expect(result).not.toContain("用户原话：");
   });
+  it("自动注入排除已被纠正的旧事实，Tool 显式查询可带警示召回", () => {
+    const memory = fixture({ ...base, status: "superseded", validTo: 2, supersededBy: "new" });
+    expect(memory.search("咖啡")).toBe("");
+    const tool = memory.searchWithBudget("咖啡", [], [], [], undefined, 12_000, true).text;
+    expect(tool).toContain("咖啡偏好");
+    expect(tool).toContain("已被更新信息纠正/取代");
+    expect(tool).toContain("不要当作当前事实");
+  });
   it("恢复归档不清除有效期，编辑不能清除关系或复活终态", () => {
     const memory = fixture({ ...base, status: "archived", validTo: 2 });
     memory.editEntry({ ...base, validTo: undefined, revision: 0 });

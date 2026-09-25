@@ -7,6 +7,7 @@ import type { EmbeddingProvider } from "./embedding";
 const provider: EmbeddingProvider = {
   name: "deterministic",
   dims: 2,
+  cacheIdentity: { provider: "local", model: "bge-m3", dimensions: 2 },
   async embed(text: string): Promise<number[]> {
     return text.includes("paragraph") ? [0, 1] : [1, 0];
   },
@@ -16,6 +17,7 @@ const provider: EmbeddingProvider = {
 };
 
 const { userDataDir, appPath } = vi.hoisted(() => ({ userDataDir: { value: "" }, appPath: { value: "" } }));
+const rerankerState = vi.hoisted(() => ({ current: null as null | { name: string; rerank: (query: string, documents: string[]) => Promise<Array<{ text: string; score: number }>> } }));
 
 vi.mock("electron", () => ({
   app: {
@@ -29,6 +31,12 @@ vi.mock("./embedding", async (importOriginal) => ({
   getEmbeddingProvider: () => provider,
 }));
 
+vi.mock("./reranker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reranker")>()),
+  ensureRerankerInitialized: async () => rerankerState.current,
+  getReranker: () => rerankerState.current,
+}));
+
 import {
   addL2MemoryVector,
   addMemory,
@@ -40,12 +48,14 @@ import {
   isUserMemoryVectorStoreReady,
   resetRAG,
   searchMemoryEntries,
+  searchImportedDocumentChunks,
   searchImportedDocumentChunksForImportIds,
 } from "./index";
 
 let tmpDir = "";
 
 beforeEach(async () => {
+  rerankerState.current = null;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rag-index-test-"));
   userDataDir.value = tmpDir;
   appPath.value = tmpDir;
@@ -71,6 +81,41 @@ describe("turn document imports", () => {
     const chunks = await searchImportedDocumentChunksForImportIds("paragraph", [result.importId], 3);
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.every((chunk) => chunk.importId === result.importId)).toBe(true);
+  });
+
+  it("automatically injects only document chunks that pass the local relevance gate", async () => {
+    await importDocumentForTurn("one paragraph\n\ntwo paragraph", "turn-doc.md");
+
+    const relevant = await searchImportedDocumentChunks("paragraph", 2, { automaticInjection: true });
+    const unrelated = await searchImportedDocumentChunks("totally unrelated", 2, { automaticInjection: true });
+
+    expect(relevant.length).toBeGreaterThan(0);
+    expect(relevant.every((chunk) => chunk.fileName === "turn-doc.md")).toBe(true);
+    expect(unrelated).toEqual([]);
+  });
+
+  it("does not advance document vector recall state during retrieval", async () => {
+    await importDocumentForTurn("one paragraph\n\ntwo paragraph", "turn-doc.md");
+    const before = getEntriesBySource("imported_doc").map(({ id, weight, lastRecalledAt }) => ({ id, weight, lastRecalledAt }));
+
+    await searchImportedDocumentChunks("paragraph", 2, { automaticInjection: true });
+
+    expect(getEntriesBySource("imported_doc").map(({ id, weight, lastRecalledAt }) => ({ id, weight, lastRecalledAt })))
+      .toEqual(before);
+  });
+
+  it("reranks document candidates once after hybrid retrieval and applies the local automatic gate", async () => {
+    await importDocumentForTurn("paragraph alpha", "alpha.md");
+    await importDocumentForTurn("paragraph beta", "beta.md");
+    const rerank = vi.fn(async (_query: string, documents: string[]) => documents
+      .map((text) => ({ text, score: text.includes("beta") ? 2 : -1 }))
+      .sort((left, right) => right.score - left.score));
+    rerankerState.current = { name: "test", rerank };
+
+    const results = await searchImportedDocumentChunks("paragraph", 2, { automaticInjection: true });
+
+    expect(rerank).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.fileName)).toEqual(["beta.md"]);
   });
 
   it("reports whether an importId still has stored document chunks", async () => {

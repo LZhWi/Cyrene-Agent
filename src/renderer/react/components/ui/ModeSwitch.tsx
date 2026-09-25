@@ -1,6 +1,7 @@
 interface ModeSwitchProps {
   value: string;
   onChange: (mode: string) => void;
+  variant?: "upstream" | "cyrene-chat";
 }
 
 const WorkIcon = (
@@ -42,7 +43,14 @@ const modes = [
   { key: "learn", label: "Learn", icon: LearnIcon },
 ];
 
-export function ModeSwitch({ value, onChange }: ModeSwitchProps) {
+const chatLabels: Record<string, string> = {
+  work: "工作",
+  chat: "协作",
+  code: "代码",
+  learn: "学习",
+};
+
+export function ModeSwitch({ value, onChange, variant = "upstream" }: ModeSwitchProps) {
   return (
     <div className="cy-segmented">
       {modes.map((mode) => (
@@ -52,7 +60,7 @@ export function ModeSwitch({ value, onChange }: ModeSwitchProps) {
           onClick={() => onChange(mode.key)}
         >
           <span className="cy-segment-icon">{mode.icon}</span>
-          <span className="cy-segment-label">{mode.label}</span>
+          <span className="cy-segment-label">{variant === "cyrene-chat" ? chatLabels[mode.key] : mode.label}</span>
         </button>
       ))}
     </div>

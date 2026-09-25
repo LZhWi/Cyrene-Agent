@@ -371,7 +371,7 @@ export function upsertMessage(id: string, message: ChatMessage): ChatSession | n
   const session = readSessionFile(id);
   if (!session) return null;
   const index = session.messages.findIndex((item) => item.id === message.id);
-  if (index >= 0) session.messages[index] = message;
+  if (index >= 0) session.messages[index] = preserveVisualIndexCaptions(session.messages[index], message);
   else session.messages.push(message);
   session.updatedAt = Date.now();
   if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
@@ -399,6 +399,36 @@ export function setMessageTtsCacheKey(
   return session;
 }
 
+function preserveVisualIndexCaptions(previous: ChatMessage, incoming: ChatMessage): ChatMessage {
+  if (!previous.attachments?.length || !incoming.attachments?.length) return incoming;
+  return {
+    ...incoming,
+    attachments: incoming.attachments.map((item) => {
+      if (item.kind !== "image") return item;
+      const prior = previous.attachments?.find((candidate) => candidate.kind === "image" && candidate.filePath === item.filePath);
+      return prior?.kind === "image"
+        ? { ...item, visualIndexCaption: item.visualIndexCaption ?? prior.visualIndexCaption,
+          visualIndexSummary: item.visualIndexSummary ?? prior.visualIndexSummary,
+          visualIndexedAt: item.visualIndexedAt ?? prior.visualIndexedAt }
+        : item;
+    }),
+  };
+}
+
+/** Persist a background caption without moving the conversation in the UI. */
+export function setImageVisualIndexResult(id: string, messageId: string, filePath: string,
+  result: { summary: string; caption?: string }): boolean {
+  const session = readSessionFile(id);
+  const message = session?.messages.find((item) => item.id === messageId && item.role === "user");
+  const attachment = message?.attachments?.find((item) => item.kind === "image" && item.filePath === filePath);
+  if (!session || !attachment || attachment.kind !== "image") return false;
+  attachment.visualIndexSummary = result.summary;
+  if (result.caption) attachment.visualIndexCaption = result.caption;
+  attachment.visualIndexedAt ??= Date.now();
+  writeSessionFile(session);
+  return true;
+}
+
 /** 把插件主动消息的待处理反馈原子标为已忽略；只允许主动会话中的最后一条模型消息。 */
 export function markPluginMessageIgnored(
   conversationId: string,
@@ -421,7 +451,9 @@ export function markPluginMessageIgnored(
 export function replaceMessages(id: string, messages: ChatMessage[]): ChatSession | null {
   const session = readSessionFile(id);
   if (!session) return null;
-  session.messages = messages;
+  const previous = new Map(session.messages.map((message) => [message.id, message]));
+  session.messages = messages.map((message) => previous.has(message.id)
+    ? preserveVisualIndexCaptions(previous.get(message.id)!, message) : message);
   session.updatedAt = Date.now();
   if (!session.titleIsCustom) {
     session.title = deriveTitle(session.messages);
@@ -434,7 +466,34 @@ export function replaceMessages(id: string, messages: ChatMessage[]): ChatSessio
 export function replaceMessagesTail(id: string, startIndex: number, messages: ChatMessage[]): ChatSession | null {
   const session = readSessionFile(id);
   if (!session || !Number.isInteger(startIndex) || startIndex < 0 || startIndex > session.messages.length) return null;
-  session.messages = session.messages.slice(0, startIndex).concat(messages);
+  const previous = new Map(session.messages.map((message) => [message.id, message]));
+  session.messages = session.messages.slice(0, startIndex).concat(messages.map((message) => previous.has(message.id)
+    ? preserveVisualIndexCaptions(previous.get(message.id)!, message) : message));
+  session.updatedAt = Date.now();
+  if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
+/** Delete one persisted message together with its adjacent user/model turn partner. */
+export function deleteMessageRound(id: string, messageId: string): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session) return null;
+  const index = session.messages.findIndex((message) => message.id === messageId);
+  if (index < 0) return null;
+
+  let start = index;
+  let end = index + 1;
+  const target = session.messages[index];
+  if (target.role === "model" && index > 0 && session.messages[index - 1].role === "user") {
+    start = index - 1;
+  } else if (target.role === "user" && index + 1 < session.messages.length
+    && session.messages[index + 1].role === "model") {
+    end = index + 2;
+  }
+
+  session.messages.splice(start, end - start);
   session.updatedAt = Date.now();
   if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
   writeSessionFile(session);

@@ -7,6 +7,7 @@ import type {
   PluginMessagePageInput,
 } from "../../plugins/api";
 import type { ChatMessage, ChatSession, ChatSessionMeta } from "../../shared/chat-types";
+import { historyIndexText } from "../chats/history-index-text";
 import { pluginHostError } from "./errors";
 
 const DEFAULT_LIST_LIMIT = 20;
@@ -42,6 +43,7 @@ interface MessagesCursorPayload {
   from?: string;
   /** 首次调用时冻结的包含式终点。 */
   through?: string;
+  historyProjection?: true;
   /** 上一页最后一条原始消息在会话消息数组中的下标。 */
   lastIndex: number;
 }
@@ -79,7 +81,8 @@ function decodeMessagesCursor(cursor: string): MessagesCursorPayload {
     && Number.isInteger(parsed.lastIndex)
     && (parsed.lastIndex as number) >= 0
     && (parsed.from === undefined || typeof parsed.from === "string")
-    && (parsed.through === undefined || typeof parsed.through === "string");
+    && (parsed.through === undefined || typeof parsed.through === "string")
+    && (parsed.historyProjection === undefined || parsed.historyProjection === true);
   if (!valid) {
     throw pluginHostError("E_INVALID_ARGUMENT", "非法消息分页游标");
   }
@@ -99,17 +102,26 @@ function toSummary(meta: ChatSessionMeta): PluginConversationSummary {
     id: meta.id,
     title: meta.title,
     mode: meta.mode,
+    ...(meta.purpose === "proactive-chat" ? { purpose: meta.purpose } : {}),
     createdAt: new Date(meta.createdAt).toISOString(),
     updatedAt: new Date(meta.updatedAt).toISOString(),
   };
 }
 
-function toProjection(message: ChatMessage): PluginConversationMessage {
+function toProjection(message: ChatMessage, historyProjection = false): PluginConversationMessage {
+  const images = message.attachments?.flatMap((attachment) => {
+    if (attachment.kind !== "image") return [];
+    const caption = attachment.visualIndexCaption?.trim() || attachment.caption?.trim();
+    const summary = attachment.visualIndexSummary?.trim();
+    return caption ? [{ name: attachment.name, caption, ...(summary ? { summary } : {}),
+      ...(attachment.visualIndexedAt ? { indexedAt: attachment.visualIndexedAt } : {}) }] : [];
+  });
   return {
     id: message.id,
     role: message.role === "model" ? "assistant" : "user",
-    text: message.content,
+    text: historyProjection ? historyIndexText(message) : message.content,
     at: new Date(message.at).toISOString(),
+    ...(images?.length ? { images } : {}),
   };
 }
 
@@ -169,6 +181,9 @@ export function createPluginConversationsService(
         if (input.throughMessageId !== undefined && input.throughMessageId !== cursor.through) {
           throw pluginHostError("E_INVALID_ARGUMENT", "throughMessageId 与分页游标冻结的终点不一致");
         }
+        if (Boolean(input.historyProjection) !== Boolean(cursor.historyProjection)) {
+          throw pluginHostError("E_INVALID_ARGUMENT", "分页游标与消息投影方式不一致");
+        }
       }
 
       const from = cursor?.from ?? input.fromMessageId;
@@ -223,11 +238,12 @@ export function createPluginConversationsService(
             conversationId: input.conversationId,
             from,
             through,
+            ...(input.historyProjection ? { historyProjection: true as const } : {}),
             lastIndex: i - 1,
           });
           break;
         }
-        items.push(toProjection(message));
+        items.push(toProjection(message, input.historyProjection));
       }
 
       const page: PluginMessagePage = {

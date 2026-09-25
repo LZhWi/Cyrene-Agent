@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import type { Entry } from "./entries";
 import { isRecallable } from "./entries";
+import type { ConflictResolverPriority, ConflictScoreResult } from "./conflict";
 
 const STATE_KEY = "maintenance-inbox";
-interface Candidate { key: string; leftId: string; rightId: string; kind: "normalized-duplicate" | "vector-similar"; score?: number; leftHash: string; rightHash: string }
+interface Candidate { key: string; leftId: string; rightId: string; kind: "normalized-duplicate" | "vector-similar" | "conflict"; score?: number; leftHash: string; rightHash: string; conflictScore?: number; resolverPriority?: ConflictResolverPriority; scoringSignals?: ConflictScoreResult["scoringSignals"]; reason?: string }
 interface Item extends Candidate { id: string; createdAt: number; status: "open" | "dismissed" }
 interface InboxState { version: 1; revision: number; items: Item[] }
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -16,7 +17,7 @@ function load(storage: PluginStorage): InboxState {
   if (raw === undefined) return { version: 1, revision: 0, items: [] };
   if (!raw || typeof raw !== "object") throw new Error("维护候选收件箱损坏");
   const state = raw as Partial<InboxState>;
-  if (state.version !== 1 || !Number.isSafeInteger(state.revision) || state.revision! < 0 || !Array.isArray(state.items) || state.items.length > 500 || state.items.some((item) => !item || typeof item.id !== "string" || !item.id || typeof item.key !== "string" || !item.key || typeof item.leftId !== "string" || typeof item.rightId !== "string" || item.leftId === item.rightId || !["normalized-duplicate", "vector-similar"].includes(item.kind) || !/^[a-f0-9]{64}$/.test(item.leftHash) || !/^[a-f0-9]{64}$/.test(item.rightHash) || !Number.isFinite(item.createdAt) || !["open", "dismissed"].includes(item.status) || (item.score !== undefined && (!Number.isFinite(item.score) || item.score < -1 || item.score > 1)))) throw new Error("维护候选收件箱损坏");
+  if (state.version !== 1 || !Number.isSafeInteger(state.revision) || state.revision! < 0 || !Array.isArray(state.items) || state.items.length > 500 || state.items.some((item) => !item || typeof item.id !== "string" || !item.id || typeof item.key !== "string" || !item.key || typeof item.leftId !== "string" || typeof item.rightId !== "string" || item.leftId === item.rightId || !["normalized-duplicate", "vector-similar", "conflict"].includes(item.kind) || !/^[a-f0-9]{64}$/.test(item.leftHash) || !/^[a-f0-9]{64}$/.test(item.rightHash) || !Number.isFinite(item.createdAt) || !["open", "dismissed"].includes(item.status) || (item.score !== undefined && (!Number.isFinite(item.score) || item.score < -1 || item.score > 1)) || (item.conflictScore !== undefined && (!Number.isFinite(item.conflictScore) || item.conflictScore < 0 || item.conflictScore > 100)) || (item.resolverPriority !== undefined && !["none", "idle", "normal", "high"].includes(item.resolverPriority)) || (item.reason !== undefined && (typeof item.reason !== "string" || !item.reason || item.reason.length > 1500)))) throw new Error("维护候选收件箱损坏");
   const ids = new Set<string>(), keys = new Set<string>();
   for (const item of state.items) {
     if (ids.has(item.id) || keys.has(item.key) || item.key !== pairKey(item.leftId, item.rightId)) throw new Error("维护候选收件箱损坏");
@@ -49,7 +50,10 @@ export function createMaintenanceInbox(storage: PluginStorage) {
   return {
     view(entries: Entry[]) {
       const byId = new Map(entries.map((entry) => [entry.id, entry]));
-      return { revision: state.revision, items: structuredClone(state.items.map((item) => ({ ...item, stale: hash(byId.get(item.leftId)?.content ?? "") !== item.leftHash || hash(byId.get(item.rightId)?.content ?? "") !== item.rightHash }))) };
+      const rank = { high: 3, normal: 2, idle: 1, none: 0 } as const;
+      const items = state.items.map((item) => ({ ...item, stale: hash(byId.get(item.leftId)?.content ?? "") !== item.leftHash || hash(byId.get(item.rightId)?.content ?? "") !== item.rightHash }))
+        .sort((a, b) => (rank[b.resolverPriority ?? "none"] - rank[a.resolverPriority ?? "none"]) || ((b.conflictScore ?? -1) - (a.conflictScore ?? -1)) || a.createdAt - b.createdAt);
+      return { revision: state.revision, items: structuredClone(items) };
     },
     preview(entries: Entry[], vectorPairs: Array<{ leftId: string; rightId: string; score: number }>) {
       const candidates = available(entries, vectorPairs), previewToken = hash(JSON.stringify(candidates));
@@ -71,6 +75,15 @@ export function createMaintenanceInbox(storage: PluginStorage) {
       const additions = candidates.map((candidate) => ({ ...candidate, id: randomUUID(), createdAt: Date.now(), status: "open" as const }));
       state = { version: 1, revision: state.revision + 1, items: [...state.items, ...additions].slice(-500) }; storage.set(STATE_KEY, state);
       return additions.length;
+    },
+    addDetected(raw: { leftId: string; rightId: string; score: number; reason: string } & ConflictScoreResult, entries: Entry[]) {
+      const left = entries.find((entry) => entry.id === raw.leftId), right = entries.find((entry) => entry.id === raw.rightId);
+      if (!left || !right || left.id === right.id || !Number.isFinite(raw.score) || raw.score < -1 || raw.score > 1 || typeof raw.reason !== "string" || !raw.reason || raw.reason.length > 1500) throw new Error("冲突候选无效");
+      const key = pairKey(left.id, right.id), existing = state.items.find((item) => item.key === key);
+      if (existing) return existing.id;
+      const item: Item = { id: randomUUID(), key, leftId: left.id, rightId: right.id, kind: "conflict", score: raw.score, leftHash: hash(left.content), rightHash: hash(right.content), conflictScore: raw.conflictScore, resolverPriority: raw.resolverPriority, scoringSignals: structuredClone(raw.scoringSignals), reason: raw.reason, createdAt: Date.now(), status: "open" };
+      state = { version: 1, revision: state.revision + 1, items: [...state.items, item].slice(-500) }; storage.set(STATE_KEY, state);
+      return item.id;
     },
     dismiss(raw: any, entries: Entry[]) {
       if (!raw || typeof raw.id !== "string") throw new Error("维护候选操作无效");

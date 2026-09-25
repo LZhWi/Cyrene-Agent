@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
-import { createMemory } from "../plugins/companion-memory/src/memory";
+import { createMemory, PROFILE_REFLECTION_MIN_CONFIDENCE } from "../plugins/companion-memory/src/memory";
 import { FRESHNESS_MS, profileContext, emptyProfiles } from "../plugins/companion-memory/src/profiles";
+import { memoryCandidate } from "./support/memory-candidate";
 
 function fixture() {
   const map = new Map<string, any>();
@@ -9,13 +10,16 @@ function fixture() {
   const memory = createMemory(storage);
   const now = Date.now();
   for (let i = 0; i < 10; i++) memory.ingest({ id: `t${i}`, sessionId: "s", user: "请叫我小林，我是设计师，最近计划学画画", assistant: "好的", userAt: now - 1000 + i, assistantAt: now - 999 + i });
-  const candidate = { layer: "L0", field: "preferredName", content: "小林", quote: "请叫我小林", turnId: "t0", certainty: "explicit", attribution: "user_explicit" };
+  const candidate = memoryCandidate();
   return { memory, storage, map, candidate };
 }
 describe("L0/L1/L2 分层与编辑边界", () => {
   it("分层提取并注入，画像不是查询关键词命中才显示", async () => {
     const { memory, candidate } = fixture();
-    await memory.maintain(async () => JSON.stringify([candidate, { ...candidate, layer: "L1", field: "recentGoals", content: "计划学画画", quote: "最近计划学画画" }, { ...candidate, layer: "L2", content: "用户提到学习计划" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([candidate,
+      memoryCandidate({ layer: "L1", field: "recentGoals", summary: "计划学画画", stability: "situational", evidenceQuotes: ["最近计划学画画"] }),
+      memoryCandidate({ layer: "L2", field: undefined, summary: "用户提到学习计划", sourceQuote: "最近计划学画画", stability: "situational", evidenceQuotes: ["最近计划学画画"], facets: { primaryKind: "goal", retrievalKinds: ["goal"] } }),
+    ]), new AbortController().signal);
     expect(memory.view().profiles.l0.preferredName?.content).toBe("小林");
     expect(memory.view().profiles.l1.recentGoals?.content).toBe("计划学画画");
     expect(memory.view().entries).toHaveLength(1);
@@ -33,10 +37,12 @@ describe("L0/L1/L2 分层与编辑边界", () => {
   });
   it("不明确或助手推断的 L0 不落库；无证据的绝对化表述拒绝", async () => {
     const { memory, candidate } = fixture();
-    await expect(memory.maintain(async () => JSON.stringify([{ ...candidate, content: "永远叫小林" }]), new AbortController().signal)).rejects.toThrow("绝对化");
-    expect(memory.view().pending).toBe(10);
-    await memory.maintain(async () => JSON.stringify([{ ...candidate, attribution: "assistant_inferred" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([memoryCandidate({ summary: "永远叫小林" })]), new AbortController().signal);
     expect(memory.view().profiles.l0).toEqual({});
+    expect(memory.view().pending).toBe(0);
+    const next = fixture();
+    await next.memory.maintain(async () => JSON.stringify([memoryCandidate({ attribution: "assistant_inferred" })]), new AbortController().signal);
+    expect(next.memory.view().profiles.l0).toEqual({});
   });
   it("L1 30 天边界按来源时间而非读取/回填时刻", () => {
     const profiles = emptyProfiles();
@@ -66,7 +72,7 @@ describe("L0/L1/L2 分层与编辑边界", () => {
   });
   it("L2 置顶/归档/恢复与编辑保持证据，过期版本拒绝写入", async () => {
     const { memory, candidate } = fixture();
-    await memory.maintain(async () => JSON.stringify([{ ...candidate, layer: "L2" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, sourceQuote: "请叫我小林", facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
     const e = memory.view().entries[0], revision = memory.view().revision;
     memory.editEntry({ ...e, content: "用户修改摘要", pinned: true, revision });
     expect(memory.search("无关键词")).toContain("用户修改摘要");
@@ -83,7 +89,7 @@ describe("L0/L1/L2 分层与编辑边界", () => {
     await memory.maintain(async () => JSON.stringify([candidate]), new AbortController().signal);
     const at = Date.now() - 100;
     for (let index = 10; index < 20; index++) memory.ingest({ id: `t${index}`, sessionId: "s", user: "请叫我小李", assistant: "好的", userAt: at + index, assistantAt: at + index + 1 });
-    await memory.maintain(async () => JSON.stringify([{ ...candidate, layer: "L2", content: "用户后来明确希望称作小李", quote: "请叫我小李", turnId: "t10" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, summary: "用户后来明确希望称作小李", sourceQuote: "请叫我小李", evidenceQuotes: ["请叫我小李"], evidenceTurnRefs: ["T3"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
     const generate = vi.fn().mockResolvedValue('[{"layer":"L0","field":"preferredName","content":"小李","sourceCode":"P1","confidence":0.92,"reason":"较新的明确称呼证据"}]');
     const result = await memory.reviewProfiles(generate, new AbortController().signal);
     expect(result).toEqual({ suggested: 1 });
@@ -95,9 +101,25 @@ describe("L0/L1/L2 分层与编辑边界", () => {
     expect(generate.mock.calls[0][0]).not.toContain(memory.view().entries[0].id);
   });
 
+  it("画像反思候选与自动采用统一使用 0.7 置信度门槛", async () => {
+    expect(PROFILE_REFLECTION_MIN_CONFIDENCE).toBe(0.7);
+    const accepted = fixture();
+    await accepted.memory.maintain(async () => JSON.stringify([accepted.candidate]), new AbortController().signal);
+    const at = Date.now() - 100;
+    for (let index = 10; index < 20; index++) accepted.memory.ingest({ id: `t${index}`, sessionId: "s", user: "请叫我小李", assistant: "好的", userAt: at + index, assistantAt: at + index + 1 });
+    await accepted.memory.maintain(async () => JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, summary: "用户后来明确希望称作小李", sourceQuote: "请叫我小李", evidenceQuotes: ["请叫我小李"], evidenceTurnRefs: ["T3"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
+    await expect(accepted.memory.reviewProfiles(async () => '[{"layer":"L0","field":"preferredName","content":"小李","sourceCode":"P1","confidence":0.7,"reason":"达到统一门槛"}]', new AbortController().signal)).resolves.toEqual({ suggested: 1 });
+
+    const rejected = fixture();
+    await rejected.memory.maintain(async () => JSON.stringify([rejected.candidate]), new AbortController().signal);
+    for (let index = 10; index < 20; index++) rejected.memory.ingest({ id: `t${index}`, sessionId: "s", user: "请叫我小李", assistant: "好的", userAt: at + index, assistantAt: at + index + 1 });
+    await rejected.memory.maintain(async () => JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, summary: "用户后来明确希望称作小李", sourceQuote: "请叫我小李", evidenceQuotes: ["请叫我小李"], evidenceTurnRefs: ["T3"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
+    await expect(rejected.memory.reviewProfiles(async () => '[{"layer":"L0","field":"preferredName","content":"小李","sourceCode":"P1","confidence":0.69,"reason":"低于统一门槛"}]', new AbortController().signal)).rejects.toThrow("画像反思结果无效");
+  });
+
   it("画像反思不新增空字段，低置信、无效来源和锁定 L0 均不产生候选", async () => {
     const { memory, candidate } = fixture();
-    await memory.maintain(async () => JSON.stringify([candidate, { ...candidate, layer: "L2" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([candidate, memoryCandidate({ layer: "L2", field: undefined, sourceQuote: "请叫我小林", facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
     const low = await memory.reviewProfiles(async () => '[{"layer":"L0","field":"occupation","content":"设计师","sourceCode":"P1","confidence":0.99,"reason":"当前字段为空"},{"layer":"L0","field":"preferredName","content":"小李","sourceCode":"P99","confidence":0.99,"reason":"无效来源"}]', new AbortController().signal);
     expect(low).toEqual({ suggested: 0 });
     memory.lockProfile({ locked: true, revision: memory.view().revision });
@@ -109,7 +131,7 @@ describe("L0/L1/L2 分层与编辑边界", () => {
     await memory.maintain(async () => JSON.stringify([candidate]), new AbortController().signal);
     const at = Date.now() - 100;
     for (let index = 10; index < 20; index++) memory.ingest({ id: `t${index}`, sessionId: "s", user: "现在请叫我小李", assistant: "好的", userAt: at + index, assistantAt: at + index + 1 });
-    await memory.maintain(async () => JSON.stringify([{ ...candidate, layer: "L2", content: "用户明确要求称作小李", quote: "现在请叫我小李", turnId: "t10" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, summary: "用户明确要求称作小李", sourceQuote: "现在请叫我小李", evidenceQuotes: ["现在请叫我小李"], evidenceTurnRefs: ["T3"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
     await memory.reviewProfiles(async () => '[{"layer":"L0","field":"preferredName","content":"小李","sourceCode":"P1","confidence":0.96,"reason":"较新称呼"}]', new AbortController().signal);
     const review = memory.view().profileChanges[0];
     expect(review.reflection).toMatchObject({ kind: "turn", confidence: 0.96, entry: { id: memory.view().entries[0].id } });
@@ -122,7 +144,7 @@ describe("L0/L1/L2 分层与编辑边界", () => {
     await fresh.memory.maintain(async () => JSON.stringify([fresh.candidate]), new AbortController().signal);
     const original = fresh.memory.view().profiles.l0.preferredName;
     for (let index = 10; index < 20; index++) fresh.memory.ingest({ id: `t${index}`, sessionId: "s", user: "现在请叫我小李", assistant: "好的", userAt: at + index, assistantAt: at + index + 1 });
-    await fresh.memory.maintain(async () => JSON.stringify([{ ...fresh.candidate, layer: "L2", content: "用户明确要求称作小李", quote: "现在请叫我小李", turnId: "t10" }]), new AbortController().signal);
+    await fresh.memory.maintain(async () => JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, summary: "用户明确要求称作小李", sourceQuote: "现在请叫我小李", evidenceQuotes: ["现在请叫我小李"], evidenceTurnRefs: ["T3"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
     const restarted = createMemory(fresh.storage);
     await restarted.reviewProfiles(async () => '[{"layer":"L0","field":"preferredName","content":"小李","sourceCode":"P1","confidence":0.96,"reason":"候选"}]', new AbortController().signal);
     const id = restarted.view().profileChanges[0].id;
@@ -136,7 +158,7 @@ describe("L0/L1/L2 分层与编辑边界", () => {
 
   it("未核验旧条目与已编辑条目均不进入反思模型", async () => {
     const { memory, candidate, storage, map } = fixture();
-    await memory.maintain(async () => JSON.stringify([candidate, { ...candidate, layer: "L2" }]), new AbortController().signal);
+    await memory.maintain(async () => JSON.stringify([candidate, memoryCandidate({ layer: "L2", field: undefined, sourceQuote: "请叫我小林", facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]), new AbortController().signal);
     const original = map.get("memory-state"), entry = original.entries[0];
     map.set("memory-state", { ...original, entries: [{ ...entry, provenance: "legacy-unverified", quote: "请叫我小林" }] });
     const legacy = createMemory(storage), generate = vi.fn(async () => "[]");

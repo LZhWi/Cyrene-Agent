@@ -58,12 +58,24 @@ export function parsePersonaStyle(value: unknown): PersonaStyleId {
   return PERSONA_STYLE_IDS.includes(value as PersonaStyleId) ? value as PersonaStyleId : "01_default";
 }
 
+export function personaStyleFromHost(value: unknown): PersonaStyleId | null {
+  const mapping: Record<string, PersonaStyleId> = {
+    default: "01_default",
+    lively: "02_lively",
+    healing: "03_healing",
+    focused: "04_focused",
+    sweet: "05_sweet",
+  };
+  return typeof value === "string" ? mapping[value] ?? null : "01_default";
+}
+
 export function createPersonaService(root = resolvePersonaRoot()) {
   const adapted = adaptPersonaForTwoPhase(
     readPersonaFile(root, "system.md"),
     readPersonaFile(root, "soul.md"),
   );
   const identity = readPersonaFile(root, "identity.md");
+  const talkSystem = readPersonaFile(root, "talk_system.md");
   const canon = readPersonaFile(root, "canon_quotes.md");
   const tool = readPersonaFile(root, "tools_system.md");
   const tone = readPersonaFile(root, "tone-rules.md");
@@ -74,6 +86,16 @@ export function createPersonaService(root = resolvePersonaRoot()) {
   ])) as Record<PersonaStyleId, string>;
 
   return {
+    buildProactive(): string {
+      return [talkSystem, adapted.soul.split("\n## Live2D 与聊天文字的分工")[0].trim(), canon, styles["01_default"]]
+        .filter(Boolean)
+        .join(SEPARATOR);
+    },
+    buildBase(addendum = ""): string {
+      return [adapted.system, identity, adapted.soul, canon, addendum.trim()]
+        .filter(Boolean)
+        .join(SEPARATOR);
+    },
     build(style: PersonaStyleId, addendum = ""): string {
       return [adapted.system, identity, adapted.soul, canon, styles[style], addendum.trim()]
         .filter(Boolean)

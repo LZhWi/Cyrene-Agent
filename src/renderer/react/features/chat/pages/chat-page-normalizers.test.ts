@@ -23,6 +23,7 @@ describe("chat page normalizers", () => {
     const [message] = toUiMessages(session);
 
     expect(message.channelSource).toEqual({ channel: "wechat", chatType: "private", senderName: "伙伴" });
+    expect(message.at).toBe(2);
     expect(message.modelContext).toBeUndefined();
   });
 

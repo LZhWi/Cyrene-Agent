@@ -24,6 +24,7 @@ const nativeTurn = process.env.CYRENE_ISOLATED_NATIVE_TURN === "1";
 const nativeUiTurn = process.env.CYRENE_ISOLATED_NATIVE_UI_TURN === "1";
 const boundedModelUiTurn = process.env.CYRENE_ISOLATED_BOUNDED_MODEL_UI === "1";
 const liveModel = process.env.CYRENE_ISOLATED_LIVE_MODEL === "1";
+const localModel = process.env.CYRENE_ISOLATED_LOCAL_MODEL === "1";
 const realSnapshot = process.env.CYRENE_ISOLATED_REAL_SNAPSHOT === "1";
 const realImportAudit = process.env.CYRENE_ISOLATED_REAL_IMPORT_AUDIT === "1";
 const companionAcceptance = process.env.CYRENE_ISOLATED_COMPANION_ACCEPTANCE === "1";
@@ -38,7 +39,7 @@ const modelTest = { fixtureCalls: 0, liveCalls: 0, unexpectedModelCalls: 0,
   secondRequestHadPluginMemory: false, secondReplySaved: false, secondTurnCaptured: false,
   screenReplySaved: false, screenTurnCaptured: false,
   realSnapshotMemoryInjected: false, realSnapshotInjectedCount: 0,
-  realSnapshotProviderChars: 0, outputTokenCap: null, streamAudit: null, usage: null };
+  realSnapshotProviderChars: 0, outputTokenCap: null, responseAudit: null, usage: null };
 const firstModelQuestion = "今天想给窗台上的薄荷浇水，请记住。";
 const secondModelQuestion = "我刚才说要给窗台上的薄荷做什么？请一句话回答。";
 const screenModelQuestion = "请观察当前屏幕，并用一句话说明你看到了什么。";
@@ -48,26 +49,23 @@ const screenReplyFixture = "我看到的是隔离测试窗口。";
 let boundedModelPassed = false;
 let firstTurnCaptured = false;
 let snapshotProbe = null;
-let streamAuditTask = null;
+let responseAuditTask = null;
 
-async function auditModelStream(response) {
+async function auditModelResponse(response) {
   const raw = await response.clone().text();
-  const summary = { finishReason: null, visibleChars: 0, reasoningChars: 0,
+  const summary = { mode: "non-stream", finishReason: null, visibleChars: 0, reasoningChars: 0,
     promptTokens: null, completionTokens: null };
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-    let chunk;
-    try { chunk = JSON.parse(line.slice(6)); } catch { continue; }
-    const choice = chunk?.choices?.[0];
-    if (typeof choice?.delta?.content === "string") summary.visibleChars += choice.delta.content.length;
-    for (const field of ["reasoning_content", "thinking", "reasoning"]) {
-      if (typeof choice?.delta?.[field] === "string") summary.reasoningChars += choice.delta[field].length;
-    }
-    if (typeof choice?.finish_reason === "string") summary.finishReason = choice.finish_reason;
-    if (Number.isSafeInteger(chunk?.usage?.prompt_tokens)) summary.promptTokens = chunk.usage.prompt_tokens;
-    if (Number.isSafeInteger(chunk?.usage?.completion_tokens)) summary.completionTokens = chunk.usage.completion_tokens;
+  const payload = JSON.parse(raw);
+  const choice = payload?.choices?.[0];
+  const message = choice?.message;
+  if (typeof message?.content === "string") summary.visibleChars = message.content.length;
+  for (const field of ["reasoning_content", "thinking", "reasoning"]) {
+    if (typeof message?.[field] === "string") summary.reasoningChars += message[field].length;
   }
-  modelTest.streamAudit = summary;
+  if (typeof choice?.finish_reason === "string") summary.finishReason = choice.finish_reason;
+  if (Number.isSafeInteger(payload?.usage?.prompt_tokens)) summary.promptTokens = payload.usage.prompt_tokens;
+  if (Number.isSafeInteger(payload?.usage?.completion_tokens)) summary.completionTokens = payload.usage.completion_tokens;
+  modelTest.responseAudit = summary;
 }
 
 function fixtureStream(text) {
@@ -97,6 +95,14 @@ function fixtureToolCallStream(name, args, id) {
 function fixtureVisionResponse(text) {
   return new Response(JSON.stringify({
     id: "isolated-vision", object: "chat.completion", created: 1, model: "kimi-k2.6",
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+function fixtureChatResponse(text) {
+  return new Response(JSON.stringify({
+    id: "isolated-soul", object: "chat.completion", created: 1, model: "kimi-k2.6",
     choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
   }), { status: 200, headers: { "content-type": "application/json" } });
@@ -217,14 +223,20 @@ function installProcessGuards() {
   // 合成启动不访问模型或外网；阻断主进程常见网络入口，而非只拦 fetch。
   const blockNetwork = () => { throw new Error("E_ISOLATED_SMOKE_NETWORK_BLOCKED"); };
   const delegateFetch = globalThis.fetch;
+  let modelEndpoint = null;
+  let modelSocketAllowed = false;
+  let modelSocketCount = 0;
   if (boundedModelUiTurn) {
-    let modelSocketAllowed = false;
-    let modelSocketCount = 0;
+    const modelSource = liveModel || localModel
+      ? JSON.parse(fs.readFileSync(path.join(runRoot, "isolated-model-source.json"), "utf8"))
+      : { baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.6", apiKey: "synthetic-only" };
+    modelEndpoint = new URL(`${modelSource.baseUrl.replace(/\/?$/, "/")}chat/completions`);
     globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
       const endpoint = new URL(request.url);
-      if (endpoint.protocol !== "https:" || endpoint.hostname !== "api.moonshot.cn"
-        || endpoint.pathname !== "/v1/chat/completions" || request.method !== "POST") {
+      if (endpoint.protocol !== modelEndpoint.protocol || endpoint.hostname !== modelEndpoint.hostname
+        || endpoint.port !== modelEndpoint.port || endpoint.pathname !== modelEndpoint.pathname
+        || request.method !== "POST") {
         return blockNetwork();
       }
       let body;
@@ -233,7 +245,7 @@ function installProcessGuards() {
       const visibleMessages = JSON.stringify(messages);
       const expectedKey = JSON.parse(fs.readFileSync(path.join(userDataRoot, "model-settings.json"), "utf8")).apiKey;
       const isVisionRequest = body.stream === false && visibleMessages.includes('"type":"image_url"');
-      if (body.model !== "kimi-k2.6" || visibleMessages.length > (isVisionRequest ? 8_000_000 : 30_000)
+      if (body.model !== modelSource.model || visibleMessages.length > (isVisionRequest ? 8_000_000 : 30_000)
         || !request.headers.get("authorization")?.endsWith(expectedKey)
         || modelTest.fixtureCalls + modelTest.liveCalls >= 10) {
         modelTest.unexpectedModelCalls++;
@@ -248,11 +260,6 @@ function installProcessGuards() {
         modelTest.visionFixtureCalls++;
         return fixtureVisionResponse(screenVisionFixture);
       }
-      if (body.stream !== true) {
-        modelTest.unexpectedModelCalls++;
-        return blockNetwork();
-      }
-
       const toolResults = messages.filter((message) => message?.role === "tool");
       const toolResultText = JSON.stringify(toolResults);
       const toolResultContent = toolResults.map((message) => typeof message.content === "string" ? message.content : "").join("\n\n");
@@ -260,6 +267,10 @@ function installProcessGuards() {
       const secondQuery = snapshotProbe?.query ?? secondModelQuestion;
 
       if (hasTools) {
+        if (body.stream !== true) {
+          modelTest.unexpectedModelCalls++;
+          return blockNetwork();
+        }
         const toolPhaseIndex = modelTest.toolPhaseCalls;
         modelTest.toolPhaseCalls++;
         const advertisedTools = JSON.stringify(body.tools);
@@ -317,16 +328,20 @@ function installProcessGuards() {
         modelTest.unexpectedModelCalls++;
         return blockNetwork();
       }
+      if (body.stream !== false) {
+        modelTest.unexpectedModelCalls++;
+        return blockNetwork();
+      }
       const soulPhaseIndex = modelTest.soulPhaseCalls;
       modelTest.soulPhaseCalls++;
       if (soulPhaseIndex === 0) {
         modelTest.fixtureCalls++;
-        return fixtureStream(fixtureReply);
+        return fixtureChatResponse(fixtureReply);
       }
       if (soulPhaseIndex === 2) {
         if (!modelTest.screenToolResultObserved) return blockNetwork();
         modelTest.fixtureCalls++;
-        return fixtureStream(screenReplyFixture);
+        return fixtureChatResponse(screenReplyFixture);
       }
       if (soulPhaseIndex !== 1 || !firstTurnCaptured || !visibleMessages.includes(firstModelQuestion)
         || !modelTest.memoryToolResultObserved || modelTest.liveCalls !== 0) {
@@ -337,11 +352,11 @@ function installProcessGuards() {
         ? Boolean(snapshotProbe?.content && visibleMessages.includes(snapshotProbe.content))
         : visibleMessages.includes(firstModelQuestion);
       if (!modelTest.secondRequestHadPluginMemory) return blockNetwork();
-      if (!liveModel) {
+      if (!liveModel && !localModel) {
         modelTest.fixtureCalls++;
-        return fixtureStream(realSnapshot ? "我找到了相关记忆。" : "你刚才说，要给窗台上的薄荷浇水呀。");
+        return fixtureChatResponse(realSnapshot ? "我找到了相关记忆。" : "你刚才说，要给窗台上的薄荷浇水呀。");
       }
-      body.max_tokens = realSnapshot ? 4_096 : 512;
+      body.max_tokens = realSnapshot ? 4_096 : localModel ? 2_048 : 512;
       modelTest.outputTokenCap = body.max_tokens;
       modelTest.liveCalls++;
       modelSocketAllowed = true;
@@ -349,9 +364,9 @@ function installProcessGuards() {
         const response = await delegateFetch(request.url, {
           method: "POST", headers: request.headers, body: JSON.stringify(body), signal: request.signal,
         });
-        if (!response.ok) throw new Error(`Kimi HTTP ${response.status}`);
-        streamAuditTask = auditModelStream(response).catch(() => {
-          modelTest.streamAudit = { error: true };
+        if (!response.ok) throw new Error(`模型 HTTP ${response.status}`);
+        responseAuditTask = auditModelResponse(response).catch(() => {
+          modelTest.responseAudit = { mode: "non-stream", error: true };
         });
         return response;
       } finally { modelSocketAllowed = false; }
@@ -361,8 +376,8 @@ function installProcessGuards() {
     tls.connect = (...args) => {
       const options = args[0];
       if (liveModel && modelSocketAllowed && modelSocketCount === 0
-        && options && typeof options === "object" && options.host === "api.moonshot.cn"
-        && options.servername === "api.moonshot.cn" && Number(options.port) === 443) {
+        && options && typeof options === "object" && options.host === modelEndpoint.hostname
+        && options.servername === modelEndpoint.hostname && Number(options.port) === Number(modelEndpoint.port || 443)) {
         modelSocketCount++;
         return originalTlsConnect(...args);
       }
@@ -381,8 +396,22 @@ function installProcessGuards() {
     module.get = blockNetwork;
   }
   const net = require("node:net");
-  net.connect = blockNetwork;
-  net.createConnection = blockNetwork;
+  const originalNetConnect = net.connect;
+  const originalNetCreateConnection = net.createConnection;
+  const allowLocalSocket = (original, args) => {
+    const options = args[0];
+    const host = typeof options === "object" ? options?.host : args[1];
+    const port = typeof options === "object" ? options?.port : options;
+    if (localModel && modelSocketAllowed && modelSocketCount === 0
+      && ["127.0.0.1", "localhost", "::1"].includes(String(host))
+      && Number(port) === Number(modelEndpoint.port || (modelEndpoint.protocol === "https:" ? 443 : 80))) {
+      modelSocketCount++;
+      return original(...args);
+    }
+    return blockNetwork();
+  };
+  net.connect = (...args) => allowLocalSocket(originalNetConnect, args);
+  net.createConnection = (...args) => allowLocalSocket(originalNetCreateConnection, args);
   if (!boundedModelUiTurn) require("node:tls").connect = blockNetwork;
   electron.net.request = blockNetwork;
   electron.net.fetch = async () => blockNetwork();
@@ -453,7 +482,7 @@ function writeSyntheticUserData() {
   if (nativeTurn) {
     // 仅供合成轮次通过宿主模型配置检查；实际模型入口由下方固定回复替代，网络仍被硬阻断。
     const modelSettings = boundedModelUiTurn
-      ? liveModel
+      ? liveModel || localModel
         ? JSON.parse(fs.readFileSync(path.join(runRoot, "isolated-model-source.json"), "utf8"))
         : { provider: "Kimi（月之暗面）", baseUrl: "https://api.moonshot.cn/v1",
           model: "kimi-k2.6", apiKey: "synthetic-only", explicitTransport: "openai" }
@@ -481,6 +510,7 @@ writeSyntheticUserData();
 
 const observedContexts = [];
 const observedStablePrompts = [];
+const observedPromptShapes = [];
 if (nativeTurn && !boundedModelUiTurn) {
   const { Observable } = require("rxjs");
   const agentModule = require(path.join(projectRoot, "dist", "main", "main", "orchestrator", "cyrene-agent.js"));
@@ -489,6 +519,10 @@ if (nativeTurn && !boundedModelUiTurn) {
     runWithEvents(options) {
       observedContexts.push(options.soulRuntimeContext ?? "");
       observedStablePrompts.push(options.soulSystemBaseContent ?? "");
+      observedPromptShapes.push({
+        messages: (options.messages ?? []).map((message) => ({ role: message.role, content: message.content })),
+        tail: options.soulTailAnchorContent ?? "",
+      });
       const reply = "合成回复：记住了";
       const messageId = `synthetic-assistant-${observedContexts.length}`;
       return new Observable((subscriber) => {
@@ -521,9 +555,28 @@ async function runCompanionAcceptance() {
   const chatWindow = BrowserWindow.getAllWindows().find((win) =>
     win.webContents.getURL().replace(/\\/g, "/").includes("/renderer/react/index.html"));
   if (!chatWindow) throw new Error("陪伴能力验收未找到原生 Chat 页面");
+  const mainStyleEntry = await chatWindow.webContents.executeJavaScript(`(async () => {
+    const control = document.querySelector(".cy-style-control");
+    if (!control) return { control: false, count: 0 };
+    control.click();
+    for (let i = 0; i < 50 && document.querySelectorAll(".cy-style-panel__option").length !== 6; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { control: true, count: document.querySelectorAll(".cy-style-panel__option").length };
+  })()`);
+  if (mainStyleEntry?.control !== true || mainStyleEntry.count !== 6) {
+    throw new Error("主程序 Chat 六项风格入口未完整加载");
+  }
   await chatWindow.webContents.executeJavaScript('window.plugins.open("companion-chat")');
   const pluginWindow = BrowserWindow.getAllWindows().find((win) => win.getTitle() === "独立陪伴聊天");
   if (!pluginWindow) throw new Error("陪伴能力验收未找到插件窗口");
+  const pluginStyleEntry = await pluginWindow.webContents.executeJavaScript(`({
+    legacySelect: Boolean(document.getElementById("persona-style")),
+    unifiedNotice: document.body.textContent.includes("原生 Chat 的风格统一由主程序聊天风格入口选择"),
+  })`);
+  if (pluginStyleEntry?.legacySelect !== false || pluginStyleEntry.unifiedNotice !== true) {
+    throw new Error("插件窗口仍存在第二套风格入口或缺少统一入口说明");
+  }
   const initial = await pluginWindow.webContents.executeJavaScript('window.companion.invoke("state")');
   if (initial?.ok !== true || initial.data?.proactive?.enabled !== false
     || initial.data?.proactive?.feedbackLearningEnabled !== false) {
@@ -594,10 +647,10 @@ async function runCompanionAcceptance() {
   const resumed = await memoryWindow.webContents.executeJavaScript('window.companion.invoke("state")');
   const compressionDisabled = await memoryWindow.webContents.executeJavaScript('window.companion.invoke("auto-compression", false)');
   if (compressionEnabled?.ok !== true || compressionApplyEnabled?.ok !== true || compressionApplyEnabled.data?.applyEnabled !== true
-    || coordinated?.ok !== true || coordinated.data?.autoCompression?.suppressed !== true
+    || coordinated?.ok !== true || coordinated.data?.autoCompression?.suppressed !== false
     || resumed?.ok !== true || resumed.data?.autoCompression?.suppressed !== false
     || compressionDisabled?.ok !== true || compressionDisabled.data?.enabled !== false || compressionDisabled.data?.applyEnabled !== false) {
-    throw new Error("压缩自动应用授权、梦境周期互斥或关闭联动无效");
+    throw new Error("压缩自动应用授权、梦境共享压缩服务或关闭联动无效");
   }
   if (dreamEnabled?.ok !== true || dreamApplyEnabled?.ok !== true || dreamApplyEnabled.data?.applyEnabled !== true
     || dreamDisabled?.ok !== true || dreamDisabled.data?.enabled !== false || dreamDisabled.data?.applyEnabled !== false) {
@@ -606,6 +659,8 @@ async function runCompanionAcceptance() {
   companionAcceptancePassed = true;
   companionAcceptanceResult = {
     pluginLoaded: true,
+    mainStyleEntryCount: mainStyleEntry.count,
+    pluginStyleEntryRemoved: true,
     weatherCapabilityResolved: true,
     feedbackDefaultOff: true,
     feedbackExplicitOptIn: true,
@@ -620,8 +675,8 @@ async function runCompanionAcceptance() {
     recentCompressionGroupsVisible: true,
     compressionAutoApplyExplicitOptIn: true,
     compressionAutoApplyClearedWithScheduler: true,
-    dreamCycleSuppressesIndependentCompression: true,
-    independentCompressionResumesAfterDreamCycle: true,
+    dreamCycleUsesSharedCompressionService: true,
+    sharedCompressionRemainsEnabledAfterDreamCycle: true,
   };
   console.log(`[isolated-smoke] 陪伴主动消息与天气能力验收通过: ${JSON.stringify(companionAcceptanceResult)}`);
 }
@@ -641,7 +696,7 @@ async function runBoundedModelTurn() {
     editor.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
     await new Promise((resolve) => setTimeout(resolve, 100));
     editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
-    for (let i = 0; i < ${liveModel && realSnapshot ? 1800 : 650}; i++) {
+    for (let i = 0; i < ${(liveModel || localModel) && realSnapshot ? 1800 : 650}; i++) {
       const sessions = await window.chatStore.list({ mode: "chat" });
       for (const item of sessions) {
         const session = await window.chatStore.get(item.id);
@@ -658,7 +713,7 @@ async function runBoundedModelTurn() {
     throw new Error("原生 Chat 页面等待模型回复超时");
   })()`);
   const first = await send(firstModelQuestion);
-  if (first.reply !== fixtureReply) throw new Error("首轮固定流式回复与落盘结果不一致");
+  if (first.reply !== fixtureReply) throw new Error("首轮固定非流式回复与落盘结果不一致");
   const memoryPath = path.join(userDataRoot, "plugin-data", "companion-memory", "memory-state.json");
   for (let i = 0; i < 100; i++) {
     if (fs.existsSync(memoryPath)) {
@@ -672,11 +727,13 @@ async function runBoundedModelTurn() {
   if (!firstTurnCaptured) throw new Error("首轮真实 ChatLoop 落盘后插件未摄取");
   const second = await send(snapshotProbe?.query ?? secondModelQuestion, first.assistantId);
   modelTest.secondReplySaved = second.sessionId === first.sessionId
-    && (realSnapshot ? liveModel ? second.reply.trim().length >= 4 && second.reply.length <= 1_500
+    && (realSnapshot ? (liveModel || localModel) ? second.reply.trim().length >= 4 && second.reply.length <= 1_500
       : second.reply === "我找到了相关记忆。"
       : second.reply.includes("薄荷") && second.reply.includes("浇水"))
     && !/<tool_call|\[tool_call\]|<invoke/.test(second.reply);
-  if (!modelTest.secondReplySaved) throw new Error("第二轮回复未正确保存或未命中合成事实");
+  if (!modelTest.secondReplySaved) throw new Error(realSnapshot
+    ? "第二轮真实记忆回复未正确保存或格式无效"
+    : "第二轮回复未正确保存或未命中合成事实");
   for (let i = 0; i < 100; i++) {
     const state = JSON.parse(fs.readFileSync(memoryPath, "utf8"));
     modelTest.secondTurnCaptured = state.turns?.some((turn) => turn.sessionId === second.sessionId
@@ -696,12 +753,15 @@ async function runBoundedModelTurn() {
     if (modelTest.screenTurnCaptured) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  const usageModel = localModel
+    ? JSON.parse(fs.readFileSync(path.join(runRoot, "isolated-model-source.json"), "utf8")).model
+    : "kimi-k2.6";
   const usage = require(path.join(projectRoot, "dist", "main", "main", "token-usage-store.js"))
-    .getUsageReport(1).models.find((item) => item.model === "kimi-k2.6");
+    .getUsageReport(1).models.find((item) => item.model === usageModel);
   modelTest.usage = usage ? { input: usage.input, output: usage.output,
     requests: usage.requests, attemptedRequests: usage.attemptedRequests } : null;
-  boundedModelPassed = modelTest.fixtureCalls === (liveModel ? 8 : 9)
-    && modelTest.liveCalls === (liveModel ? 1 : 0) && modelTest.unexpectedModelCalls === 0
+  boundedModelPassed = modelTest.fixtureCalls === (liveModel || localModel ? 8 : 9)
+    && modelTest.liveCalls === (liveModel || localModel ? 1 : 0) && modelTest.unexpectedModelCalls === 0
     && modelTest.toolPhaseCalls === 5 && modelTest.soulPhaseCalls === 3
     && modelTest.visionFixtureCalls === 1
     && modelTest.memoryToolRequested && modelTest.memoryToolResultObserved
@@ -785,8 +845,9 @@ async function runSnapshotImportAudit(pluginWindow, sourcePath, preview) {
       && item.embedding.length === source.embedding.length
       && item.embedding.every((value, index) => value === source.embedding[index]), "向量数值");
   }
-  check(data.embedding?.enabled === false && data.queryExpansion === false && data.reranker?.enabled === false,
-    "检索模型开关保持关闭");
+  check(data.embedding?.enabled === true && data.embedding?.hostNative === true
+    && data.queryExpansion === false && data.reranker?.enabled === false,
+    "仅使用宿主原生向量服务，额外检索模型开关保持关闭");
   let probe;
   for (const source of raw.l2) {
     if (source.status !== "active" || source.isSummary === true || !source.triggerText?.trim()
@@ -861,7 +922,7 @@ async function runSnapshotPreview() {
       await runBoundedModelTurn();
       importAudit.nativePromptInjectionPassed = modelTest.realSnapshotMemoryInjected;
     } finally {
-      if (streamAuditTask) await streamAuditTask;
+      if (responseAuditTask) await responseAuditTask;
     }
   }
 }
@@ -972,26 +1033,26 @@ async function runNativeTurn(secondQuery = "第二轮合成提问：还记得白
     } finally { off(); }
   })()`);
   const second = await runAndWait("synthetic-user-2", "synthetic-assistant-2", [
-      { role: "user", content: first.userText },
-      { role: "assistant", content: "合成回复：记住了" },
-      { role: "user", content: secondQuery },
+      { role: "user", content: first.userText, at: Date.UTC(2026, 8, 20, 14, 0) },
+      { role: "assistant", content: "合成回复：记住了", at: Date.UTC(2026, 8, 20, 14, 1) },
+      { role: "user", content: secondQuery, at: Date.UTC(2026, 8, 20, 14, 2) },
     ]);
   await chatWindow.webContents.executeJavaScript(`window.agui.reportRunPersisted({
     runId: ${JSON.stringify(second.runId)}, finalMessageId: ${JSON.stringify(second.assistantId)} })`);
   // 对同一个旧记忆查询，要求合成历史与旧记忆同时进入原生 Chat；唯一标记防止把旧记忆误当历史。
   // 精确条目已由上方只读检索核对；原生宿主只需确认接收到了插件记忆块。
-  const importedMemoryInjected = !requireImportedMemory || observedContexts[1]?.includes("[记忆 ") === true;
+  const importedMemoryInjected = !requireImportedMemory || observedStablePrompts[1]?.includes("[记忆 ") === true;
   if (requireImportedMemory) {
     const third = await runAndWait("synthetic-user-3", "synthetic-assistant-3", [
-        { role: "user", content: secondQuery },
-        { role: "assistant", content: "合成回复：记住了" },
-        { role: "user", content: first.userText },
+        { role: "user", content: secondQuery, at: Date.UTC(2026, 8, 20, 14, 2) },
+        { role: "assistant", content: "合成回复：记住了", at: Date.UTC(2026, 8, 20, 14, 3) },
+        { role: "user", content: first.userText, at: Date.UTC(2026, 8, 20, 14, 4) },
       ]);
     await chatWindow.webContents.executeJavaScript(`window.agui.reportRunPersisted({
       runId: ${JSON.stringify(third.runId)}, finalMessageId: ${JSON.stringify(third.assistantId)} })`);
   }
-  const historyContext = observedContexts[requireImportedMemory ? 2 : 1];
   const stablePrompt = observedStablePrompts[requireImportedMemory ? 2 : 1];
+  const promptShape = observedPromptShapes[requireImportedMemory ? 2 : 1];
   const worldbookStatePath = path.join(userDataRoot, "plugin-data", "companion-chat", "worldbook-state.json");
   let worldbookState = null;
   for (let i = 0; i < 100; i++) {
@@ -999,33 +1060,48 @@ async function runNativeTurn(secondQuery = "第二轮合成提问：还记得白
     if (worldbookState?.version === 2 && worldbookState.revision >= 1) break;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const historyHeaderInjected = historyContext?.includes("[独立记忆插件提供的参考资料") === true;
-  const lifeContextInjected = historyContext?.includes("[你的生活]") === true;
-  const worldbookInjected = historyContext?.includes("【白厄 / Phainon】") === true;
-  const lifeProviderAt = historyContext?.indexOf("[插件上下文：plugin:companion-chat:life-context]") ?? -1;
-  const memoryProviderAt = historyContext?.indexOf("[插件上下文：plugin:companion-memory:memory-context]") ?? -1;
-  const worldbookProviderAt = historyContext?.indexOf("[插件上下文：plugin:companion-chat:worldbook]") ?? -1;
+  const historyHeaderInjected = stablePrompt?.includes("[独立记忆插件提供的参考资料") === true;
+  const lifeContextInjected = stablePrompt?.includes("[你的生活]") === true;
+  const worldbookInjected = stablePrompt?.includes("【白厄 / Phainon】") === true;
+  const lifeProviderAt = stablePrompt?.indexOf("[插件上下文：plugin:companion-chat:life-context]") ?? -1;
+  const memoryProviderAt = stablePrompt?.indexOf("[插件上下文：plugin:companion-memory:memory-context]") ?? -1;
+  const worldbookProviderAt = stablePrompt?.indexOf("[插件上下文：plugin:companion-chat:worldbook]") ?? -1;
   promptProviderOrderPassed = lifeProviderAt >= 0
     && memoryProviderAt > lifeProviderAt
     && worldbookProviderAt > memoryProviderAt;
   // 本合成序列只有第二轮命中“白厄”；未命中的首轮不应伪造一次 WorldBook 提交。
   const worldbookCommitted = worldbookState?.version === 2 && worldbookState.revision >= 1;
-  const priorTurnInjected = historyContext?.includes(first.userText) === true;
-  const competingMemoryInjected = !requireImportedMemory || historyContext?.includes("[记忆 ") === true;
+  const priorTurnInjected = promptShape?.messages?.some((message) =>
+    message.role === "user" && String(message.content).includes(first.userText)) === true;
+  const competingMemoryInjected = !requireImportedMemory || stablePrompt?.includes("[记忆 ") === true;
   const personaInjected = stablePrompt?.includes("# 昔涟 · Identity") === true
     && stablePrompt.includes("# 昔涟 · Soul")
     && stablePrompt.includes("# 昔涟 · 原作台词摘录");
   const twoPhasePersonaAdapted = stablePrompt?.includes("工具调用与任务调度规则见 `tools_system.md`") === true
     && stablePrompt.includes("Soul 阶段没有工具能力")
     && !stablePrompt.includes("playwright-browser_");
+  const localDefaultStyleInjected = stablePrompt?.includes("# 风格：温柔・和善（默认）") === true
+    && stablePrompt.includes("很在意、深爱对方");
+  const localTimestampRuleInjected = stablePrompt?.includes("[时间戳使用规则]") === true
+    && !stablePrompt.includes("## Internal Context Policy");
+  const localEnvironmentDateInjected = /- 今天日期：\d{4}-\d{2}-\d{2} [周星期]\S?（时区 Asia\/Shanghai；精确的当前时间以对话消息的时间戳为准）/.test(stablePrompt ?? "")
+    && !(stablePrompt ?? "").includes("- 当前时间：");
+  const localMessageTimestampsInjected = promptShape?.messages?.some((message) =>
+    message.role === "user" && /^\[2026-09-20 22:\d{2}, Asia\/Shanghai\]\n/.test(String(message.content)))
+    && promptShape.messages.some((message) =>
+      message.role === "assistant" && /^\[2026-09-20 22:\d{2}, Asia\/Shanghai\]\n/.test(String(message.content)))
+    && !promptShape.messages.some((message) => String(message.content).includes("<internal_context>"));
+  const localTailClockInjected = /^\[当前时间\] \d{4}-\d{2}-\d{2} \d{2}:\d{2}, Asia\/Shanghai（仅供你感知当下时刻，不要复述）/.test(promptShape?.tail ?? "");
   nativeRelationshipBypassed = !fs.existsSync(nativeRelationshipPath);
   if (!historyHeaderInjected || !lifeContextInjected || !worldbookInjected || !worldbookCommitted || !priorTurnInjected || !importedMemoryInjected
     || !competingMemoryInjected || !personaInjected || !twoPhasePersonaAdapted
+    || !localDefaultStyleInjected || !localTimestampRuleInjected || !localEnvironmentDateInjected
+    || !localMessageTimestampsInjected || !localTailClockInjected
     || !promptProviderOrderPassed || !nativeRelationshipBypassed) {
-    throw new Error(`下一轮原生 Chat 注入不完整：${JSON.stringify({ historyHeaderInjected, lifeContextInjected, worldbookInjected, promptProviderOrderPassed, worldbookCommitted, priorTurnInjected, importedMemoryInjected, competingMemoryInjected, personaInjected, twoPhasePersonaAdapted, nativeRelationshipBypassed })}`);
+    throw new Error(`下一轮原生 Chat 注入不完整：${JSON.stringify({ historyHeaderInjected, lifeContextInjected, worldbookInjected, promptProviderOrderPassed, worldbookCommitted, priorTurnInjected, importedMemoryInjected, competingMemoryInjected, personaInjected, twoPhasePersonaAdapted, localDefaultStyleInjected, localTimestampRuleInjected, localEnvironmentDateInjected, localMessageTimestampsInjected, localTailClockInjected, nativeRelationshipBypassed })}`);
   }
   nativeTurnPassed = true;
-  console.log(`[isolated-smoke] 原生 Chat 合成${nativeUiTurn ? "页面" : " IPC"}轮次：落盘确认、插件摄取和下一轮注入通过`);
+  console.log(`[isolated-smoke] 原生 Chat 合成${nativeUiTurn ? "页面" : " IPC"}轮次：落盘确认、插件摄取、本地风格与时间结构通过`);
 }
 
 let windowsRevealed = false;
@@ -1072,10 +1148,10 @@ const gracefulWatchdog = setTimeout(() => {
     quitRequested = true;
     app.quit();
   }
-}, visible ? 600_000 : boundedModelUiTurn && liveModel && realSnapshot ? 220_000
+}, visible ? 600_000 : boundedModelUiTurn && (liveModel || localModel) && realSnapshot ? 220_000
   : boundedModelUiTurn ? 120_000 : 45_000);
 const hardWatchdog = setTimeout(() => app.exit(124), visible ? 660_000
-  : boundedModelUiTurn && liveModel && realSnapshot ? 235_000
+  : boundedModelUiTurn && (liveModel || localModel) && realSnapshot ? 235_000
     : boundedModelUiTurn ? 135_000 : 60_000);
 
 app.on("will-quit", () => {

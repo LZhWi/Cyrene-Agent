@@ -3,6 +3,7 @@
 import * as path from "path";
 import * as os from "os";
 import { getProjectModelBaseDir } from "./model-status";
+import { applyOnnxCpuSessionPolicy } from "./onnx-session-policy";
 
 // ── Types ──
 export interface RerankerProvider {
@@ -17,6 +18,7 @@ const importEsm = new Function("moduleName", "return import(moduleName)") as (mo
 let standardPipeline: any = null;
 
 async function loadRerankerPipeline(modelDir: string): Promise<any> {
+  await applyOnnxCpuSessionPolicy();
   const { pipeline, env } = await importEsm("@xenova/transformers");
 
   const originalPath = env.localModelPath;
@@ -39,6 +41,26 @@ async function loadRerankerPipeline(modelDir: string): Promise<any> {
   }
 }
 
+/** Cross-encoder 必须把 query/document 作为 tokenizer 的 text/text_pair 输入。 */
+export async function rerankDocumentsWithPipeline(
+  pipeline: any,
+  query: string,
+  documents: string[],
+): Promise<Array<{ text: string; score: number }>> {
+  if (documents.length === 0) return [];
+  const modelInputs = pipeline.tokenizer(
+    documents.map(() => query),
+    { text_pair: documents, padding: true, truncation: true },
+  );
+  const outputs = await pipeline.model(modelInputs);
+  const results = documents.map((text, index) => ({
+    text,
+    score: Number(outputs.logits[index]?.data?.[0] ?? Number.NEGATIVE_INFINITY),
+  }));
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
 // ── Standard reranker (bge-reranker-base, ~279MB) ──
 export async function createStandardReranker(): Promise<RerankerProvider> {
   if (!standardPipeline) {
@@ -54,15 +76,7 @@ export async function createStandardReranker(): Promise<RerankerProvider> {
 
       const start = Date.now();
 
-      const inputs = documents.map((doc) => [query, doc]);
-      const outputs = await standardPipeline(inputs);
-
-      const results = documents.map((text, i) => ({
-        text,
-        score: outputs[i]?.score ?? 0,
-      }));
-
-      results.sort((a, b) => b.score - a.score);
+      const results = await rerankDocumentsWithPipeline(standardPipeline, query, documents);
 
       console.log(`[Reranker] standard: ${documents.length} docs reranked in ${Date.now() - start}ms`);
       return results;
@@ -73,6 +87,8 @@ export async function createStandardReranker(): Promise<RerankerProvider> {
 // ── Reranker manager ──
 let currentReranker: RerankerProvider | null = null;
 let currentRerankerMode: "standard" | "none" = "none";
+let rerankerConfigVersion = 0;
+let lazyInitPromise: Promise<RerankerProvider | null> | null = null;
 
 function checkRerankerModelInstalled(): boolean {
   return getProjectModelBaseDir("reranker", "standard") !== null;
@@ -83,7 +99,9 @@ export function getRerankerInstallStatus(): { standard: boolean } {
 }
 
 export async function initReranker(mode: "standard" | "none"): Promise<void> {
+  const configVersion = ++rerankerConfigVersion;
   currentRerankerMode = mode;
+  currentReranker = null;
 
   if (mode === "none") {
     currentReranker = null;
@@ -93,14 +111,41 @@ export async function initReranker(mode: "standard" | "none"): Promise<void> {
 
   if (!checkRerankerModelInstalled()) {
     console.warn(`[Reranker] bge-reranker-base 未找到 (models/bge-reranker-base/onnx/model_quantized.onnx)，自动降级为 none。`);
-    currentRerankerMode = "none";
-    currentReranker = null;
+    if (configVersion === rerankerConfigVersion) {
+      currentRerankerMode = "none";
+      currentReranker = null;
+    }
     return;
   }
 
   console.log("[Reranker] initializing standard mode (bge-reranker-base)...");
-  currentReranker = await createStandardReranker();
-  console.log(`[Reranker] standard mode ready: ${currentReranker.name}`);
+  const reranker = await createStandardReranker();
+  if (configVersion === rerankerConfigVersion) currentReranker = reranker;
+  if (configVersion === rerankerConfigVersion && currentReranker) {
+    console.log(`[Reranker] standard mode ready: ${currentReranker.name}`);
+  }
+}
+
+export function configureRerankerForLazyInit(mode: "standard" | "none"): void {
+  rerankerConfigVersion += 1;
+  currentRerankerMode = mode;
+  currentReranker = null;
+  lazyInitPromise = null;
+}
+
+export async function ensureRerankerInitialized(): Promise<RerankerProvider | null> {
+  if (currentReranker || currentRerankerMode === "none") return currentReranker;
+  if (lazyInitPromise) return lazyInitPromise;
+  const requestedMode = currentRerankerMode;
+  const promise = initReranker(requestedMode)
+    .then(() => currentRerankerMode === requestedMode ? currentReranker : null)
+    .catch((error) => {
+      console.warn(`[Reranker] lazy ${requestedMode} initialization failed; using hybrid ranking:`, error);
+      return null;
+    })
+    .finally(() => { if (lazyInitPromise === promise) lazyInitPromise = null; });
+  lazyInitPromise = promise;
+  return promise;
 }
 
 export function getReranker(): RerankerProvider | null {
@@ -112,7 +157,9 @@ export function getRerankerMode(): "standard" | "none" {
 }
 
 export function resetReranker(): void {
+  rerankerConfigVersion += 1;
   currentReranker = null;
   currentRerankerMode = "none";
+  lazyInitPromise = null;
   standardPipeline = null;
 }

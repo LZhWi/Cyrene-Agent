@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { DOCUMENT_CHUNK_OVERLAP, DOCUMENT_CHUNK_SIZE } from "./chunk";
+import { SEMANTIC_CHUNK_TARGET } from "./semantic-chunk";
 
 const { embeddingIdentity, userDataDir } = vi.hoisted(() => ({
   embeddingIdentity: {
@@ -59,9 +59,9 @@ describe("document cache", () => {
     expect(first.textSha256).toBe(second.textSha256);
     expect(first.embeddingProvider).toBeTruthy();
     expect(first.embeddingModel).toBeTruthy();
-    expect(first.chunkStrategyVersion).toBe("document-chunks-v1");
-    expect(first.chunkSize).toBe(DOCUMENT_CHUNK_SIZE);
-    expect(first.chunkOverlap).toBe(DOCUMENT_CHUNK_OVERLAP);
+    expect(first.chunkStrategyVersion).toBe("document-semantic-chunks-v2");
+    expect(first.chunkSize).toBe(SEMANTIC_CHUNK_TARGET);
+    expect(first.chunkOverlap).toBe(0);
   });
 
   it("invalidates when an OpenAI-compatible embedding endpoint changes", async () => {

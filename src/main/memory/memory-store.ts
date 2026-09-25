@@ -277,6 +277,7 @@ class MemoryStoreManager {
     const store = await this.load()
     store.l2 = store.l2.filter((m) => m.id !== id)
     store.evidence = (store.evidence ?? []).filter((evidence) => evidence.memoryId !== id)
+    store.l2DmaeStates = (store.l2DmaeStates ?? []).filter((state) => state.l2Id !== id)
     await this.save(store)
     appendMemoryTrace({
       op: "l2.delete",
@@ -725,6 +726,12 @@ class MemoryStoreManager {
     store.l2DmaeStates[idx] = merged
     await this.save(store)
     return merged
+  }
+
+  async deleteL2DmaeState(l2Id: string): Promise<void> {
+    const store = await this.load()
+    store.l2DmaeStates = (store.l2DmaeStates ?? []).filter((state) => state.l2Id !== l2Id)
+    await this.save(store)
   }
 
   async initL2DmaeStateIfMissing(l2Id: string): Promise<L2DmaeState> {

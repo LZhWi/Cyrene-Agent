@@ -35,6 +35,23 @@ describe("harness prompt builder", () => {
     expect(prompt).not.toContain("工具使用");
   });
 
+  it("keeps two-phase Chat Tool context limited to environment facts", () => {
+    const layers = buildHarnessPromptLayers({
+      soulSystemBaseContent: "COMPANION_PERSONA",
+      toolSystemContent: "COLLAB_TOOL_RULES",
+      soulRuntimeContext: "MEMORY RELATIONSHIP TONE",
+      runtimeEnvironmentContext: "ENVIRONMENT",
+      planSkillContext: "PLAN",
+      responseContext: "RESPONSE",
+      conversationMode: "chat",
+      chatResponseMode: "two-phase",
+    } as never);
+
+    expect(layers.stablePrefix).toContain("COLLAB_TOOL_RULES");
+    expect(layers.stablePrefix).not.toContain("TODO_WORKING_NOTEBOOK_POLICY");
+    expect(layers.runtimeContext).toBe("ENVIRONMENT");
+  });
+
   it("materializes runtime context as one internal transcript message", () => {
     const messages = materializeHarnessStartTranscript({
       messages: [{ role: "user", content: "继续" }],
@@ -53,5 +70,17 @@ describe("harness prompt builder", () => {
         runId: "run-prompt",
       },
     });
+  });
+
+  it("does not restore Todo context for a two-phase Chat tool run", () => {
+    const messages = materializeHarnessStartTranscript({
+      messages: [{ role: "user", content: "继续" }],
+      runId: "run-chat",
+      initialState: { todoItems: [{ id: "old", content: "旧任务", status: "pending" }], uncertainEffects: [] },
+      includeTodoContext: false,
+      kind: "recovery",
+    } as never);
+
+    expect(messages).toHaveLength(1);
   });
 });

@@ -6,6 +6,7 @@ import type {
   DefaultChatMode,
   MobileMessageSegmentationMode,
   ProactiveChatMode,
+  CompanionProactivePace,
   ProactiveDeliveryTarget,
   SegmentedOutputMode,
 } from "../../shared/preferences";
@@ -13,6 +14,7 @@ import type { CustomStyleConfig, StyleId } from "../../shared/style-sampling";
 import type { ToolModeOverrides } from "../orchestrator/tools/registry/tool-registry";
 import type { SkillModeOverrides } from "../skills/types";
 import type { LspServerOverride } from "../lsp/types";
+import type { ReasoningPreference } from "../../shared/reasoning";
 
 /**
  * 通用设置（GeneralSettings）：与模型配置无关的 UI、TTS、工具开关、快捷键等。
@@ -29,6 +31,16 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   chatSocialContextEnabled: boolean;
   /** 仅桌面 Chat 的日常聊天后端；其他模式与渠道始终使用上游原生实现。 */
   chatBackend: "native" | "companion";
+  /** 陪伴后端 Tool 阶段的独立推理偏好；默认关闭，不影响 Soul 回复阶段。 */
+  companionToolReasoning: ReasoningPreference;
+  /** 主动消息被回复或忽略时，是否更新 Companion 场景偏好。 */
+  companionFeedbackLearningEnabled: boolean;
+  /** 是否让 Companion 在后台定期观察屏幕，为主动聊天提供打扰判断。 */
+  companionScreenMonitorEnabled: boolean;
+  /** 是否向 Companion Chat 注入“你的生活”拟态日程。 */
+  companionLifeEnabled: boolean;
+  /** 每行一条 `MM-DD 标题` 或 `YYYY-MM-DD 标题` 的纪念日。 */
+  companionImportantDatesText: string;
   /** 朋友圈功能总开关：关闭后 UI 隐藏、Chat 上下文不注入、昔涟不反应不发帖。 */
   momentsEnabled: boolean;
   /** Chat 模式注入近期朋友圈动态背景；默认开启（只读本地数据，无额外 LLM 调用）。 */
@@ -46,6 +58,8 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   petVisible: boolean;
   /** 桌宠缩放因子：1.0=默认，0.5~2.0，窗口与模型同步等比缩放。 */
   petZoom: number;
+  /** 用户显式开启后，键鼠空闲时播放随机待机动作。 */
+  petIdleMotionsEnabled: boolean;
   /** 桌宠窗口 X 坐标，未保存时为 undefined */
   petWindowX?: number;
   /** 桌宠窗口 Y 坐标，未保存时为 undefined */
@@ -75,6 +89,7 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   /** 主动聊天功能开关占位；当前不接实际逻辑。 */
   proactiveChatMode: ProactiveChatMode;
+  companionProactivePace: CompanionProactivePace;
   /** 主动消息最终投递到本地、微信或飞书。 */
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   // TTS 配置

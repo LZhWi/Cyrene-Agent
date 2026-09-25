@@ -42,6 +42,8 @@ describe("harness tool runtime", () => {
         conversationMode: "work",
         settings: { provider: "test", baseUrl: "", model: "model", apiKey: "" },
         messages: [{ role: "user", content: "读文件" }],
+        imageAttachments: [{ name: "shot.png", filePath: "C:\\images\\shot.png" }],
+        visionConfig: { baseUrl: "https://vision.invalid/v1", apiKey: "key", model: "vision" },
         requestUserClarification: clarify,
         permissionMode: "prompt",
       } as never,
@@ -58,6 +60,10 @@ describe("harness tool runtime", () => {
     });
 
     expect(runtime.toolContext.signal).toBe(controller.signal);
+    expect(runtime.toolContext.imageAttachments).toEqual([
+      { name: "shot.png", filePath: "C:\\images\\shot.png" },
+    ]);
+    expect(runtime.toolContext.visionConfig?.model).toBe("vision");
     await runtime.checkPermission("read_file", { path: "x" });
     expect(checkPermission).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-1",

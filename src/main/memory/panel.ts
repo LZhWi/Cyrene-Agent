@@ -34,20 +34,7 @@ function formatReflectionItem(log: ReflectionLog): MemoryPanelItem {
   };
 }
 
-export async function loadMemoryPanelData(): Promise<{
-  l0: L0Profile;
-  l1: L1Profile;
-  l2: unknown[];
-  importedDocs: ImportedDocItem[];
-  reflections: MemoryPanelItem[];
-}> {
-  const [l0, l1, l2, reflectionLogs] = await Promise.all([
-    memoryStore.getL0(),
-    memoryStore.getL1(),
-    memoryStore.getAllL2(),
-    memoryStore.getReflectionLogs(),
-  ]);
-
+export async function loadImportedDocs(): Promise<ImportedDocItem[]> {
   let importedDocs: ImportedDocItem[] = [];
   const ragStorePath = getRagStorePath();
 
@@ -65,7 +52,6 @@ export async function loadMemoryPanelData(): Promise<{
         if (entry.source !== "imported_doc") continue;
         const fileName = entry.metadata?.fileName || "未命名文档";
         const importId = entry.metadata?.importId as string | undefined;
-        // 新数据按 importId 分组，旧数据按 fileName 分组
         const key = importId || "legacy:" + fileName;
         const existing = docsMap.get(key);
         if (existing) {
@@ -86,6 +72,24 @@ export async function loadMemoryPanelData(): Promise<{
   } catch (error) {
     console.warn("[settings] load imported docs failed:", error);
   }
+  return importedDocs;
+}
+
+export async function loadMemoryPanelData(): Promise<{
+  l0: L0Profile;
+  l1: L1Profile;
+  l2: unknown[];
+  importedDocs: ImportedDocItem[];
+  reflections: MemoryPanelItem[];
+}> {
+  const [l0, l1, l2, reflectionLogs] = await Promise.all([
+    memoryStore.getL0(),
+    memoryStore.getL1(),
+    memoryStore.getAllL2(),
+    memoryStore.getReflectionLogs(),
+  ]);
+
+  const importedDocs = await loadImportedDocs();
 
   return {
     l0,

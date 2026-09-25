@@ -32,6 +32,9 @@ const DEP_TO_FIELD: Record<string, keyof PluginDeps> = {
   "screen-observation": "screenObservation",
   "user-presence": "userPresence",
   "weather-context": "weatherContext",
+  "companion-context": "companionContext",
+  "proactive-documents": "proactiveDocuments",
+  "memory-retrieval": "memoryRetrieval",
   scheduler: "scheduler",
   "speech-input": "speechInput",
 };
@@ -64,6 +67,8 @@ export interface PluginRuntime {
   };
   registerIpc: (channel: string, handler: (...args: unknown[]) => unknown) => void;
   unregisterIpc: (channel: string) => void;
+  /** Host-only bridge for invoking a running plugin's registered IPC handler. */
+  invokeIpc?: (channel: string, args: unknown[]) => unknown;
   promptRegistry: Pick<PluginPromptRegistry, "register" | "unregister" | "registerStable" | "unregisterStable">;
   /** 宿主服务工厂；新宿主服务只允许从这里注入，不再向 PluginContext 增加特例。 */
   hostServices?: PluginHostServiceFactory;

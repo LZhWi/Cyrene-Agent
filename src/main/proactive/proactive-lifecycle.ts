@@ -14,7 +14,7 @@ import { shouldUseNativeProactiveChat } from "../orchestrator/chat-backend";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { GeneralSettings } from "../settings/general-settings";
 import { loadModelSettings } from "../settings/model-settings";
-import { loadUserProfile } from "../settings-store";
+import { loadUserProfile, resolveUserTimezone } from "../settings-store";
 import { createProactiveChatService } from "./proactive-service";
 import type {
   ProactiveChatService,
@@ -115,7 +115,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const snapshot = getProactiveRuntimeSnapshot();
     // 用户有效时区：resolver 校验后传给 prompt，禁止未校验的 profile.timezone。
     const profile = loadUserProfile();
-    const timezone = resolveChatContextTimezone(profile.timezone);
+    const timezone = resolveChatContextTimezone(resolveUserTimezone(profile));
     return buildProactiveMessages({
       basePersona: buildProactivePersonaPrompt(),
       userProfile: profileContext,
@@ -270,7 +270,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       evaluateCandidate: (c) => service.evaluateCandidate(c),
       getRuntimeSnapshot: getProactiveRuntimeSnapshot,
       getProactiveState: loadProactiveState,
-      getTimezone: () => resolveChatContextTimezone(loadUserProfile().timezone),
+      getTimezone: () => resolveChatContextTimezone(resolveUserTimezone(loadUserProfile())),
       // getWeatherContext 第一版不传：未来天气缓存接入后填，函数体无需改
       getLastEvaluatedAtByScene: () => new Map(proactiveBackoffMap),
       setLastEvaluatedAtByScene: (next) => {

@@ -1,5 +1,12 @@
 import path from "node:path";
-import type { PluginLlmService, PluginScreenObservationService, PluginUserPresenceService, PluginWeatherContextService } from "../../plugins/api";
+import type {
+  PluginCompanionContextService,
+  PluginProactiveDocumentContextService,
+  PluginLlmService,
+  PluginScreenObservationService,
+  PluginUserPresenceService,
+  PluginWeatherContextService,
+} from "../../plugins/api";
 import type { PluginHostServiceFactory } from "../../plugins/context";
 import type { ChatSession, ChatSessionMeta } from "../../shared/chat-types";
 import {
@@ -18,6 +25,7 @@ import {
   type PluginWorkspaceStoreReader,
 } from "./workspace-service";
 import { pluginHostError } from "./errors";
+import { createPluginMemoryRetrievalService } from "./memory-retrieval-service";
 
 /** 宿主服务装配所需的会话存储只读视图（列表 + 会话 + 工作区绑定）。 */
 export interface PluginHostChatsReader
@@ -43,6 +51,9 @@ export interface PluginHostServicesOptions {
   userPresence: PluginUserPresenceService;
   /** 不暴露城市或配置的只读天气快照。 */
   weatherContext: PluginWeatherContextService;
+  /** 可选的通话、Minecraft 与音乐只读上下文；没有数据源时不向插件暴露。 */
+  companionContext?: PluginCompanionContextService;
+  proactiveDocuments?: PluginProactiveDocumentContextService;
   /** 调度存储；必须在 store.load() 完成后再创建工厂，否则插件写入会覆盖磁盘数据。 */
   schedulerStore: PluginSchedulerStore;
   /** 独占语音输入租约服务；全局单例，由 plugin-runtime 创建一次后传入。 */
@@ -88,6 +99,11 @@ export function createHostServiceFactory(options: PluginHostServicesOptions): Pl
             ...input,
             signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal,
           }),
+          observeSnapshot: (input = {}) => options.screenObservation.observeSnapshot({
+            ...input,
+            signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal,
+          }),
+          markPeriodicUnavailable: () => options.screenObservation.markPeriodicUnavailable?.(),
         },
         userPresence: {
           snapshot: async () => {
@@ -103,6 +119,30 @@ export function createHostServiceFactory(options: PluginHostServicesOptions): Pl
             return snapshot;
           },
         },
+        ...(options.companionContext ? {
+          companionContext: {
+            snapshot: async (input) => {
+              if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止，陪伴上下文服务不可用");
+              const snapshot = await options.companionContext!.snapshot({
+                ...input,
+                signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal,
+              });
+              if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止，陪伴上下文服务不可用");
+              return snapshot;
+            },
+          },
+        } : {}),
+        ...(pluginId === "companion-chat" && options.proactiveDocuments ? {
+          proactiveDocuments: {
+            search: async (query, requestSignal) => {
+              if (signal.aborted || requestSignal?.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "文档检索已取消");
+              const result = await options.proactiveDocuments!.search(query, requestSignal);
+              if (signal.aborted || requestSignal?.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "文档检索已取消");
+              return result;
+            },
+          },
+        } : {}),
+        memoryRetrieval: createPluginMemoryRetrievalService(signal),
         scheduler: createPluginSchedulerService({
           pluginId,
           store: options.schedulerStore,

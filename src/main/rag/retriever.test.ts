@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { HybridRetriever } from "./retriever";
+import { HybridRetriever, rankDetachedMemoryCandidates } from "./retriever";
 import { JsonVectorStore } from "./vectorstore";
 import type { EmbeddingProvider } from "./embedding";
 
@@ -30,6 +30,54 @@ afterEach(() => {
 });
 
 describe("HybridRetriever", () => {
+  it("ranks detached plugin memories with the native hybrid and reranker chain", async () => {
+    const rerank = vi.fn(async (_query: string, documents: string[]) => documents.map((text) => ({ text, score: text.includes("beta") ? 1 : 0 })));
+    const result = await rankDetachedMemoryCandidates("deadline", [
+      { id: "a", text: "alpha schedule", embedding: [1, 0], weight: 1, lastRecalledAt: 1_000 },
+      { id: "b", text: "beta deadline", embedding: [0, 1], weight: 1, lastRecalledAt: 1_000 },
+    ], 2, { provider, reranker: { name: "test", rerank }, now: 1_000 });
+
+    expect(result.rankedIds).toEqual(["b", "a"]);
+    expect(result.vectorHitIds).toEqual(["b"]);
+    expect(result.ranked).toEqual([
+      { id: "b", score: 1, method: "reranker" },
+      { id: "a", score: 0, method: "reranker" },
+    ]);
+    expect(rerank).toHaveBeenCalledWith("deadline", expect.arrayContaining(["alpha schedule", "beta deadline"]));
+  });
+
+  it("supports a raw semantic channel without weight, decay, BM25, or reranker", async () => {
+    const rerank = vi.fn();
+    const result = await rankDetachedMemoryCandidates("deadline", [
+      { id: "a", text: "deadline lexical noise", embedding: [1, 0], weight: 5, lastRecalledAt: 1_000 },
+      { id: "b", text: "semantic match", embedding: [0, 1], weight: 0.1, lastRecalledAt: 0 },
+    ], 2, { provider, reranker: { name: "unused", rerank }, now: 10_000_000, mode: "semantic" });
+
+    expect(result.rankedIds).toEqual(["b"]);
+    expect(result.ranked).toEqual([{ id: "b", score: 1, method: "semantic" }]);
+    expect(rerank).not.toHaveBeenCalled();
+  });
+
+  it("falls back to native BM25 when no embedding provider is configured", async () => {
+    const result = await rankDetachedMemoryCandidates("蓝色丝带", [
+      { id: "other", text: "今天讨论天气", embedding: [], weight: 1, lastRecalledAt: 0 },
+      { id: "match", text: "蓝色丝带系在摆件上", embedding: [], weight: 1, lastRecalledAt: 0 },
+    ], 2, { provider: null, reranker: null });
+
+    expect(result.rankedIds[0]).toBe("match");
+    expect(result.vectorHitIds).toEqual([]);
+  });
+
+  it("offers the local user_memory lexical rescue channel independently of vectors", async () => {
+    const candidates = [
+      { id: "vector", text: "unrelated", embedding: [0, 1], weight: 1, lastRecalledAt: 1_000 },
+      { id: "lexical", text: "蓝色丝带系在摆件上", embedding: [1, 0], weight: 1, lastRecalledAt: 1_000 },
+    ];
+    const result = await rankDetachedMemoryCandidates("蓝色丝带", candidates, 2, { provider, reranker: null, mode: "lexical" });
+    expect(result.rankedIds[0]).toBe("lexical");
+    expect(result.vectorHitIds).toEqual([]);
+  });
+
   it("embeds document imports in bounded batches", async () => {
     const store = createStore();
     const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [1, 0]));

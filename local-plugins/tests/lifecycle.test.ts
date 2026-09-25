@@ -26,12 +26,32 @@ describe("人工确认的 L2 生命周期", () => {
     expect([...map.entries()]).toEqual(before);
   });
 
+  it("显式记忆工具即使未开启自动生命周期跟踪也记录 L2 访问", () => {
+    const { lifecycle, entries, map } = fixture();
+    lifecycle.record(["old"], entries, true);
+    expect((map.get("lifecycle-state") as any).recalls.old).toMatchObject({ hitCount: 1, weight: 1 });
+    expect(lifecycle.view().enabled).toBe(false);
+  });
+
   it("启用后只记录调用方确认的实际注入，并以最后注入时间覆盖来源时间", () => {
     const { lifecycle, entries, map } = fixture(); lifecycle.set(true);
     lifecycle.record(["old", "missing", "old"], entries);
     expect(lifecycle.view()).toMatchObject({ enabled: true, revision: 1, tracked: 1 });
     expect((map.get("lifecycle-state") as any).recalls.old).toMatchObject({ lastHitAt: 100 * DAY_MS, hitCount: 1, weight: 1 });
     expect(lifecycle.preview(entries, { days: 30 }).candidates).toEqual([]);
+  });
+
+  it("aging 记忆真实召回达到本地权重阈值后恢复 active，并保留可撤销快照", () => {
+    const data = fixture();
+    data.map.set("lifecycle-state", { version: 1, revision: 0, recalls: { aging: { lastHitAt: 1, hitCount: 4, weight: 29 } } });
+    const lifecycle = createLifecycle(data.storage, () => 100 * DAY_MS); lifecycle.set(true);
+    const recall = lifecycle.record(["aging"], data.memory.view().entries);
+    expect(recall).toEqual({ recordedIds: ["aging"], reactivateIds: ["aging"] });
+    const changed = data.memory.reactivateLifecycleEntries({ entryIds: recall.reactivateIds, revision: data.memory.view().revision });
+    expect(data.memory.view().entries.find((entry) => entry.id === "aging")?.status).toBe("active");
+    expect(changed.reactivated).toBe(1);
+    data.memory.undoLifecycleTransition({ id: changed.lifecycleChangeId, revision: data.memory.view().revision });
+    expect(data.memory.view().entries.find((entry) => entry.id === "aging")?.status).toBe("aging");
   });
 
   it("只有匹配当前预检的选择才能由记忆事务标为 aging", () => {

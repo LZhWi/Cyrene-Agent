@@ -59,4 +59,44 @@ describe("harness run preparation", () => {
       messages: expect.arrayContaining([{ role: "user", content: "materialized" }]),
     }));
   });
+
+  it("forces reasoning off for the two-phase Chat tool run", async () => {
+    const prepared = await prepareHarnessRun({
+      runId: "run-chat-tool",
+      conversationId: "thread-chat",
+      conversationMode: "chat",
+      chatResponseMode: "two-phase",
+      settings: { provider: "test", baseUrl: "", model: "model", apiKey: "", reasoning: { mode: "on" } },
+      messages: [{ role: "user", content: "看看屏幕" }],
+      toolSystemContent: "tools",
+      soulSystemBaseContent: "persona",
+    } as never, new AbortController().signal);
+
+    expect(prepared.vendorConfig.reasoning).toEqual({ mode: "off" });
+    expect(materializeHarnessStartTranscript).toHaveBeenCalledWith(expect.objectContaining({
+      includeTodoContext: false,
+    }));
+    expect(runStore.create).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({ reasoning: JSON.stringify({ mode: "off" }) }),
+    }));
+  });
+
+  it("uses the dedicated Tool reasoning preference without changing Soul settings", async () => {
+    const prepared = await prepareHarnessRun({
+      runId: "run-chat-tool-reasoning",
+      conversationId: "thread-chat",
+      conversationMode: "chat",
+      chatResponseMode: "two-phase",
+      toolReasoning: { mode: "on", effort: "high" },
+      settings: { provider: "test", baseUrl: "", model: "model", apiKey: "", reasoning: { mode: "off" } },
+      messages: [{ role: "user", content: "看看屏幕" }],
+      toolSystemContent: "tools",
+      soulSystemBaseContent: "persona",
+    } as never, new AbortController().signal);
+
+    expect(prepared.vendorConfig.reasoning).toEqual({ mode: "on", effort: "high" });
+    expect(runStore.create).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({ reasoning: JSON.stringify({ mode: "on", effort: "high" }) }),
+    }));
+  });
 });

@@ -63,12 +63,20 @@ import { shouldUseNativeChatSystems } from "./chat-backend";
 import { buildStickerEmbeddingQuery } from "../sticker-query";
 import { isPlanReadOnly, getPlanState } from "./plan-mode";
 import { policyFor, type ToolRiskLevel } from "../permission-policy";
+import type { VisionConfig } from "./vision-captioner";
+import { logPromptCacheSegments } from "./prompt-cache-diagnostics";
+
+const COMPANION_SOUL_TOOL_CORRECTION =
+  "注意：当前回复阶段工具调用环节已经结束，上面列出的工具现在不能也不需要调用——"
+  + "直接用对话里已有的工具结果（如有）自然回复即可，绝不要输出 <tool_call>、<invoke> 之类的调用指令文本。";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
  *  实际调用时由 index.ts 注入真实的强类型函数。这避免循环类型依赖。 */
 export interface BuildOptionsDeps {
   loadModelSettings: (modelProfileId?: string) => ModelSettingsLite;
+  /** 按本轮模型档案冻结视觉任务后端，供图片工具与当前对话保持一致。 */
+  loadVisionConfig?: (modelProfileId?: string) => VisionConfig | null;
   loadGeneralSettings: () => StyleSettingsLite;
   loadUserProfile: () => UserProfileLite;
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
@@ -103,6 +111,8 @@ export interface BuildOptionsDeps {
     messages: ReadonlyArray<{ role: string; content?: string }>,
     includeNativeChatContext?: boolean,
   ) => Promise<string>;
+  /** 陪伴后端只读复用宿主导入文档与实体图谱，不含宿主 L2。 */
+  buildReferenceInjection?: (userText: string) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
@@ -171,6 +181,8 @@ export interface BuildOptionsDeps {
     runId?: string;
     chatBackend?: "native" | "companion";
     timezone?: string;
+    referenceContext?: string;
+    target?: "soul" | "tool";
   }) => Promise<string>;
   /** 插件后端的人格稳定层；不接收本轮用户正文，空结果时回退上游原生人格。 */
   buildPluginStablePrompt?: (input: {
@@ -179,6 +191,7 @@ export interface BuildOptionsDeps {
     conversationId: string;
     channel?: string;
     runId?: string;
+    styleId?: StyleId;
     target: "soul" | "tool" | "tone" | "soul-tail";
   }) => Promise<string>;
 }
@@ -231,7 +244,7 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
-  /** 默认为 true；用户显式关闭时，图片先交给独立视觉模型转成文字。 */
+  /** 默认为 true；用户显式关闭时，图片先交给所选视觉任务后端转成文字。 */
   multimodal?: boolean;
   /** 上下文窗口大小（Token）。来自 ModelSettings.contextWindowTokens。 */
   contextWindowTokens?: number;
@@ -244,6 +257,7 @@ export interface StyleSettingsLite {
   customStyle?: unknown;
   chatSocialContextEnabled?: unknown;
   chatBackend?: unknown;
+  companionToolReasoning?: import("../../shared/reasoning").ReasoningPreference;
   /** 朋友圈总开关与 Chat 背景注入开关（moments-awareness 门控用）。 */
   momentsEnabled?: unknown;
   chatMomentsContextEnabled?: unknown;
@@ -261,6 +275,8 @@ export interface UserProfileLite {
   birthday?: string;
   defaultCity?: string;
   timezone?: string;
+  timezoneMode?: "system" | "manual";
+  weatherLocationMode?: "auto" | "fixed" | "off";
   gender?: string;
 }
 
@@ -477,6 +493,7 @@ export async function buildAgentRunOptions(
   deps: BuildOptionsDeps,
 ): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
   const settings = deps.loadModelSettings(input.modelProfileId);
+  const directVisionOk = settings.multimodal !== false;
   const styleSettings = deps.loadGeneralSettings();
   if (!settings.baseUrl) {
     throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");
@@ -500,6 +517,8 @@ export async function buildAgentRunOptions(
     channel: input.channel,
     chatBackend: input.chatBackendSnapshot ?? styleSettings.chatBackend,
   });
+  const useCompanionDesktopChat = !useNativeChatSystems && isChatMode
+    && resolvedMode === "chat" && !input.channel;
 
   // 读取可信工作区绑定（来自 Conversation Workspace Binding）。
   // 某些主进程入口（例如外部渠道共享上下文）只应复用文字历史，
@@ -530,18 +549,23 @@ export async function buildAgentRunOptions(
     && Boolean(deps.buildMomentsContext);
   const messagesForSoul = socialContextEnabled ? messages.slice(-12) : messages;
   const profile = deps.loadUserProfile();
-  const contextTimezone = resolveChatContextTimezone(profile.timezone);
+  const resolvedProfileTimezone = profile.timezoneMode === "manual" ? profile.timezone : "";
+  const resolvedDefaultCity = profile.weatherLocationMode === "off" ? "" : profile.defaultCity;
+  const contextTimezone = resolveChatContextTimezone(resolvedProfileTimezone);
   const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
     messagesForSoul as unknown as ChatContextMessage[],
     contextTimezone,
+    useCompanionDesktopChat ? "local-visible" : "private",
   );
   const slimLlmMessages = llmMessages as Array<{ role: string; content?: string }>;
 
   let alwaysOnContext = "";
-  try {
-    alwaysOnContext = await perf.track("build_always_on_context", () => deps.buildAlwaysOnContext(latestUserText, slimMessages, useNativeChatSystems));
-  } catch (err) {
-    console.warn("[Cyrene] always-on context build failed:", err);
+  if (useNativeChatSystems) {
+    try {
+      alwaysOnContext = await perf.track("build_always_on_context", () => deps.buildAlwaysOnContext(latestUserText, slimMessages, true));
+    } catch (err) {
+      console.warn("[Cyrene] always-on context build failed:", err);
+    }
   }
 
   let relationshipContext = "";
@@ -562,11 +586,17 @@ export async function buildAgentRunOptions(
         nickname: profile.nickname,
         callPreference: profile.callPreference,
         birthday: profile.birthday,
-        defaultCity: profile.defaultCity,
-        timezone: profile.timezone,
+        defaultCity: resolvedDefaultCity,
+        timezone: resolvedProfileTimezone,
         gender: profile.gender,
       },
     );
+    if (useCompanionDesktopChat) {
+      environmentContext = environmentContext.replace(
+        /^- 当前时间：(\d{4}-\d{2}-\d{2} [周星期]\S?) \d{2}:\d{2}（时区 ([^)]+)）$/m,
+        "- 今天日期：$1（时区 $2；精确的当前时间以对话消息的时间戳为准）",
+      );
+    }
   } catch (err) {
     console.warn("[Cyrene] environment context build failed:", err);
   }
@@ -639,8 +669,6 @@ export async function buildAgentRunOptions(
     }
   }
 
-  const useCompanionDesktopChat = !useNativeChatSystems && isChatMode
-    && resolvedMode === "chat" && !input.channel;
   let pluginToneRules = "";
   if (useCompanionDesktopChat) {
     try {
@@ -652,6 +680,15 @@ export async function buildAgentRunOptions(
       }) ?? "";
     } catch (error) {
       console.warn("[Cyrene] plugin tone rules build failed, falling back to native rules:", error);
+    }
+  }
+
+  let referenceContext = "";
+  if (!useNativeChatSystems && isChatMode && resolvedMode === "chat" && !input.channel) {
+    try {
+      referenceContext = await deps.buildReferenceInjection?.(latestUserText) ?? "";
+    } catch (err) {
+      console.warn("[Cyrene] companion reference context build failed:", err);
     }
   }
   let toneInjection = "";
@@ -694,6 +731,7 @@ export async function buildAgentRunOptions(
       ...(input.promptSource === "plugin-agent" ? {} : {
         chatBackend: useNativeChatSystems ? "native" as const : "companion" as const,
         timezone: contextTimezone,
+        referenceContext: useCompanionDesktopChat ? referenceContext : undefined,
       }),
     }) ?? "";
   } catch (error) {
@@ -705,7 +743,9 @@ export async function buildAgentRunOptions(
   // work/code 完全不受 style 影响：不注入风格 prompt，采样走厂商默认。
   // chat/learn + default 也走厂商默认采样（不自己设 0.65）；
   // 只有显式选了非 default 的具体 style 才用预设采样。
-  const stylePromptBlock = isTaskMode
+  // companion 的五种内建风格由插件稳定人格提供，避免宿主上游版本再次注入造成冲突或重复。
+  // custom 仍使用上游自定义提示词入口；native／其他模式保持原行为。
+  const stylePromptBlock = isTaskMode || (useCompanionDesktopChat && styleId !== "custom")
     ? ""
     : buildStylePromptBlock(deps.readStylePrompt(styleId));
   const soulSampling = (!isTaskMode && styleId !== "default")
@@ -814,7 +854,18 @@ export async function buildAgentRunOptions(
       ? { defaultExecutionMode: (s.manifest as Record<string, unknown>).defaultExecutionMode as "direct" | "plan" }
       : {}),
   })).filter((s) => s.id);
-  const runTools = capabilities.tools;
+  // 主模型已经接收原图时不再暴露二次看图工具；caption 路线仍保留它，供
+  // 模型针对转述未覆盖的细节追问视觉后端。工具目录与实际执行白名单共用此快照。
+  const runTools = directVisionOk
+    ? capabilities.tools.filter((tool) => tool.id !== "ask_attached_image")
+    : capabilities.tools;
+  const runCapabilities: RunCapabilities = runTools.length === capabilities.tools.length
+    ? capabilities
+    : {
+      ...capabilities,
+      tools: runTools,
+      toolIds: new Set(runTools.map((tool) => tool.id)),
+    };
   const searchToolIds = filteredBySearch
     .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
     .map((t) => t.id);
@@ -826,10 +877,28 @@ export async function buildAgentRunOptions(
         source: "conversation",
         mode: resolvedMode,
         conversationId,
+        styleId,
         target: "soul",
       }) ?? "";
     } catch (error) {
       console.warn("[Cyrene] plugin stable prompt build failed, falling back to native persona:", error);
+    }
+  }
+  let pluginToolContext = "";
+  if (useCompanionDesktopChat) {
+    try {
+      pluginToolContext = await deps.buildPluginPromptContext?.({
+        source: "conversation",
+        mode: resolvedMode,
+        userText: latestUserText,
+        conversationId,
+        runId: input.runId,
+        chatBackend: "companion",
+        timezone: contextTimezone,
+        target: "tool",
+      }) ?? "";
+    } catch (error) {
+      console.warn("[plugins] 构建插件 Tool 动态上下文失败，已跳过", error);
     }
   }
   const baseSoulSystemPrompt = pluginStablePrompt || deps.buildModePrompt?.(resolvedMode)
@@ -841,6 +910,7 @@ export async function buildAgentRunOptions(
         source: "conversation",
         mode: resolvedMode,
         conversationId,
+        styleId,
         target: "tool",
       }) ?? "";
     } catch (error) {
@@ -860,15 +930,16 @@ export async function buildAgentRunOptions(
         source: "conversation",
         mode: resolvedMode,
         conversationId,
+        styleId,
         target: "soul-tail",
       }) ?? "";
     } catch (error) {
       console.warn("[Cyrene] plugin Soul tail build failed, continuing without final anchor:", error);
     }
   }
-  if (pluginSoulTail) {
+  if (useCompanionDesktopChat) {
     const tailClock = `[当前时间] ${formatLocalTime(Date.now(), contextTimezone)}（仅供你感知当下时刻，不要复述）`;
-    pluginSoulTail = `${tailClock}\n\n${pluginSoulTail}`;
+    pluginSoulTail = pluginSoulTail ? `${tailClock}\n\n${pluginSoulTail}` : tailClock;
   }
 
   // ⚠️ 缓存契约：本函数产出的 system prompt 分层（stablePrefix vs 尾部 runtime）
@@ -886,6 +957,7 @@ export async function buildAgentRunOptions(
     + (conversationTimeContext.includes("## Internal Context Policy") ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0] : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
+    + (pluginToolContext ? "\n\n---\n\n" + pluginToolContext : "")
     + (resolvedWorkspaceRoot
       ? `\n\n[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}`
         + (workspaceMeta?.projectName ? `\n项目名称：${workspaceMeta.projectName}` : "")
@@ -894,40 +966,62 @@ export async function buildAgentRunOptions(
       : "");
 
 
-  // Soul 的稳定前缀只保留固定人设/渠道。每轮变化的事实在请求尾部注入，
-  // 使厂商提示词缓存可以复用同一个前缀。
-  // 工具结果以 role:tool 消息写回单循环 transcript。
+  // 原生模式继续保留上游的稳定人格前缀。陪伴桌面 Chat 则按本地 2FC 的
+  // system 内部顺序组装完整 Soul：环境/时间 → 人格 → 语气 →
+  // life/记忆/世界书 → 引用与附件。这里有意接受动态前缀降低缓存命中，
+  // 以保证最终 Soul 看到的角色、顺序和近因权重与本地版一致。
   const soulSystemWithoutCita =
     (channelSystem ? channelSystem + "\n\n" : "") +
     baseSoulSystemPrompt;
-  const soulSystemBaseContent = soulSystemWithoutCita;
-  // 仅桌面 Chat 把插件资料放在画像/世界书前；稳定前缀与消息结构保持不变。
+  const companionSoulSystemContent = useCompanionDesktopChat
+    ? (environmentContext ? `${environmentContext}\n\n${COMPANION_SOUL_TOOL_CORRECTION}\n\n` : "")
+      + (conversationTimeContext ? `${conversationTimeContext}\n\n---\n\n` : "")
+      + (channelSystem ? `${channelSystem}\n\n` : "")
+      + baseSoulSystemPrompt
+      + (stylePromptBlock ? `\n\n---\n\n${stylePromptBlock}` : "")
+      + (skillCatalog ? `\n\n---\n\n${skillCatalog}` : "")
+      + (autoInjectedSkillContext ? `\n\n---\n\n${autoInjectedSkillContext}` : "")
+      + (autoInjectedSoulContext ? `\n\n---\n\n${autoInjectedSoulContext}` : "")
+      + skillActivation
+      + toneInjection
+      + (pluginPromptContext ? `${pluginPromptContext}\n\n` : "")
+      + (chatSocialContextBlock ? `${chatSocialContextBlock}\n\n` : "")
+      + (momentsContextBlock ? `${momentsContextBlock}\n\n` : "")
+      + (relationshipContext ? `${relationshipContext}\n\n` : "")
+      + attachmentContext
+    : "";
+  const soulSystemBaseContent = useCompanionDesktopChat
+    ? companionSoulSystemContent
+    : soulSystemWithoutCita;
+  // 原生桌面 Chat 沿用上游既有资料排序；这里只改变 companion 后端。
   const useDesktopChatContextOrder = isChatMode && resolvedMode === "chat"
     && !input.channel && input.promptSource !== "plugin-agent";
-  const soulRuntimeContext = [
-    environmentContext,
-    conversationTimeContext,
-    ...(useDesktopChatContextOrder ? [] : [chatSocialContextBlock]),
-    momentsContextBlock,
-    stylePromptBlock,
-    autoInjectedSoulContext,
-    skillActivation,
-    toneInjection,
-    ...(useDesktopChatContextOrder ? [pluginPromptContext, chatSocialContextBlock] : []),
-    alwaysOnContext,
-    relationshipContext,
-    attachmentContext,
-    ...(useDesktopChatContextOrder ? [] : [pluginPromptContext]),
-  ].filter((context): context is string => Boolean(context?.trim())).join("\n\n---\n\n");
+  const soulRuntimeContext = useCompanionDesktopChat
+    ? ""
+    : [
+      environmentContext,
+      conversationTimeContext,
+      ...(useDesktopChatContextOrder ? [] : [chatSocialContextBlock]),
+      momentsContextBlock,
+      stylePromptBlock,
+      autoInjectedSoulContext,
+      skillActivation,
+      toneInjection,
+      ...(useDesktopChatContextOrder ? [pluginPromptContext, chatSocialContextBlock] : []),
+      referenceContext,
+      alwaysOnContext,
+      relationshipContext,
+      attachmentContext,
+      ...(useDesktopChatContextOrder ? [] : [pluginPromptContext]),
+    ].filter((context): context is string => Boolean(context?.trim())).join("\n\n---\n\n");
 
   // 原始 messages 不携带 system。system 由 chat-loop / harness-adapter 按 promptLayers 组装。
-  // `multimodal=false` is an explicit user decision: never send image bytes to
-  // the main model.  Describe first with the independent vision model, then
-  // give Harness only the resulting text context.
+  // `multimodal=false` is an explicit user decision: never attach image bytes
+  // to the main chat request. Describe first with the selected vision backend,
+  // then give Harness only the resulting text context.
   // 直发判定只看用户开关：能力对错交给服务端仲裁（400 时 chat-loop 会用
   // imageCaptionFallback 自动降级重试）。不维护「哪个协议支持发图」的静态表——
   // 该信息必然滞后于服务端实际状态（MiniMax /anthropic 支持发图晚于文档标注）。
-  const directVisionOk = settings.multimodal !== false;
   // [image-send] 链路日志①：直发判定。图片"传不过去"先看这条——
   // direct=false 时图片走 caption 降级/文本占位，根本不会以 image 块发给主模型。
   if (input.imageAttachments?.length) {
@@ -956,6 +1050,29 @@ export async function buildAgentRunOptions(
     )
     : undefined;
 
+  logPromptCacheSegments("tool", [
+    { name: "toolRulesAndCatalog", content: toolSystemContent },
+    { name: "pluginDynamicContext", content: pluginToolContext },
+  ]);
+  logPromptCacheSegments("soul", [
+    { name: "environment", content: environmentContext },
+    { name: "conversationTime", content: conversationTimeContext },
+    { name: "persona", content: baseSoulSystemPrompt },
+    { name: "style", content: stylePromptBlock },
+    { name: "skillCatalog", content: skillCatalog },
+    { name: "autoInjectedSkill", content: autoInjectedSkillContext },
+    { name: "autoInjectedSoul", content: autoInjectedSoulContext },
+    { name: "slashSkillActivation", content: skillActivation },
+    { name: "tone", content: toneInjection },
+    { name: "pluginDynamicContext", content: pluginPromptContext },
+    { name: "social", content: chatSocialContextBlock },
+    { name: "moments", content: momentsContextBlock },
+    { name: "reference", content: referenceContext },
+    { name: "relationship", content: relationshipContext },
+    { name: "attachments", content: attachmentContext },
+    { name: "tailAnchor", content: pluginSoulTail },
+  ]);
+
   return {
     options: {
       settings: {
@@ -967,6 +1084,7 @@ export async function buildAgentRunOptions(
         reasoning: settings.reasoning,
         contextWindowTokens: settings.contextWindowTokens ?? 256000,
       },
+      toolReasoning: generalSettings.companionToolReasoning ?? { mode: "off" },
       maxParallelToolCalls: typeof generalSettings.maxParallelToolCalls === "number"
         ? Math.max(1, Math.min(8, Math.trunc(generalSettings.maxParallelToolCalls)))
         : 4,
@@ -1002,8 +1120,10 @@ export async function buildAgentRunOptions(
         },
       } : {}),
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
+      ...(input.imageAttachments?.length ? { imageAttachments: input.imageAttachments.map((image) => ({ ...image })) } : {}),
+      ...(deps.loadVisionConfig ? { visionConfig: deps.loadVisionConfig(input.modelProfileId) } : {}),
       tools: [...runTools],
-      capabilities,
+      capabilities: runCapabilities,
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
       resolvedWorkspaceRoot,
     },

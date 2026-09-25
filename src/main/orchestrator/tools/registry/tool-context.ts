@@ -5,6 +5,7 @@
 import type { ChatMessage } from "../../vendors";
 import { ContextRefRegistry } from "../../context-ref-registry";
 import type { ConversationMode } from "../../../../shared/chat-types";
+import type { VisionConfig } from "../../vision-captioner";
 
 export const contextRefRegistry = new ContextRefRegistry();
 
@@ -14,6 +15,10 @@ export interface ToolContext {
   userQuery: string;
   /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
   conversationId?: string;
+  /** 当前用户轮次附带的图片；仅允许工具从这份冻结列表选择，不能自行翻历史附件。 */
+  imageAttachments?: ReadonlyArray<{ name: string; filePath: string; mime?: string }>;
+  /** 本轮按会话模型档案冻结的视觉任务后端。 */
+  visionConfig?: VisionConfig | null;
   /** One Agent execution; resolved-only candidates must not cross this boundary. */
   runId?: string;
   /** Tool Runtime-owned opaque reference registry. */

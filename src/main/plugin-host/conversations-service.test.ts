@@ -7,6 +7,7 @@ interface FixtureSession {
   id: string;
   title: string;
   mode: ChatSessionMeta["mode"];
+  purpose?: ChatSessionMeta["purpose"];
   createdAt: number;
   updatedAt: number;
   messages: ChatMessage[];
@@ -126,6 +127,27 @@ describe("插件会话列表服务", () => {
 });
 
 describe("插件会话消息服务", () => {
+  it("仅把已保存的图片描述投影给插件，不暴露图片路径或像素", async () => {
+    const reader = makeReader([{
+      id: "visual", title: "图片会话", mode: "chat", createdAt: 1, updatedAt: 2,
+      messages: [{
+        ...msg("user-image", "user", "看看这个", 1000),
+        attachments: [{ kind: "image", name: "scene.png", filePath: "C:/private/scene.png", mime: "image/png", status: "done", visualIndexCaption: "蓝色丝带系在摆件上", visualIndexSummary: "蓝色丝带系在小摆件上", visualIndexedAt: 900 }],
+      }],
+    }]);
+    const page = await service(reader).getMessages({ conversationId: "visual" });
+    expect(page.items[0].images).toEqual([{ name: "scene.png", caption: "蓝色丝带系在摆件上", summary: "蓝色丝带系在小摆件上", indexedAt: 900 }]);
+    expect(JSON.stringify(page.items[0])).not.toContain("C:/private/scene.png");
+  });
+
+  it("主动会话以 purpose 标识，改标题也不会被误判为普通会话", async () => {
+    const page = await service(makeReader([{
+      id: "proactive-1", title: "用户改过的标题", mode: "chat", purpose: "proactive-chat",
+      createdAt: 1700000000000, updatedAt: 1700000100000, messages: [],
+    }])).list();
+    expect(page.items[0].purpose).toBe("proactive-chat");
+  });
+
   function fixture(): { reader: ReturnType<typeof makeReader>; svc: ReturnType<typeof service> } {
     const session: FixtureSession = {
       id: "conv-1",
@@ -192,6 +214,20 @@ describe("插件会话消息服务", () => {
     for (const item of [...page1.items, ...page2.items, ...page3.items]) {
       expect(Object.keys(item).sort()).toEqual(["at", "id", "role", "text"]);
     }
+  });
+
+  it("只对历史检索请求转换表情包，且分页不能切换投影", async () => {
+    const { reader, svc } = fixture();
+    reader.find("conv-1")!.messages[0] = {
+      ...msg("m1", "user", "你好 [sticker:HI]", 1000),
+      modelContext: "【文档内容】临时节选",
+    };
+    const raw = await svc.getMessages({ conversationId: "conv-1", limit: 1 });
+    expect(raw.items[0].text).toBe("你好 [sticker:HI]");
+    const history = await svc.getMessages({ conversationId: "conv-1", limit: 1, historyProjection: true });
+    expect(history.items[0].text).toBe("你好 （用户发送表情包：嗨，想我了吗）");
+    expect(Object.keys(history.items[0]).sort()).toEqual(["at", "id", "role", "text"]);
+    await expectHostError(svc.getMessages({ conversationId: "conv-1", cursor: history.nextCursor }), "E_INVALID_ARGUMENT");
   });
 
   it("冻结终点后的新增消息不会混入后续页", async () => {

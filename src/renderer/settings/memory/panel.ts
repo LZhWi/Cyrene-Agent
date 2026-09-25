@@ -15,6 +15,16 @@ import {
 import { renderInfoList, renderEmptyState } from "../shared/render";
 import { shallowEqual } from "../shared/utils";
 import { formatDateTime, escapeHtml } from "../shared/format";
+import { showModal } from "../shared/modal";
+
+function formatL2MemoryTimeMeta(item: NonNullable<typeof memoryState.panelCache>["l2"][number]): string {
+  if (typeof item.sourceAt !== "number") return `创建于：${formatDateTime(item.createdAt)}`;
+  const sourceStart = formatDateTime(item.sourceAt);
+  const sourceEnd = typeof item.sourceEndAt === "number" && item.sourceEndAt !== item.sourceAt
+    ? ` ～ ${formatDateTime(item.sourceEndAt)}`
+    : "";
+  return `来源于：${sourceStart}${sourceEnd} · 写入于：${formatDateTime(item.createdAt)}`;
+}
 
 function renderL2List(query = ""): void {
   const list = memoryState.panelCache?.l2 ?? [];
@@ -26,17 +36,108 @@ function renderL2List(query = ""): void {
       })
     : list;
 
-  renderInfoList(
-    memoryL2List,
-    filtered.map((item) => ({
-      title: item.content,
-      body: item.triggerText ? `触发片段：${item.triggerText}` : "无触发片段",
-      meta: `状态：${item.status} · 权重：${item.weight.toFixed(1)} · 创建于：${formatDateTime(item.createdAt)}`,
-    })),
-    normalized ? "没有匹配的事件片段" : "暂无事件片段",
-    normalized ? "换个关键词试试" : "聊天后昔涟会自动提炼重要信息",
-  );
+  if (!memoryL2List) return;
+  if (filtered.length === 0) {
+    renderEmptyState(
+      memoryL2List,
+      normalized ? "没有匹配的事件记忆" : "暂无事件记忆",
+      normalized ? "换个关键词试试" : "聊天后昔涟会自动提炼重要信息",
+    );
+    return;
+  }
+
+  memoryL2List.innerHTML = filtered.map((item) => [
+    `<article class="memory-record memory-record--doc" data-l2-id="${escapeHtml(item.id)}">`,
+    '  <div class="memory-record__main">',
+    `    <h3 class="memory-record__title">${escapeHtml(item.content)}</h3>`,
+    `    <p class="memory-record__body">${escapeHtml(item.triggerText ? `触发片段：${item.triggerText}` : "无触发片段")}</p>`,
+    `    <p class="memory-record__meta">${escapeHtml(`状态：${item.status} · 权重：${item.weight.toFixed(1)} · ${formatL2MemoryTimeMeta(item)}`)}</p>`,
+    '  </div>',
+    '  <div class="memory-record__actions">',
+    '    <button type="button" class="memory-record__edit" title="编辑此记忆">✏️</button>',
+    '    <button type="button" class="memory-record__delete" title="删除此记忆">🗑️</button>',
+    '  </div>',
+    '</article>',
+  ].join("\n")).join("\n");
 }
+
+memoryL2SearchInput?.addEventListener("input", () => renderL2List(memoryL2SearchInput.value));
+
+memoryL2List?.addEventListener("click", async (event) => {
+  const target = event.target as HTMLElement | null;
+  const record = target?.closest<HTMLElement>("[data-l2-id]");
+  const id = record?.dataset.l2Id || "";
+  const item = memoryState.panelCache?.l2.find((entry) => entry.id === id);
+  if (!record || !item) return;
+
+  if (target?.closest(".memory-record__edit")) {
+    record.innerHTML = [
+      '  <div class="memory-record__main">',
+      `    <textarea class="memory-record__editor" maxlength="2000" aria-label="编辑记忆内容">${escapeHtml(item.content)}</textarea>`,
+      `    <p class="memory-record__body">${escapeHtml(item.triggerText ? `触发片段（不会修改）：${item.triggerText}` : "无触发片段")}</p>`,
+      `    <p class="memory-record__meta">${escapeHtml(`状态：${item.status} · 权重：${item.weight.toFixed(1)} · ${formatL2MemoryTimeMeta(item)}`)}</p>`,
+      '  </div>',
+      '  <div class="memory-record__actions">',
+      '    <button type="button" class="memory-record__save">保存</button>',
+      '    <button type="button" class="memory-record__cancel">取消</button>',
+      '  </div>',
+    ].join("\n");
+    const editor = record.querySelector<HTMLTextAreaElement>(".memory-record__editor");
+    editor?.focus();
+    editor?.setSelectionRange(editor.value.length, editor.value.length);
+    return;
+  }
+
+  if (target?.closest(".memory-record__cancel")) {
+    renderL2List(memoryL2SearchInput?.value || "");
+    return;
+  }
+
+  if (target?.closest(".memory-record__save")) {
+    const editor = record.querySelector<HTMLTextAreaElement>(".memory-record__editor");
+    const content = editor?.value.trim() || "";
+    if (!content) {
+      await showModal({ title: "无法保存", message: "记忆内容不能为空。", icon: "⚠️", confirmText: "知道了" });
+      return;
+    }
+    record.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = true; });
+    try {
+      const result = await window.memoryPanel?.editL2(id, content);
+      if (!result?.ok) throw new Error(result?.error || "编辑失败");
+      await loadMemoryPanel();
+      if (!result.indexed) {
+        await showModal({
+          title: "正文已保存",
+          message: "新的语义索引暂时未能建立，这条记忆在索引修复前不会被自动召回。",
+          icon: "⚠️",
+          confirmText: "知道了",
+        });
+      }
+    } catch (error) {
+      record.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = false; });
+      await showModal({ title: "编辑失败", message: error instanceof Error ? error.message : String(error), icon: "⚠️", confirmText: "知道了" });
+    }
+    return;
+  }
+
+  if (target?.closest(".memory-record__delete")) {
+    const confirmed = await showModal({
+      title: "删除事件记忆",
+      message: `确定删除这条记忆？\n\n${item.content}\n\n删除后不可恢复。`,
+      icon: "⚠️",
+      confirmText: "删除",
+      cancelText: "取消",
+    });
+    if (!confirmed) return;
+    try {
+      const result = await window.memoryPanel?.deleteL2(id);
+      if (!result?.ok) throw new Error(result?.error || "删除失败");
+      await loadMemoryPanel();
+    } catch (error) {
+      await showModal({ title: "删除失败", message: error instanceof Error ? error.message : String(error), icon: "⚠️", confirmText: "知道了" });
+    }
+  }
+});
 
 export async function loadMemoryPanel(): Promise<void> {
   try {

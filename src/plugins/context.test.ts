@@ -18,6 +18,10 @@ afterEach(() => {
   }
 });
 
+it("插件停用清理超时统一为 120 秒", () => {
+  expect(PLUGIN_CLEANUP_TIMEOUT_MS).toBe(120_000);
+});
+
 function runtime(): PluginRuntime & { tools: string[]; ipc: Map<string, unknown> } {
   const tools: string[] = [];
   const ipc = new Map<string, unknown>();
@@ -358,6 +362,20 @@ describe("createContext", () => {
     const ctx = createTestContext(rt, ["assistant-delivery"]);
     await expect(ctx.deps.assistantDelivery?.postProactiveMessage("你好")).resolves.toMatchObject({ messageId: "message-1" });
     expect(postProactiveMessage).toHaveBeenCalledWith("你好");
+  });
+
+  it("companion-context 只有显式声明后才注入", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const snapshot = vi.fn(async () => ({ items: [{ kind: "call" as const, content: "通话上下文" }] }));
+    const rt = runtime();
+    rt.hostServices = {
+      createForPlugin: () => ({ companionContext: { snapshot } }),
+    };
+    expect(createTestContext(rt).deps.companionContext).toBeUndefined();
+    const ctx = createTestContext(rt, ["companion-context"]);
+    await expect(ctx.deps.companionContext?.snapshot({ userText: "继续" })).resolves.toEqual({
+      items: [{ kind: "call", content: "通话上下文" }],
+    });
   });
 
   it("包装 llm 服务时保留宿主提供的 runGoal", () => {

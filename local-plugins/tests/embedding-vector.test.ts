@@ -113,6 +113,13 @@ describe("旧 user_memory 向量只读迁移", () => {
     expect(index.relatedPairs(["a", "c"], 0.82).pairs).toEqual([]);
     expect(data.map.get("vector-index")).toEqual(before);
   });
+  it("原生检索命中按本地时序更新权重和最近召回时间", () => {
+    const data = storage(), index = createVectorIndex(data.value), vector = [1, ...Array(63).fill(0)];
+    index.upsertGenerated([{ l2Id: "hit", embedding: vector, contentHash: "a".repeat(64) }], 64);
+    expect(index.records(["hit"])[0]).toMatchObject({ id: "hit", weight: 1 });
+    index.recordSearchHits(["hit"], 1234);
+    expect(index.records(["hit"])[0]).toMatchObject({ id: "hit", weight: 1.05, lastRecalledAt: 1234 });
+  });
   it("撤销压缩可只移除对应生成向量，不影响旧向量", () => {
     const data = storage(), index = createVectorIndex(data.value), vector = [1, ...Array(63).fill(0)];
     index.upsertGenerated([{ l2Id: "summary", embedding: vector, contentHash: "a".repeat(64) }, { l2Id: "other", embedding: vector, contentHash: "b".repeat(64) }], 64);

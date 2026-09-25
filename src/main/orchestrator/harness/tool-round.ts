@@ -28,6 +28,7 @@ import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 import { isToolBreakerTripped, nextToolFailureStreak, toolBreakerMessage } from "./tool-breaker";
 import { isCancellationError, raceWithSignal } from "../../abort-utils";
 import type { HarnessRun } from "./cyrene-harness";
+import { truncateLocalToolResult } from "./local-two-phase-transcript";
 
 /** 工具轮结果：completed = 结果已全部写回，继续下一轮；cancelled = 用户取消。 */
 export type ToolRoundOutcome = "completed" | "cancelled";
@@ -141,7 +142,7 @@ async function runAskUserRound(
   for (const call of askCalls.slice(1)) {
     input.onToolLifecycle?.({ toolCallId: call.id, toolName: call.name, toolSideEffect: "read_only", status: "not_executed" });
     notifyToolFinished(run, call, "not_executed");
-    run.messages.push(toolResultMessage(call, {
+    run.messages.push(toolResultMessage(run, call, {
       outcome: "not_executed",
       reason: "not_executed_due_to_another_ask",
     }));
@@ -156,7 +157,7 @@ async function runAskUserRound(
       status: "not_executed",
     });
     notifyToolFinished(run, call, "not_executed");
-    run.messages.push(toolResultMessage(call, {
+    run.messages.push(toolResultMessage(run, call, {
       outcome: "not_executed",
       reason: "not_executed_due_to_clarification",
     }));
@@ -178,7 +179,7 @@ async function runAskUserRound(
   }
   run.clock.stopUserWait();
 
-  run.messages.push(toolResultMessage(primaryAsk, askResult));
+  run.messages.push(toolResultMessage(run, primaryAsk, askResult));
   input.onToolLifecycle?.({
     toolCallId: primaryAsk.id,
     toolName: primaryAsk.name,
@@ -259,7 +260,7 @@ async function commitToolResult(
     // Diff Review 卡片证据走独立字段，不受 preview 截断影响
     changes: extractFileChangesFromOutput(result.output),
   });
-  run.messages.push(toolResultMessage(call, result));
+  run.messages.push(toolResultMessage(run, call, result));
   input.onToolLifecycle?.({
     toolCallId: call.id,
     toolName: call.name,
@@ -298,9 +299,23 @@ async function commitToolResult(
  * 长工具输出则必须只写入剪枝后的 preview，不能绕过截断再次注入模型上下文。
  */
 function toolResultMessage(
+  run: HarnessRun,
   call: ToolCall,
   observation: ToolObservation | { outcome: string; reason: string },
 ): ChatMessage {
+  if (run.input.transcriptPolicy === "local-two-phase") {
+    const value = observation as ToolObservation & { reason?: string };
+    const raw = value.output
+      ?? (value.outcome === "failure"
+        ? `[工具执行失败] ${value.message ?? value.reason ?? "工具执行失败"}`
+        : value.message ?? value.reason ?? "");
+    return {
+      role: "tool",
+      toolCallId: call.id,
+      name: call.name,
+      content: truncateLocalToolResult(raw),
+    };
+  }
   const modelObservation = { ...observation } as Record<string, unknown>;
   // dispatcher 的 message / preview / output 在未截断时通常是同一正文；全部回传会让
   // Tool 后续轮和 Soul handoff 各看到三份结果。模型侧只保留一个 output，运行时完整

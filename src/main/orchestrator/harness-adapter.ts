@@ -54,6 +54,7 @@ export async function runHarnessWithAdapter(
   sendBaseEvent: (event: BaseEvent) => void,
   finalHandoff?: HarnessFinalHandoff,
 ): Promise<AgentLoopResult> {
+  const toolOnlyChat = options.conversationMode === "chat" && options.chatResponseMode === "two-phase";
   // 准备阶段创建唯一的 runStore 实例；checkpoint、工具生命周期和终态都写入它。
   const prepared = await prepareHarnessRun(options, signal);
   const {
@@ -77,6 +78,7 @@ export async function runHarnessWithAdapter(
   // ── 构建 HarnessInput ──
   const harnessInput: HarnessInput = {
     systemPrompt,
+    ...(toolOnlyChat ? { transcriptPolicy: "local-two-phase" as const } : {}),
     promptLayers: harnessPromptLayers,
     usageParts: promptLayers.usageParts,
     messages: runMessages,
@@ -87,6 +89,8 @@ export async function runHarnessWithAdapter(
     vendorConfig,
     config: {
       maxParallelToolCalls: options.maxParallelToolCalls,
+      // 陪伴 Chat 与本地 2FC 一致：避免工具模型失控时无限循环。
+      ...(toolOnlyChat ? { maxRounds: 20 } : {}),
       // 0 表示禁用整轮执行时钟；单次模型/工具超时仍由各自策略处理。
       totalTimeoutMs: 0,
       contextWindowTokens: options.settings.contextWindowTokens,
@@ -128,6 +132,7 @@ export async function runHarnessWithAdapter(
       ? (card) => options.requestUserClarification!(card as never, signal)
       : undefined,
     includeInteractiveTools: options.harnessInteractiveTools,
+    includeTaskOrientedTools: !toolOnlyChat,
     planState,
     toolContext,
     toolOutputStore,

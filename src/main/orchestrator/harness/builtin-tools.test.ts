@@ -35,6 +35,17 @@ describe("Harness user-wait builtins", () => {
       .toEqual(["update_todo", "read_tool_result"]);
   });
 
+  it("keeps safety and large-result tools while hiding task-oriented tools in two-phase Chat", () => {
+    expect(getHarnessBuiltinToolSpecs({
+      includeTodo: false,
+      includeTask: false,
+    }).map((tool) => tool.name)).toEqual([
+      "ask_user",
+      "confirm_uncertain_effect",
+      "read_tool_result",
+    ]);
+  });
+
   it("validates and delegates a foreground task without exposing its prompt", async () => {
     const executor = vi.fn(async () => ({ taskId: "task-1", status: "completed" as const, text: "已检查。" }));
     const result = await executeTask({ id: "task-call", name: "task", arguments: JSON.stringify({

@@ -26,6 +26,7 @@ import {
   normalizeToolSpecsForCache,
   type PromptLayers,
 } from "../prompt-layers";
+import { logPromptCacheRequest } from "../prompt-cache-diagnostics";
 
 /**
  * 输出上限策略（docs/design/2026-08-26-maxtoken-model-switch-glm53-known-issues.md 问题 1）：
@@ -71,6 +72,7 @@ export async function callLLM(
   // 缓存路由 hints（Kimi prompt_cache_key 等）：此前只有 ChatLoop / 压缩摘要链路注入，
   // Harness 工具循环整条链漏发；在这里统一补上，下方流式与非流式兜底共用同一份 hints。
   const chatRequest = adapter.applyCacheHints?.(baseRequest, vendorConfig) ?? baseRequest;
+  logPromptCacheRequest("tool", chatRequest);
 
   let receivedStreamDelta = false;
   const recordResponseUsage = (response: ChatResponse): ChatResponse => {

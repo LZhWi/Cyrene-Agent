@@ -132,6 +132,7 @@ export class Live2DManager {
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
     });
+    this.app.ticker.maxFPS = 30;
     try {
       await this.loadModel();
     } catch (err) {

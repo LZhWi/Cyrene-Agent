@@ -17,6 +17,7 @@ interface Embedder { readonly config: { enabled: boolean; dimensions: number }; 
 interface VectorTarget {
   view(): { dimensions?: number; generatedEntries?: number };
   generatedHash(l2Id: string): string | undefined;
+  hasRecord(l2Id: string): boolean;
   upsertGenerated(records: Array<{ l2Id: string; embedding: number[]; contentHash: string }>, dimensions: number): unknown;
 }
 
@@ -45,7 +46,16 @@ export function createSemanticIndexer(ctx: PluginContext, memory: MemorySource, 
 
   function candidates(view = memory.view()) {
     if (!baseline) return [];
-    return view.entries.filter((entry) => isRecallable(entry, Date.now()) && baseline!.hashes[entry.id] !== hashContent(entry.content));
+    // 与本地 memory/RAG 启动修复一致：已启用语义索引后，自动补齐缺失向量；
+    // 已导入且正文未变化的旧向量继续复用，正文变化时再生成当前版本。
+    return view.entries.filter((entry) => {
+      if (!isRecallable(entry, Date.now())) return false;
+      const contentHash = hashContent(entry.content);
+      const generatedHash = vectors.generatedHash(entry.id);
+      return !vectors.hasRecord(entry.id)
+        || (generatedHash !== undefined && generatedHash !== contentHash)
+        || baseline!.hashes[entry.id] !== contentHash;
+    });
   }
 
   async function run(signal: AbortSignal) {
@@ -130,7 +140,10 @@ export function createSemanticIndexer(ctx: PluginContext, memory: MemorySource, 
       if (vectorDimensions !== undefined && vectorDimensions !== embedder.config.dimensions) throw new Error("Embedding 配置维度与现有索引不一致");
       const view = memory.view();
       const eligible = view.entries.filter((entry) => isRecallable(entry, Date.now()));
-      const missing = eligible.filter((entry) => vectors.generatedHash(entry.id) !== hashContent(entry.content));
+      const missing = eligible.filter((entry) => {
+        const generatedHash = vectors.generatedHash(entry.id);
+        return !vectors.hasRecord(entry.id) || (generatedHash !== undefined && generatedHash !== hashContent(entry.content));
+      });
       const visible = missing.slice(0, BACKFILL_PREVIEW_LIMIT);
       backfillPreview = { id: randomUUID(), revision: view.revision, dimensions: embedder.config.dimensions, hashes: Object.fromEntries(visible.map((entry) => [entry.id, hashContent(entry.content)])) };
       return {

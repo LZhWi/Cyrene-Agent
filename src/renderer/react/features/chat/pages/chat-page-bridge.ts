@@ -27,6 +27,7 @@ export interface ChatStoreApi {
   ignorePluginMessage: (conversationId: string, messageId: string) => Promise<{ ok: boolean }>;
   rename: (id: string, title: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
+  deleteMessage: (id: string, messageId: string) => Promise<ChatSession | null>;
   setPinned: (id: string, pinned: boolean) => Promise<ChatSession | null>;
   setModelProfile: (id: string, modelProfileId?: string) => Promise<ChatSession | null>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
@@ -57,7 +58,7 @@ export interface CompanionLifeStatus {
 }
 
 interface CompanionLifeStatusApi {
-  getGeneralSettings?: () => Promise<{ chatBackend?: unknown }>;
+  getGeneralSettings?: () => Promise<{ chatBackend?: unknown; defaultChatMode?: unknown; segmentedOutputMode?: unknown }>;
   getCompanionLifeStatus?: () => Promise<unknown>;
 }
 

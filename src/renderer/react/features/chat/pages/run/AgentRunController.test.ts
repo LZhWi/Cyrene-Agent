@@ -127,6 +127,95 @@ afterEach(() => {
 });
 
 describe("AgentRunController", () => {
+  it("多模态直发只保留最近三个用户轮次内的图片", async () => {
+    const api = createFakeApi({ success: true, runId: "run-1" });
+    const store = createFakeStore();
+    const { host } = createRecordingHost();
+    vi.stubGlobal("window", {
+      chat: {
+        getGeneralSettings: vi.fn(async () => ({})),
+        getImageSendStrategy: vi.fn(async () => ({ mode: "direct" as const })),
+      },
+      setTimeout,
+      clearTimeout,
+    });
+    const image = (name: string) => ({
+      kind: "image" as const,
+      name,
+      filePath: `C:/images/${name}`,
+      mime: "image/png",
+      status: "done" as const,
+    });
+    const input = createInput({
+      userMessageId: "user-4",
+      session: {
+        id: "session-1",
+        messages: [
+          { id: "user-1", role: "user", content: "第一轮", at: 1, attachments: [image("expired.png")] },
+          { id: "model-1", role: "model", content: "一", at: 2 },
+          { id: "user-2", role: "user", content: "第二轮", at: 3, attachments: [image("kept.png")] },
+          { id: "model-2", role: "model", content: "二", at: 4 },
+          { id: "user-3", role: "user", content: "第三轮", at: 5 },
+          { id: "model-3", role: "model", content: "三", at: 6 },
+          { id: "user-4", role: "user", content: "第四轮", at: 7 },
+        ],
+      } as ChatSession,
+    });
+    const { promise } = launch(input, { api, store, host, registries: createRegistries() });
+    await flush();
+
+    expect(api.run).toHaveBeenCalledWith(expect.objectContaining({
+      imageAttachments: [{ name: "kept.png", filePath: "C:/images/kept.png", mime: "image/png" }],
+    }));
+
+    api.emit(RUN_STARTED_EVENT);
+    api.emit({ type: "RUN_FINISHED", runId: "run-1", result: { status: "success" } });
+    await promise;
+  });
+
+  it("VLM 转述模式不会把历史图片重新加入本轮附件", async () => {
+    const api = createFakeApi({ success: true, runId: "run-1" });
+    const store = createFakeStore();
+    const { host } = createRecordingHost();
+    vi.stubGlobal("window", {
+      chat: {
+        getGeneralSettings: vi.fn(async () => ({})),
+        getImageSendStrategy: vi.fn(async () => ({ mode: "caption" as const })),
+      },
+      setTimeout,
+      clearTimeout,
+    });
+    const input = createInput({
+      session: {
+        id: "session-1",
+        messages: [
+          {
+            id: "old-user",
+            role: "user",
+            content: "旧图片",
+            at: 1,
+            attachments: [{
+              kind: "image",
+              name: "old.png",
+              filePath: "C:/images/old.png",
+              mime: "image/png",
+              status: "done",
+            }],
+          },
+          { id: "user-1", role: "user", content: "继续", at: 2 },
+        ],
+      } as ChatSession,
+    });
+    const { promise } = launch(input, { api, store, host, registries: createRegistries() });
+    await flush();
+
+    expect(api.run).toHaveBeenCalledWith(expect.objectContaining({ imageAttachments: [] }));
+
+    api.emit(RUN_STARTED_EVENT);
+    api.emit({ type: "RUN_FINISHED", runId: "run-1", result: { status: "success" } });
+    await promise;
+  });
+
   it("uses hidden channel model context when continuing a bound conversation from desktop", async () => {
     const api = createFakeApi({ success: true, runId: "run-1" });
     const store = createFakeStore();

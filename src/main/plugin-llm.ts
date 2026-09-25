@@ -44,7 +44,7 @@ export async function pluginGenerateText(
     throw new Error("插件模型请求至少需要一条消息");
   }
 
-  const maxTokens = clampInteger(options.maxTokens, 1024, 1, 8192, "maxTokens");
+  const maxTokens = clampInteger(options.maxTokens, 1024, 1, 32_768, "maxTokens");
   const defaultTimeout = Math.min(
     Math.max(settings.chatRequestTimeoutSec * 1000, 1000),
     120_000,
@@ -61,7 +61,11 @@ export async function pluginGenerateText(
         undefined,
         timeoutMs,
         label,
-        undefined,
+        options.reasoning === "on"
+          ? { mode: "on" }
+          : options.reasoning === "off"
+            ? { mode: "off" }
+            : undefined,
         { maxTokens },
         options.signal,
       );

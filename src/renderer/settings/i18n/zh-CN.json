@@ -102,8 +102,8 @@
             "contextWindow": "上下文窗口（Token）",
             "contextWindowHint": "按档案保存；留空按 256000。",
             "multimodal": {
-              "title": "多模态（能直发图片）",
-              "desc": "开启后图片直发该模型；关闭则走下方视觉模型转述。跟随档案生效。"
+              "title": "聊天图片直接发送",
+              "desc": "开启：原图直接交给当前主模型；关闭：先由下方选择的视觉任务后端转述。跟随档案生效。"
             }
           },
           "timeout": {
@@ -115,7 +115,13 @@
         "workFlowAdapt": "模型厂商 Work 流程适配",
         "vision": {
           "title": "视觉模型（全局）",
-          "desc": "档案未开多模态时，用这里的独立视觉模型转述图片。留空则诚实告知看不了。",
+          "desc": "独立选择屏幕观察、图片工具、聊天图片转述和直发失败降级所使用的模型。",
+          "backend": {
+            "label": "视觉任务后端",
+            "main": "跟随主模型",
+            "independent": "独立 VLM",
+            "hint": "该选项不影响聊天图片是否直发。"
+          },
           "baseUrl": {
             "label": "Base URL"
           },
@@ -168,7 +174,12 @@
         },
         "proactive": {
           "title": "主动聊天",
-          "desc": "昔涟会在合适的时间主动发起对话；深夜无操作、正常聊天中和连续两次未回复时不会打扰。",
+          "desc": "使用陪伴聊天后端时，此开关直接控制 Companion 主动聊天；深夜无操作、正常聊天中和连续两次未回复时不会打扰。",
+          "pace": {
+            "title": "主动聊天频率",
+            "desc": "与本地版相同的 Desire 增长档位；5 分钟检查间隔保持不变。",
+            "option": { "quiet": "冷清", "normal": "自然", "lively": "热闹" }
+          },
           "option": {
             "off": "关闭",
             "on": "开启"
@@ -181,6 +192,25 @@
               "wechat": "仅微信",
               "feishu": "仅飞书"
             }
+          }
+        },
+        "companion": {
+          "feedback": {
+            "title": "主动消息回应反馈学习",
+            "desc": "根据你对主动消息的回复或忽略，调整类似场景下主动开口的倾向。"
+          },
+          "screen": {
+            "title": "后台屏幕观察",
+            "desc": "定期获取不落盘的屏幕摘要，只用于主动聊天判断是否适合打扰。"
+          },
+          "life": {
+            "title": "“你的生活”拟态日程",
+            "desc": "为昔涟生成按本地日期变化的生活背景；不会主动播报日程。"
+          },
+          "dates": {
+            "title": "纪念日",
+            "desc": "每行填写“MM-DD 标题”或“YYYY-MM-DD 标题”，最多 100 条。",
+            "placeholder": "07-27 认识纪念日"
           }
         },
         "moments": {
@@ -210,7 +240,7 @@
         },
         "chatSocial": {
           "title": "聊天上下文增强",
-          "desc": "仅在 Chat 模式下使用相关的过去信息和未接话题，让连续交流更自然；每轮最多增加一次异步模型调用。"
+          "desc": "使用陪伴聊天后端时，此开关直接控制 Companion 的历史原文、长期记忆、近期状态与未接话题注入。"
         },
         "cita": {
           "title": "CITA 上下文认知",
@@ -458,17 +488,31 @@
         "heading": "我的信息",
         "subheading": "你的个人标识与云端账号（即将支持）",
         "uploadAvatarButton": "上传头像",
-        "avatarHint": "支持 JPG、PNG，建议 1:1 比例",
-        "nicknameLabel": "昵称",
+          "avatarHint": "支持 JPG、PNG，建议 1:1 比例",
+          "nicknameLabel": "昵称",
+          "nicknamePlaceholder": "你想让昔涟怎么称呼你",
         "genderLabel": "性别",
         "genderSecret": "保密",
         "genderMale": "男生",
         "genderFemale": "女生",
-        "callPrefLabel": "称呼偏好",
+          "callPrefLabel": "称呼偏好",
+          "callPrefPlaceholder": "例如：P宝、主人、哥哥（留空用昵称）",
         "birthdayLabel": "生日",
         "cityLabel": "默认城市",
+        "cityPlaceholder": "自动定位失败时回退，例如：杭州",
+        "weatherLocationLabel": "天气位置",
+        "weatherLocationAuto": "自动定位（推荐）",
+        "weatherLocationFixed": "固定使用默认城市",
+        "weatherLocationOff": "不提供位置天气",
+        "locationStatusLabel": "自动定位状态",
+        "locationRefreshButton": "获取当前位置",
+        "locationNotFetched": "尚未获取",
         "timezoneLabel": "时区",
-        "fieldHint": "这些信息会告诉昔涟，让她知道怎么称呼你、你在哪。默认城市用于天气等需要定位的工具；时区仅用于时间计算，不代表所在城市。"
+        "timezoneSystem": "跟随系统（推荐）",
+        "timezoneManual": "手动指定",
+        "manualTimezoneLabel": "手动时区",
+        "manualTimezonePlaceholder": "例如：Asia/Shanghai",
+        "fieldHint": "定位只用于天气查询，精确坐标不会写入聊天上下文；默认城市会在自动定位失败时回退使用。"
       },
       "tasks": {
         "heading": "定时任务",

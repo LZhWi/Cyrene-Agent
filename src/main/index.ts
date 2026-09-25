@@ -7,10 +7,13 @@
  * application/default-dependencies.ts；启动编排位于 application/application.ts。
  */
 
-import { app } from "electron";
+import { app, dialog } from "electron";
+import * as path from "node:path";
 import { createApplication } from "./application/application";
 import { createDefaultApplicationDependencies } from "./application/default-dependencies";
+import { CURRENT_MEMORY_SCHEMA_VERSION } from "./memory/memory-store-defaults";
 import { registerPluginPanelScheme } from "./plugin-panel-protocol";
+import { inspectUserDataSafety } from "./user-data-safety";
 
 // 打包版双击启动时 stdout/stderr 管道可能不存在或中途关闭，
 // 此时任何 console.log 写入都会抛异步 EPIPE 并升级成 uncaughtException 弹错误框
@@ -23,16 +26,32 @@ for (const stream of [process.stdout, process.stderr]) {
   });
 }
 
-// 插件设置面板协议：scheme 特权必须在 app.ready 之前注册（Electron 硬性要求）
-registerPluginPanelScheme();
+const startupUserDataPath = app.getPath("userData");
+const userDataSafety = inspectUserDataSafety({
+  userDataPath: startupUserDataPath,
+  // Electron 还未 ready 时部分版本不能读取 appData；Windows 优先使用同源环境变量，
+  // 其他环境退回 userData 父目录。这里只用于路径比较，不创建或修改目录。
+  appDataPath: process.env.APPDATA || path.dirname(startupUserDataPath),
+  supportedMemorySchemaVersion: CURRENT_MEMORY_SCHEMA_VERSION,
+});
 
-const application = createApplication(createDefaultApplicationDependencies());
+if (!userDataSafety.safe) {
+  const message = `${userDataSafety.reason}\n\n请使用 npm run start:isolated，或显式提供独立的 --user-data-dir。`;
+  console.error(`[UserDataSafety] ${message}`);
+  dialog.showErrorBox("Cyrene-Agent-N 已阻止不安全启动", message);
+  app.exit(78);
+} else {
+  // 插件设置面板协议：scheme 特权必须在 app.ready 之前注册（Electron 硬性要求）
+  registerPluginPanelScheme();
 
-application.installLifecycleHandlers();
-application.prepareBeforeReady();
+  const application = createApplication(createDefaultApplicationDependencies());
 
-if (application.isPrimaryProcess()) {
-  void app.whenReady()
-    .then(() => application.start())
-    .catch((error) => application.handleFatalStartup(error));
+  application.installLifecycleHandlers();
+  application.prepareBeforeReady();
+
+  if (application.isPrimaryProcess()) {
+    void app.whenReady()
+      .then(() => application.start())
+      .catch((error) => application.handleFatalStartup(error));
+  }
 }

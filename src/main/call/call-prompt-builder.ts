@@ -7,7 +7,7 @@ import { resolveSlashActivation } from "../skills/slash-activation";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import { getDateLocale } from "../locale-context";
 import { loadPromptFile } from "../prompts/prompt-loader";
-import { loadUserProfile } from "../settings-store";
+import { loadUserProfile, resolveUserTimezone } from "../settings-store";
 import { loadGeneralSettings } from "../settings/settings-facade";
 import { searchMemoryEntries } from "../rag";
 import { memoryStore } from "../memory/memory-store";
@@ -30,7 +30,7 @@ export async function buildCallSystemPrompt(
 ): Promise<string> {
   // ① 时间日期（用用户时区，禁止直接喂未校验的 profile.timezone 给 Intl）
   const now = new Date();
-  const userTz = resolveChatContextTimezone(loadUserProfile().timezone);
+  const userTz = resolveChatContextTimezone(resolveUserTimezone(loadUserProfile()));
   const timeStr = `当前时间：${now.toLocaleDateString(getDateLocale(), { timeZone: userTz })} ${now.toLocaleTimeString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: userTz })}`;
 
   // ② 常驻上下文（世界书 + L0/L1 画像）

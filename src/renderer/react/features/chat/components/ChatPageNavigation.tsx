@@ -21,6 +21,7 @@ export interface ChatPageNavigationProps {
   activePanel: ChatPagePanel | null;
   mode: ConversationMode;
   companionLifeStatus?: { text: string; resting: boolean } | null;
+  titlebarControls?: React.ReactNode;
   sessions: ChatSessionMeta[];
   activeSessionId?: string;
   onToggleCollapsed: () => void;
@@ -43,6 +44,7 @@ export function ChatPageNavigation({
   activePanel,
   mode,
   companionLifeStatus,
+  titlebarControls,
   sessions,
   activeSessionId,
   onToggleCollapsed,
@@ -63,25 +65,30 @@ export function ChatPageNavigation({
 
   return (
     <>
+      <div className="cy-page-drag-region" aria-hidden="true" />
+      {mode === "chat" && (
+        <div className="cy-chat-topfade" aria-hidden="true">
+          <div className="cy-chat-topfade__blur" />
+        </div>
+      )}
       <div className="cy-page-toggle">
         <SidebarToggle collapsed={collapsed} onToggle={onToggleCollapsed} />
       </div>
+      {!hasOpenPanel && mode === "chat" && companionLifeStatus && (
+        <div className="cy-page-title-meta">
+          <span className="cy-companion-life-status" aria-live="polite">
+            <span aria-hidden="true">{companionLifeStatus.resting ? "🌙" : "🌸"}</span>
+            <span className="cy-companion-life-status__text">昔涟 · {companionLifeStatus.text}</span>
+          </span>
+        </div>
+      )}
       <div className="cy-page-top-center">
-        {!hasOpenPanel && (
-          <>
-            <ModeSwitch value={mode} onChange={onModeChange} />
-            {mode === "chat" && companionLifeStatus && (
-              <span className="cy-companion-life-status" aria-live="polite">
-                <span aria-hidden="true">{companionLifeStatus.resting ? "🌙" : "🌸"}</span>
-                <span className="cy-companion-life-status__text">昔涟 · {companionLifeStatus.text}</span>
-              </span>
-            )}
-          </>
-        )}
+        {!hasOpenPanel && <ModeSwitch value={mode} onChange={onModeChange} variant={mode === "chat" ? "cyrene-chat" : "upstream"} />}
       </div>
       <div className="cy-page-windows">
         <WindowControls onMinimize={onMinimize} onMaximize={onMaximize} onClose={onCloseWindow} />
       </div>
+      {titlebarControls && <div className="cy-page-title-controls">{titlebarControls}</div>}
       <div className="cy-page-sidebar">
         <div className="cy-page-newtask">
           <NewTaskButton onClick={onNewTask} />

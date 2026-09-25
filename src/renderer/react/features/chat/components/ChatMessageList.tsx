@@ -1,11 +1,11 @@
 import { Bubble, CodeHighlighter, Think, ThoughtChain, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
-import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
+import { Component, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { t, useTranslation } from "../../../i18n";
 import { normalizeModelMarkdown } from "./markdown-normalize";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { AgentRoundRecord, ChatMessageChannelSource, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ChatColdRecallRecord, ChatMessageChannelSource, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
@@ -32,6 +32,8 @@ import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-s
 import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
 import { countRoundChangedFiles, describeToolExecution, resolveAgentRoundTitle } from "./agent-rounds";
+import type { SegmentedOutputMode } from "../../../../../shared/preferences";
+import { getAssistantReplyBubbleTexts } from "./message-segmentation";
 import { TaskDelegationRow } from "./TaskDelegationRow";
 import { extractFileChanges, FileChangeCard } from "./FileChangeCard";
 import { ReviewPanel } from "./ReviewPanel";
@@ -42,6 +44,7 @@ export interface ChatMessageItem {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  at?: number;
   reasoning?: string;
   reasoningBlocks?: ReasoningBlock[];
   processMessages?: ProcessMessageRecord[];
@@ -93,10 +96,12 @@ interface ChatMessageListProps {
   mode: ConversationMode;
   preferredAddress: string;
   stickerSize?: "small" | "standard" | "large";
+  segmentedOutputMode?: SegmentedOutputMode;
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
   revisionBusy?: boolean;
   onEditLastUserMessage?: (messageId: string, content: string) => Promise<boolean>;
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
+  onDeleteMessage?: (messageId: string) => Promise<boolean>;
   onIgnorePluginMessage?: (messageId: string) => Promise<boolean>;
   onScrollToBottomVisibilityChange?: (visible: boolean) => void;
   onRegisterScrollToBottom?: (scroll: () => void) => void;
@@ -106,6 +111,8 @@ interface ChatMessageListProps {
 
 const markdownConfig = { extensions: Latex() };
 const cyreneAvatarUrl = resolveAsset("avatars/cyrene-avatar.png");
+const CHAT_INITIAL_MESSAGE_COUNT = 40;
+const CHAT_OLDER_MESSAGE_BATCH = 40;
 
 // 消息是否正在流式输出。code 渲染器收不到 MarkdownContent 的 props，用 context 传下去，
 // mermaid 块靠它在流式期间显示占位而不是渲染半截语法
@@ -132,6 +139,52 @@ function PluginIgnoreButton({ messageId, onIgnore }: {
     >
       {t("messageList.ignoreProactive")}
     </button>
+  );
+}
+
+function ColdRecallButton({ record, onResolve }: {
+  record: ChatColdRecallRecord;
+  onResolve: (messageId: string, entryId: string, action: "related" | "unrelated" | "undo") => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const resolve = async (entryId: string, action: "related" | "unrelated" | "undo") => {
+    setBusyId(entryId);
+    setError("");
+    try { await onResolve(record.messageId, entryId, action); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "归档记忆操作失败"); }
+    finally { setBusyId(null); }
+  };
+  return (
+    <span className="cy-cold-recall">
+      <button type="button" className="cy-cold-recall__trigger" title="查看本轮参考的归档记忆"
+        aria-label="查看本轮参考的归档记忆" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M5 3.5h9.5a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2Z" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M7 7h6M7 10h6M7 13h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open && <div className="cy-cold-recall__panel">
+        <strong>本轮参考的归档记忆</strong>
+        <p>这些记忆仅临时参与了这次回答，尚未自动激活。</p>
+        {record.candidates.map((candidate) => <div className="cy-cold-recall__item" key={candidate.id}>
+          <div>{candidate.content}</div>
+          <small>{candidate.quote}</small>
+          {candidate.evidence && <details><summary>查看来源证据</summary><small>{candidate.evidence}</small></details>}
+          <div className="cy-cold-recall__choices">
+            {candidate.status === "pending" ? <>
+              <button type="button" disabled={busyId !== null} onClick={() => void resolve(candidate.id, "related")}>相关，恢复激活</button>
+              <button type="button" disabled={busyId !== null} onClick={() => void resolve(candidate.id, "unrelated")}>无关</button>
+            </> : candidate.status === "related" ? <>
+              <span>已激活</span>
+              <button type="button" disabled={busyId !== null} onClick={() => void resolve(candidate.id, "undo")}>撤销激活</button>
+            </> : <span>{candidate.status === "undone" ? "已撤销激活" : "已标记无关"}</span>}
+          </div>
+        </div>)}
+        {error && <p role="alert">{error}</p>}
+      </div>}
+    </span>
   );
 }
 
@@ -217,20 +270,70 @@ function AssistantContent({
   content,
   streaming,
   stickerUrl,
+  segments,
+  chatLayout,
   channelSource,
 }: {
   content: string;
   streaming: boolean;
   stickerUrl?: string;
+  segments?: string[];
+  chatLayout: boolean;
   channelSource?: ChatMessageChannelSource;
 }) {
   const { t } = useTranslation();
   return (
     <div className="cy-message__assistant-body">
       {channelSource && <ChannelSourceLabel source={channelSource} direction="outgoing" />}
-      {content && <MarkdownContent content={content} streaming={streaming} />}
+      {segments && (segments.length > 1 || chatLayout)
+        ? <div className="cy-message__assistant-segments">
+            {segments.map((segment, index) => (
+              <div className="cy-message__assistant-segment" key={`${index}-${segment.slice(0, 24)}`}>
+                <MarkdownContent content={segment} streaming={streaming && index === segments.length - 1} />
+              </div>
+            ))}
+          </div>
+        : content && <MarkdownContent content={content} streaming={streaming} />}
       {stickerUrl && <img className="cy-message__sticker" src={stickerUrl} alt={t("messageList.assistantStickerAlt")} draggable={false} />}
     </div>
+  );
+}
+
+export function formatMessageTime(timestamp: number | undefined): string {
+  if (!Number.isFinite(timestamp)) return "";
+  const date = new Date(timestamp as number);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function MessageTime({ at }: { at?: number }) {
+  const value = formatMessageTime(at);
+  return value ? <time className="cy-message-time" dateTime={new Date(at as number).toISOString()}>{value}</time> : null;
+}
+
+function DeleteMessageButton({ messageId, disabled, onDelete }: {
+  messageId: string;
+  disabled: boolean;
+  onDelete: (messageId: string) => Promise<boolean>;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      className="cy-message-delete"
+      disabled={disabled || busy}
+      title={t("messageList.delete")}
+      aria-label={t("messageList.deleteAria")}
+      onClick={() => {
+        if (!window.confirm(t("messageList.deleteConfirm"))) return;
+        setBusy(true);
+        void onDelete(messageId).finally(() => setBusy(false));
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path d="M4 7h16M9 7V4h6v3M6 7l1 12h10l1-12" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
   );
 }
 
@@ -702,11 +805,13 @@ function UserContent({
   content,
   stickerUrl,
   attachments = [],
+  chatLayout,
   channelSource,
 }: {
   content: string;
   stickerUrl?: string;
   attachments?: ChatMessageAttachment[];
+  chatLayout: boolean;
   channelSource?: ChatMessageChannelSource;
 }) {
   const { t } = useTranslation();
@@ -714,7 +819,9 @@ function UserContent({
     <div className="cy-message__user-body">
       {channelSource && <ChannelSourceLabel source={channelSource} direction="incoming" />}
       <UserAttachments attachments={attachments} />
-      {content && <MarkdownContent content={content} />}
+      {content && (chatLayout
+        ? <div className="cy-message__user-bubble"><MarkdownContent content={content} /></div>
+        : <MarkdownContent content={content} />)}
       {stickerUrl && <img className="cy-message__sticker" src={stickerUrl} alt={t("messageList.userStickerAlt")} draggable={false} />}
     </div>
   );
@@ -788,11 +895,14 @@ function createRoles(
   onCancelEdit: () => void,
   onSubmitEdit: () => void,
   onRegenerate: () => void,
+  onDeleteMessage: ((messageId: string) => Promise<boolean>) | undefined,
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
   onOpenReviewInspector?: (runId: string, fileIndex: number) => void,
   onIgnorePluginMessage?: (messageId: string) => Promise<boolean>,
+  coldRecalls?: Readonly<Record<string, ChatColdRecallRecord>>,
+  onResolveColdRecall?: (messageId: string, entryId: string, action: "related" | "unrelated" | "undo") => Promise<void>,
 ) {
   return {
   user: {
@@ -813,23 +923,28 @@ function createRoles(
             content={content}
             stickerUrl={info.extraInfo?.stickerUrl}
             attachments={info.extraInfo?.attachments}
+            chatLayout={mode === "chat"}
             channelSource={info.extraInfo?.channelSource}
           />
     ),
-    footer: (content: string, info: { extraInfo?: { messageId?: string } }) => {
+    footer: (content: string, info: { extraInfo?: { messageId?: string; at?: number } }) => {
       const cleanText = content.replace(/\[sticker:[^\]]+\]/g, "").trim();
       const messageId = info.extraInfo?.messageId;
-      if (!cleanText || messageId === editingMessageId) return null;
+      if ((!messageId && !cleanText) || messageId === editingMessageId) return null;
       return (
         <div className="cy-message-actions">
-          {messageId === lastTurn?.userMessageId && (
+          {cleanText && messageId === lastTurn?.userMessageId && (
             <LastTurnActionButton
               kind="edit"
               disabled={revisionBusy}
               onClick={() => onBeginEdit(messageId, cleanText)}
             />
           )}
-          <CopyButton text={cleanText} />
+          <CopyButton text={cleanText} size={mode === "chat" ? 14 : undefined} />
+          {mode === "chat" && messageId && onDeleteMessage && (
+            <DeleteMessageButton messageId={messageId} disabled={revisionBusy} onDelete={onDeleteMessage} />
+          )}
+          {mode === "chat" && <MessageTime at={info.extraInfo?.at} />}
         </div>
       );
     },
@@ -839,19 +954,21 @@ function createRoles(
     variant: "filled" as const,
     rootClassName: "cy-message cy-message--assistant",
     avatar: <CyreneMessageAvatar />,
-    contentRender: (content: string, info: { extraInfo?: { streaming?: boolean; stickerUrl?: string; channelSource?: ChatMessageChannelSource } }) => (
+    contentRender: (content: string, info: { extraInfo?: { streaming?: boolean; stickerUrl?: string; segments?: string[]; channelSource?: ChatMessageChannelSource } }) => (
       <AssistantContent
         content={content}
         streaming={Boolean(info.extraInfo?.streaming)}
         stickerUrl={info.extraInfo?.stickerUrl}
+        segments={info.extraInfo?.segments}
+        chatLayout={mode === "chat"}
         channelSource={info.extraInfo?.channelSource}
       />
     ),
-    footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; ttsCacheKey?: string; pluginDelivery?: ChatMessageItem["pluginDelivery"] } }) => {
+    footer: (content: string, info: { extraInfo?: { messageId?: string; at?: number; streaming?: boolean; ttsCacheKey?: string; pluginDelivery?: ChatMessageItem["pluginDelivery"] } }) => {
       const cleanText = content.trim();
       const messageId = info.extraInfo?.messageId;
       const canRegenerate = messageId === lastTurn?.assistantMessageId;
-      if (info.extraInfo?.streaming || (!cleanText && !canRegenerate)) return null;
+      if (info.extraInfo?.streaming || (!messageId && !cleanText && !canRegenerate)) return null;
       return (
         <div className="cy-message-actions">
           {cleanText && messageId && conversationId && (
@@ -859,18 +976,26 @@ function createRoles(
               conversationId={conversationId}
               messageId={messageId}
               text={cleanText}
+              size={mode === "chat" ? 14 : undefined}
               speechMode={mode === "learn" ? "learn" : "default"}
               preferredAddress={preferredAddress}
               onCacheKey={(cacheKey, converterVersion) => onTtsCacheKey?.(messageId, cacheKey, converterVersion)}
             />
           )}
-          {cleanText && <CopyButton text={cleanText} />}
+          {cleanText && <CopyButton text={cleanText} size={mode === "chat" ? 14 : undefined} />}
+          {mode === "chat" && messageId && onDeleteMessage && (
+            <DeleteMessageButton messageId={messageId} disabled={revisionBusy} onDelete={onDeleteMessage} />
+          )}
           {messageId && info.extraInfo?.pluginDelivery?.ignoreFeedback === "pending" && onIgnorePluginMessage && (
             <PluginIgnoreButton messageId={messageId} onIgnore={onIgnorePluginMessage} />
+          )}
+          {mode === "chat" && messageId && coldRecalls?.[messageId] && onResolveColdRecall && (
+            <ColdRecallButton record={coldRecalls[messageId]} onResolve={onResolveColdRecall} />
           )}
           {canRegenerate && (
             <LastTurnActionButton kind="regenerate" disabled={revisionBusy} onClick={onRegenerate} />
           )}
+          {mode === "chat" && <MessageTime at={info.extraInfo?.at} />}
         </div>
       );
     },
@@ -974,8 +1099,21 @@ function createRoles(
   };
 }
 
-export function createMessageItems(messages: ChatMessageItem[], enabledStickers: EnabledSticker[]): BubbleItemType[] {
-  return messages.flatMap((message) => {
+export function createMessageItems(
+  messages: ChatMessageItem[],
+  enabledStickers: EnabledSticker[],
+  mode: ConversationMode = "work",
+  segmentedOutputMode: SegmentedOutputMode = "off",
+): BubbleItemType[] {
+  return messages.flatMap((message) => createMessageItemsForMessage(message, enabledStickers, mode, segmentedOutputMode));
+}
+
+function createMessageItemsForMessage(
+  message: ChatMessageItem,
+  enabledStickers: EnabledSticker[],
+  mode: ConversationMode,
+  segmentedOutputMode: SegmentedOutputMode,
+): BubbleItemType[] {
     if (message.role !== "assistant") {
       const stickerId = extractMessageStickerId(message.content, message.sticker);
       return [{
@@ -986,6 +1124,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           stickerUrl: stickerId ? resolveStickerUrl(stickerId, enabledStickers) : undefined,
           attachments: message.attachments,
           messageId: message.id,
+          at: message.at,
           channelSource: message.channelSource,
         },
       }];
@@ -1054,6 +1193,11 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
       });
     }
     if (stages.includes("assistant")) {
+      const segments = getAssistantReplyBubbleTexts(
+        message.content,
+        mode,
+        mode === "chat" ? segmentedOutputMode : "off",
+      );
       assistantItems.push({
         key: message.id,
         role: "assistant",
@@ -1061,9 +1205,11 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         streaming: message.streaming,
         extraInfo: {
           messageId: message.id,
+          at: message.at,
           streaming: message.streaming,
           ttsCacheKey: message.ttsCacheKey,
           stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
+          segments,
           channelSource: message.channelSource,
           pluginDelivery: message.pluginDelivery,
         },
@@ -1079,7 +1225,6 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
       });
     }
     return assistantItems;
-  });
 }
 
 export function ChatMessageList({
@@ -1088,10 +1233,12 @@ export function ChatMessageList({
   mode,
   preferredAddress,
   stickerSize = "standard",
+  segmentedOutputMode = "off",
   onTtsCacheKey,
   revisionBusy = false,
   onEditLastUserMessage,
   onRegenerateLastResponse,
+  onDeleteMessage,
   onIgnorePluginMessage,
   onScrollToBottomVisibilityChange,
   onRegisterScrollToBottom,
@@ -1100,9 +1247,58 @@ export function ChatMessageList({
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
   const [reasoningExpanded, setReasoningExpanded] = useState<Record<string, boolean>>({});
+  const [coldRecalls, setColdRecalls] = useState<Record<string, ChatColdRecallRecord>>({});
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
-  const lastTurn = resolveRevisableLastTurn(messages, mode);
+  const [visibleWindow, setVisibleWindow] = useState<{ key: string; firstMessageId: string } | null>(null);
+  const windowKey = `${mode}:${conversationId ?? ""}`;
+  const initialVisibleStart = Math.max(0, messages.length - CHAT_INITIAL_MESSAGE_COUNT);
+  const anchoredStart = visibleWindow?.key === windowKey
+    ? messages.findIndex((message) => message.id === visibleWindow.firstMessageId)
+    : -1;
+  const visibleStart = mode === "chat" && anchoredStart >= 0 ? anchoredStart : initialVisibleStart;
+  const visibleMessages = useMemo(
+    () => mode === "chat" ? messages.slice(visibleStart) : messages,
+    [messages, mode, visibleStart],
+  );
+  const handlersRef = useRef({ onRegenerateLastResponse, onDeleteMessage, onIgnorePluginMessage, onTtsCacheKey, onOpenReviewInspector });
+  handlersRef.current = { onRegenerateLastResponse, onDeleteMessage, onIgnorePluginMessage, onTtsCacheKey, onOpenReviewInspector };
+  const deleteMessage = useCallback((messageId: string) => handlersRef.current.onDeleteMessage!(messageId), []);
+  const ignorePluginMessage = useCallback((messageId: string) => handlersRef.current.onIgnorePluginMessage!(messageId), []);
+  const reportTtsCacheKey = useCallback((messageId: string, cacheKey: string, converterVersion: string) => {
+    handlersRef.current.onTtsCacheKey?.(messageId, cacheKey, converterVersion);
+  }, []);
+  const openReviewInspector = useCallback((runId: string, fileIndex: number) => {
+    handlersRef.current.onOpenReviewInspector?.(runId, fileIndex);
+  }, []);
+  const canDeleteMessage = Boolean(onDeleteMessage);
+  const canIgnorePluginMessage = Boolean(onIgnorePluginMessage);
+  const canReportTtsCacheKey = Boolean(onTtsCacheKey);
+  const canOpenReviewInspector = Boolean(onOpenReviewInspector);
+  const latest = messages.at(-1);
+  const coldRefreshId = latest?.role === "assistant" && !latest.loading && !latest.streaming ? latest.id : "";
+  useEffect(() => {
+    setColdRecalls({});
+    if (mode !== "chat" || !conversationId || !window.memoryPanel?.getColdRecall) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const records = await window.memoryPanel.getColdRecall(conversationId);
+        if (!cancelled) setColdRecalls(Object.fromEntries(records.map((record) => [record.messageId, record])));
+      } catch { /* 插件未启用时不影响普通聊天。 */ }
+    };
+    void load();
+    // 轮次落盘确认后，插件才收到最终消息 ID；补读一次避免与异步回执竞态。
+    const retry = window.setTimeout(() => void load(), 900);
+    const lateRetry = window.setTimeout(() => void load(), 3000);
+    return () => { cancelled = true; window.clearTimeout(retry); window.clearTimeout(lateRetry); };
+  }, [conversationId, mode, coldRefreshId]);
+  const resolveColdRecall = useCallback(async (messageId: string, entryId: string, action: "related" | "unrelated" | "undo") => {
+    if (!conversationId || !window.memoryPanel?.resolveColdRecall) throw new Error("归档记忆操作不可用");
+    const updated = await window.memoryPanel.resolveColdRecall(conversationId, messageId, entryId, action);
+    setColdRecalls((current) => ({ ...current, [messageId]: updated }));
+  }, [conversationId]);
+  const lastTurn = useMemo(() => resolveRevisableLastTurn(messages, mode), [messages, mode]);
   const onReasoningExpand = useCallback((id: string, expanded: boolean) => {
     setReasoningExpanded((current) => updateReasoningExpanded(current, id, expanded));
   }, []);
@@ -1124,18 +1320,62 @@ export function ChatMessageList({
     });
   }, [editDraft, editingMessageId, onEditLastUserMessage, revisionBusy]);
   const regenerate = useCallback(() => {
-    if (!lastTurn || !onRegenerateLastResponse || revisionBusy) return;
-    void onRegenerateLastResponse(lastTurn.userMessageId, lastTurn.assistantMessageId);
-  }, [lastTurn, onRegenerateLastResponse, revisionBusy]);
+    const handler = handlersRef.current.onRegenerateLastResponse;
+    if (!lastTurn || !handler || revisionBusy) return;
+    void handler(lastTurn.userMessageId, lastTurn.assistantMessageId);
+  }, [lastTurn, revisionBusy]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const pendingOlderAnchorRef = useRef<{ key: string; element: Element; top: number; scrollBox: HTMLDivElement } | null>(null);
+  const loadOlderRef = useRef<() => void>(() => {});
+  const getChatScrollBox = useCallback(
+    () => containerRef.current?.querySelector<HTMLDivElement>(".ant-bubble-list-scroll-box") ?? null,
+    [],
+  );
+  const getChatScrollContainer = useCallback(() => {
+    const scrollBox = getChatScrollBox();
+    if (scrollBox && scrollBox.scrollHeight > scrollBox.clientHeight + 1) {
+      return { element: scrollBox, reversed: true };
+    }
+    return containerRef.current ? { element: containerRef.current, reversed: false } : null;
+  }, [getChatScrollBox]);
+
+  useEffect(() => {
+    pendingOlderAnchorRef.current = null;
+    setVisibleWindow(null);
+  }, [windowKey]);
+
+  loadOlderRef.current = () => {
+    if (mode !== "chat" || visibleStart === 0 || pendingOlderAnchorRef.current) return;
+    const scrollBox = getChatScrollContainer()?.element;
+    const firstBubble = getChatScrollBox()?.querySelector(".ant-bubble-list-scroll-content")?.firstElementChild;
+    if (!scrollBox || !firstBubble) return;
+    const nextStart = Math.max(0, visibleStart - CHAT_OLDER_MESSAGE_BATCH);
+    pendingOlderAnchorRef.current = {
+      key: windowKey,
+      element: firstBubble,
+      top: firstBubble.getBoundingClientRect().top,
+      scrollBox,
+    };
+    setVisibleWindow({ key: windowKey, firstMessageId: messages[nextStart].id });
+  };
+
+  useLayoutEffect(() => {
+    const anchor = pendingOlderAnchorRef.current;
+    if (!anchor || anchor.key !== windowKey) return;
+    if (anchor.element.isConnected) {
+      anchor.scrollBox.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
+    }
+    pendingOlderAnchorRef.current = null;
+  }, [visibleStart, windowKey]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }, []);
+    const outer = containerRef.current;
+    if (!outer) return;
+    outer.scrollTo({ top: outer.scrollHeight, behavior });
+    if (mode === "chat") getChatScrollBox()?.scrollTo({ top: 0, behavior });
+  }, [getChatScrollBox, mode]);
 
   // 向父组件注册滚动到底部的回调
   useEffect(() => {
@@ -1143,13 +1383,18 @@ export function ChatMessageList({
   }, [onRegisterScrollToBottom, scrollToBottom]);
 
   const updateScrollState = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const outer = containerRef.current;
+    if (!outer) return;
+    const scrollBox = mode === "chat" ? getChatScrollBox() : null;
+    const outerDistance = outer.scrollHeight - outer.scrollTop - outer.clientHeight;
+    const innerDistance = scrollBox && scrollBox.scrollHeight > scrollBox.clientHeight + 1
+      ? Math.abs(scrollBox.scrollTop)
+      : 0;
+    const distance = Math.max(outerDistance, innerDistance);
     const nearBottom = distance < 100;
     isNearBottomRef.current = nearBottom;
     onScrollToBottomVisibilityChange?.(!nearBottom);
-  }, [onScrollToBottomVisibilityChange]);
+  }, [getChatScrollBox, mode, onScrollToBottomVisibilityChange]);
 
   // 打开/切换会话时滚动到底部
   useEffect(() => {
@@ -1176,13 +1421,16 @@ export function ChatMessageList({
       cancelEdit,
       submitEdit,
       regenerate,
+      canDeleteMessage ? deleteMessage : undefined,
       reasoningExpanded,
       onReasoningExpand,
-      onTtsCacheKey,
-      onOpenReviewInspector,
-      onIgnorePluginMessage,
+      canReportTtsCacheKey ? reportTtsCacheKey : undefined,
+      canOpenReviewInspector ? openReviewInspector : undefined,
+      canIgnorePluginMessage ? ignorePluginMessage : undefined,
+      coldRecalls,
+      resolveColdRecall,
     ),
-    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onIgnorePluginMessage, onOpenReviewInspector, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
+    [beginEdit, cancelEdit, canDeleteMessage, canIgnorePluginMessage, canOpenReviewInspector, canReportTtsCacheKey, coldRecalls, conversationId, deleteMessage, editDraft, editingMessageId, ignorePluginMessage, lastTurn, mode, onReasoningExpand, openReviewInspector, preferredAddress, reasoningExpanded, regenerate, reportTtsCacheKey, resolveColdRecall, revisionBusy, submitEdit, userAvatarUrl],
   );
 
   useEffect(() => {
@@ -1206,8 +1454,49 @@ export function ChatMessageList({
     };
   }, []);
 
-  const items = createMessageItems(messages, enabledStickers);
-  const channelConversationLabel = resolveChannelConversationLabel(messages);
+  const itemCacheRef = useRef<{
+    mode: ConversationMode;
+    segmentedOutputMode: SegmentedOutputMode;
+    enabledStickers: EnabledSticker[];
+    byMessage: WeakMap<ChatMessageItem, BubbleItemType[]>;
+  } | null>(null);
+  const items = useMemo(() => {
+    let cache = itemCacheRef.current;
+    if (!cache || cache.mode !== mode || cache.segmentedOutputMode !== segmentedOutputMode || cache.enabledStickers !== enabledStickers) {
+      cache = { mode, segmentedOutputMode, enabledStickers, byMessage: new WeakMap() };
+      itemCacheRef.current = cache;
+    }
+    return visibleMessages.flatMap((message) => {
+      let parts = cache.byMessage.get(message);
+      if (!parts) {
+        parts = createMessageItemsForMessage(message, enabledStickers, mode, segmentedOutputMode);
+        cache.byMessage.set(message, parts);
+      }
+      return parts;
+    });
+  }, [visibleMessages, enabledStickers, mode, segmentedOutputMode]);
+  const channelConversationLabel = useMemo(() => resolveChannelConversationLabel(messages), [messages]);
+  const bubbleList = useMemo(
+    () => <Bubble.List items={items} role={roles} autoScroll onScroll={mode === "chat" ? updateScrollState : undefined} />,
+    [items, mode, roles, updateScrollState],
+  );
+
+  const firstVisibleMessageId = visibleMessages[0]?.id;
+  useEffect(() => {
+    if (mode !== "chat" || visibleStart === 0 || !firstVisibleMessageId || typeof IntersectionObserver === "undefined") return;
+    const scrollContainer = getChatScrollContainer();
+    const firstBubble = getChatScrollBox()?.querySelector(".ant-bubble-list-scroll-content")?.firstElementChild;
+    if (!scrollContainer || !firstBubble) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      const { element, reversed } = scrollContainer;
+      const distanceToTop = reversed
+        ? element.scrollHeight - element.clientHeight + element.scrollTop
+        : element.scrollTop;
+      if (entry?.isIntersecting && distanceToTop < 160) loadOlderRef.current();
+    }, { root: scrollContainer.element, rootMargin: "80px 0px 0px 0px" });
+    observer.observe(firstBubble);
+    return () => observer.disconnect();
+  }, [firstVisibleMessageId, getChatScrollBox, getChatScrollContainer, mode, visibleStart]);
 
   return (
     <div
@@ -1222,7 +1511,7 @@ export function ChatMessageList({
           <span>{channelConversationLabel}</span>
         </div>
       )}
-      <Bubble.List items={items} role={roles} autoScroll />
+      {bubbleList}
     </div>
   );
 }

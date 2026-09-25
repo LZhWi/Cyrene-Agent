@@ -2,6 +2,7 @@ export type DefaultChatMode = "work" | "chat" | "code";
 export type SegmentedOutputMode = "all" | "chat" | "off";
 export type MobileMessageSegmentationMode = "on" | "off";
 export type ProactiveChatMode = "on" | "off";
+export type CompanionProactivePace = "quiet" | "normal" | "lively";
 export type ProactiveDeliveryTarget = "local" | "wechat" | "feishu";
 
 export type { CustomStyleConfig, StyleId } from "./style-sampling";
@@ -28,6 +29,10 @@ export function normalizeMobileMessageSegmentationMode(value: unknown): MobileMe
 
 export function normalizeProactiveChatMode(value: unknown): ProactiveChatMode {
   return value === "on" ? "on" : "off";
+}
+
+export function normalizeCompanionProactivePace(value: unknown): CompanionProactivePace {
+  return value === "quiet" || value === "lively" ? value : "normal";
 }
 
 export function normalizeProactiveDeliveryTarget(value: unknown): ProactiveDeliveryTarget {

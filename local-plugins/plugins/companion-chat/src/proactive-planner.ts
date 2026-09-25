@@ -47,9 +47,13 @@ const COOLDOWN_MS: Record<ProactiveScene, number> = {
   cold_drop: 4 * 60 * 60 * 1000,
   sunny_day: 4 * 60 * 60 * 1000,
 };
+export const sceneCooldownMs = (scene: ProactiveScene): number => COOLDOWN_MS[scene];
 export const DESIRE_THRESHOLD = 40;
 export const FOLLOWUP_MIN_SCORE = 55;
 const MAX_SAMPLE_MINUTES = 5;
+
+/** 本地版天气场景只在 6:00–22:59 读取天气。 */
+export const isWeatherSceneHour = (hour: number): boolean => hour >= 6 && hour <= 22;
 
 function dateKey(at: number): string {
   const date = new Date(at);
@@ -106,7 +110,8 @@ function score(scene: ProactiveScene, state: ProactivePlannerState, presence: Us
   if (last !== undefined && at - last < COOLDOWN_MS[scene]) return 0;
   if ((scene === "morning" || scene === "evening_checkin" || scene === "late_night") && state.todayFired[scene]) return 0;
   if ((scene === "rainy_day" || scene === "cold_drop" || scene === "sunny_day") && state.todayFired.weather) return 0;
-  const date = new Date(at), minute = date.getHours() * 60 + date.getMinutes();
+  const date = new Date(at), hour = presence.localHour ?? date.getHours();
+  const minute = hour * 60 + (presence.localMinute ?? date.getMinutes());
   let base = 0;
   switch (scene) {
     case "morning":
@@ -123,7 +128,7 @@ function score(scene: ProactiveScene, state: ProactivePlannerState, presence: Us
       if (minute >= 1080 && minute <= 1320) base = 50 + timeWindow(minute, 1080, 1200, 1320);
       break;
     case "late_night":
-      if (date.getHours() >= 23 || date.getHours() < 3) base = 50 + Math.min(state.keyboardAccumMinutes / 60, 1) * 50;
+      if (hour >= 23 || hour < 3) base = 50 + Math.min(state.keyboardAccumMinutes / 60, 1) * 50;
       break;
     case "idle_daze":
       if (minute >= 540 && minute <= 1380 && presence.idleSeconds >= 600) base = 80 + Math.min((presence.idleSeconds - 600) / 1200, 1) * 20;
@@ -157,13 +162,17 @@ export function sampleAndPlan(input: {
   presence: UserPresenceSnapshot;
   at: number;
   lastActivityAt: number;
+  lastNormalConversationEndedAt?: number | null;
   quietMs: number;
+  baseDesireRate?: number;
   weather?: ProactiveWeatherSnapshot | null;
   allowAttempt: boolean;
   random?: () => number;
 }): ProactiveCandidate | null {
   const { state, presence, at } = input;
-  const weather = input.weather && Date.parse(input.weather.expiresAt) > at ? input.weather : null;
+  const localHour = presence.localHour ?? new Date(at).getHours();
+  const weather = isWeatherSceneHour(localHour) && input.weather && Date.parse(input.weather.expiresAt) > at
+    ? input.weather : null;
   const today = dateKey(at);
   if (today !== state.lastDate) {
     state.lastDate = today;
@@ -181,12 +190,17 @@ export function sampleAndPlan(input: {
     ? state.continuousActiveMinutes + elapsed
     : 0;
 
-  const sampledFrom = at - elapsed * 60_000;
-  const eligibleFrom = Math.max(sampledFrom, input.lastActivityAt + input.quietMs);
-  const eligibleMinutes = Math.max(0, (at - eligibleFrom) / 60_000);
-  state.globalDesire = Math.min(100, state.globalDesire + 2 * eligibleMinutes * state.desireRateMultiplier);
+  if (backFromAway) {
+    state.globalDesire = 100;
+    return input.allowAttempt ? { scene: "back_from_away", score: 100 } : null;
+  }
+  const inQuietPeriod = input.lastNormalConversationEndedAt !== null
+    && input.lastNormalConversationEndedAt !== undefined
+    && at - input.lastNormalConversationEndedAt < input.quietMs;
+  if (!inQuietPeriod) {
+    state.globalDesire = Math.min(100, state.globalDesire + (input.baseDesireRate ?? 2) * elapsed * state.desireRateMultiplier);
+  }
   if (!input.allowAttempt) return null;
-  if (backFromAway) return { scene: "back_from_away", score: 100 };
   const random = input.random ?? Math.random;
   if (state.globalDesire < DESIRE_THRESHOLD || random() * 100 >= state.globalDesire) return null;
   const candidates = SCENES

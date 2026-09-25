@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createPersonaService, parsePersonaStyle, PERSONA_STYLE_IDS } from "../plugins/companion-chat/src/persona";
+import { createPersonaService, parsePersonaStyle, personaStyleFromHost, PERSONA_STYLE_IDS } from "../plugins/companion-chat/src/persona";
 
 describe("本地人格稳定提示词", () => {
   const root = path.resolve("plugins/companion-chat/persona");
@@ -14,6 +14,7 @@ describe("本地人格稳定提示词", () => {
       expect(prompt).toContain("# 昔涟 · Identity");
       expect(prompt).toContain("# 昔涟 · Soul");
       expect(prompt).toContain("# 昔涟 · 原作台词摘录");
+      expect(prompt).toContain("正常情况下多用「人家」");
       expect(prompt).toContain("工具调用与任务调度规则见 `tools_system.md`");
       expect(prompt).toContain("工具阶段的具体调度");
       expect(prompt).toContain("Soul 阶段没有工具能力");
@@ -22,13 +23,25 @@ describe("本地人格稳定提示词", () => {
     }
   });
 
+  it("主动轮使用纯聊天规则并截断 Soul 的工具相关尾章", () => {
+    const prompt = createPersonaService(root).buildProactive();
+    expect(prompt).toContain("# 系统规则（纯聊天专用）");
+    expect(prompt).toContain("# 昔涟 · Soul");
+    expect(prompt).toContain("# 昔涟 · 原作台词摘录");
+    expect(prompt).toContain("风格：温柔・和善");
+    expect(prompt).not.toContain("# 昔涟 · Identity");
+    expect(prompt).not.toContain("## Live2D 与聊天文字的分工");
+  });
+
   it("为独立 Tool 阶段提供不面向用户的严格调度规则", () => {
     const prompt = createPersonaService(root).buildTool();
     expect(prompt).toContain("你不是面向用户的聊天角色");
     expect(prompt).toContain("最终面向用户的回复由 Soul 阶段");
-    expect(prompt).toContain("必须调用 `companion-chat_memory_search`");
-    expect(prompt).toContain("稳定资料、长期偏好或持续目标");
-    expect(prompt).toContain("同时返回相关记忆摘要和可用的历史原文证据");
+    expect(prompt).toContain("调用 `companion-chat_memory_search`");
+    expect(prompt).toContain("稳定资料、长期偏好、约定或持续目标");
+    expect(prompt).toContain("必须同时调用 `companion-chat_memory_search` 检索结构化记忆摘要与证据、调用 `companion-chat_history_search` 核对相关历史消息原文");
+    expect(prompt).toContain("只要用户表达了让你“回忆……”或“想起来……”的意愿，必须调用 `companion-chat_history_search`");
+    expect(prompt).toContain("调用 `companion-chat_history_search`");
     expect(prompt).not.toContain("music_present_tracks");
   });
 
@@ -41,6 +54,22 @@ describe("本地人格稳定提示词", () => {
     expect(persona.build("01_default", "只用于测试的追加指令")).toMatch(/---\n\n只用于测试的追加指令$/);
     expect(parsePersonaStyle(undefined)).toBe("01_default");
     expect(parsePersonaStyle("invalid")).toBe("01_default");
+  });
+
+  it("把主程序五种内建风格映射到本地文本，custom 不额外叠加内建风格", () => {
+    expect(personaStyleFromHost("default")).toBe("01_default");
+    expect(personaStyleFromHost("lively")).toBe("02_lively");
+    expect(personaStyleFromHost("healing")).toBe("03_healing");
+    expect(personaStyleFromHost("focused")).toBe("04_focused");
+    expect(personaStyleFromHost("sweet")).toBe("05_sweet");
+    expect(personaStyleFromHost("custom")).toBeNull();
+
+    const persona = createPersonaService(root);
+    const base = persona.buildBase("自定义风格由主程序注入");
+    expect(base).toContain("自定义风格由主程序注入");
+    for (const marker of ["风格：温柔・和善", "风格：元气・活泼", "风格：治愈・安心", "风格：知性・认真", "风格：撒娇・黏人"]) {
+      expect(base).not.toContain(marker);
+    }
   });
 
   it("提供本地语气规则与最终 Soul 近端锚点", () => {

@@ -26,6 +26,11 @@ export function parseEmbeddingConfig(raw: any): EmbeddingConfig {
 export function createEmbeddingService(ctx: PluginContext, fetcher: typeof fetch = fetch) {
   let config = parseEmbeddingConfig(ctx.storage.get<EmbeddingConfig>("embedding-config") ?? DEFAULT_EMBEDDING_CONFIG);
   async function embed(text: string, signal: AbortSignal): Promise<number[]> {
+    if (ctx.deps.memoryRetrieval) {
+      if (!text.trim() || text.length > 20000) throw new Error("Embedding 输入无效");
+      const result = await ctx.deps.memoryRetrieval.embed([text], { signal });
+      return result.vectors[0];
+    }
     const snapshot = { ...config };
     if (!snapshot.enabled) throw new Error("Embedding 尚未启用");
     if (!text.trim() || text.length > 20000) throw new Error("Embedding 输入无效");
@@ -45,9 +50,10 @@ export function createEmbeddingService(ctx: PluginContext, fetcher: typeof fetch
     } catch { throw new Error(combined.aborted ? "Embedding 请求已取消或超时" : "Embedding 请求失败或维度不匹配，请检查地址、模型、维度及凭据"); }
   }
   return {
-    get config() { return { ...config }; },
-    async view() { return { ...config, hasKey: Boolean(await ctx.deps.secrets?.get("embedding-key")) }; },
+    get config() { return ctx.deps.memoryRetrieval ? { enabled: true, baseUrl: "host-native", model: "host-native", dimensions: 1024 } : { ...config }; },
+    async view() { return ctx.deps.memoryRetrieval ? { enabled: true, baseUrl: "host-native", model: "host-native", dimensions: 1024, hasKey: true, hostNative: true } : { ...config, hasKey: Boolean(await ctx.deps.secrets?.get("embedding-key")), hostNative: false }; },
     async save(raw: any) {
+      if (ctx.deps.memoryRetrieval) throw new Error("当前由宿主原生 BGE-M3 Provider 管理，无需在插件内配置 Embedding");
       const next = parseEmbeddingConfig(raw);
       if (raw.apiKey !== undefined && (typeof raw.apiKey !== "string" || raw.apiKey.length > 8192)) throw new Error("Embedding 密钥格式无效");
       const oldKey = await ctx.deps.secrets?.get("embedding-key");
@@ -60,6 +66,6 @@ export function createEmbeddingService(ctx: PluginContext, fetcher: typeof fetch
       return this.view();
     },
     embed,
-    async test(signal: AbortSignal) { const vector = await embed("Cyrene embedding connection test", signal); return { dimensions: vector.length }; },
+    async test(signal: AbortSignal) { const vector = await embed("Cyrene embedding connection test", signal); return { dimensions: vector.length, hostNative: Boolean(ctx.deps.memoryRetrieval) }; },
   };
 }

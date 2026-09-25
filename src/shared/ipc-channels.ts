@@ -39,7 +39,9 @@ export const IPC = {
   WINDOW_SET_DRAGGING: "window:set-dragging",
   WINDOW_CAPTURE_FRAME: "window:capture-frame",
   WINDOW_GET_CURSOR_POSITION: "window:get-cursor-position",
+  WINDOW_GET_IDLE_STATE: "window:get-idle-state",
   PET_VISIBILITY_CHANGED: "pet:visibility-changed",
+  PET_IDLE_MOTIONS_CHANGED: "pet:idle-motions-changed",
   APP_QUIT: "app:quit",
 
   // GitHub 应用更新
@@ -176,6 +178,7 @@ export const IPC = {
   CHATS_COMPACT: "chats:compact",
   CHATS_RENAME: "chats:rename",
   CHATS_DELETE: "chats:delete",
+  CHATS_DELETE_MESSAGE: "chats:delete-message",
   CHATS_SET_PINNED: "chats:set-pinned",
   CHATS_SET_MODEL_PROFILE: "chats:set-model-profile",
   CHATS_OPEN_FOLDER: "chats:open-folder",
@@ -265,9 +268,18 @@ export const IPC = {
   USER_GET_AVATAR: "user:get-avatar",
   USER_PROFILE_CHANGED: "user:profile-changed",
   USER_AVATAR_CHANGED: "user:avatar-changed",
+  LOCATION_UPDATE: "location:update",
+  LOCATION_GET_STATUS: "location:get-status",
+  LOCATION_CLEAR: "location:clear",
 
   // memory panel
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",
+  MEMORY_QUERY_ROUTER_GET: "memory:query-router-get",
+  MEMORY_QUERY_ROUTER_SAVE: "memory:query-router-save",
+  MEMORY_COLD_RECALL_GET: "memory:cold-recall-get",
+  MEMORY_COLD_RECALL_FEEDBACK: "memory:cold-recall-feedback",
+  MEMORY_PANEL_EDIT_L2: "memory-panel:edit-l2",
+  MEMORY_PANEL_DELETE_L2: "memory-panel:delete-l2",
   MEMORY_PANEL_DELETE_IMPORTED_DOC: "memory-panel:delete-imported-doc",
   MEMORY_PANEL_SAVE_L0: "memory-panel:save-l0",
   MEMORY_PANEL_SAVE_L1: "memory-panel:save-l1",

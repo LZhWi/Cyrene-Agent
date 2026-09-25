@@ -53,6 +53,43 @@ export interface AgentRunInput {
   takeoverFromRunId?: string;
 }
 
+const DIRECT_IMAGE_USER_TURN_WINDOW = 3;
+
+type RunImageAttachment = { name: string; filePath: string; mime?: string };
+
+function currentRunImageAttachments(attachments: ComposerAttachment[]): RunImageAttachment[] {
+  return attachments
+    .filter((attachment) => attachment.kind === "image" && attachment.filePath)
+    .map((attachment) => ({
+      name: attachment.name,
+      filePath: attachment.filePath!,
+      mime: attachment.mime,
+    }));
+}
+
+function directImageWindowAttachments(
+  session: ChatSession,
+  current: RunImageAttachment[],
+): RunImageAttachment[] {
+  const recentUserMessages = session.messages
+    .filter((message) => message.role === "user")
+    .slice(-DIRECT_IMAGE_USER_TURN_WINDOW);
+  const byPath = new Map<string, RunImageAttachment>();
+
+  for (const message of recentUserMessages) {
+    for (const attachment of message.attachments ?? []) {
+      if (attachment.kind !== "image" || !attachment.filePath) continue;
+      byPath.set(attachment.filePath, {
+        name: attachment.name,
+        filePath: attachment.filePath,
+        mime: attachment.mime,
+      });
+    }
+  }
+  for (const attachment of current) byPath.set(attachment.filePath, attachment);
+  return [...byPath.values()];
+}
+
 /**
  * 运行宿主：控制器与 React 世界之间的全部通道。
  * 宿主只是端口——不要求把控制器每一次内部状态变化都暴露成一个方法，
@@ -211,6 +248,16 @@ export class AgentRunController {
 
     try {
       const general = await window.chat?.getGeneralSettings?.();
+      const currentImages = currentRunImageAttachments(this.input.attachments);
+      let imageAttachments = currentImages;
+      try {
+        const imageStrategy = await window.chat?.getImageSendStrategy?.(this.input.sessionId);
+        if (imageStrategy?.mode === "direct") {
+          imageAttachments = directImageWindowAttachments(this.input.session, currentImages);
+        }
+      } catch (error) {
+        console.warn("[Cyrene React] 获取图片发送策略失败，仅发送本轮图片:", error);
+      }
       const splitMode = resolveEarlyTtsSplitMode(
         general?.ttsEarlyReadSplitEnabled,
         general?.ttsEarlyReadSplitMode,
@@ -234,13 +281,7 @@ export class AgentRunController {
         recoveryContext: buildTodoRecoveryContext(this.input.session.messages, this.input.assistantId),
         ...(this.input.resumeFromRunId ? { resumeFromRunId: this.input.resumeFromRunId } : {}),
         ...(this.input.takeoverFromRunId ? { takeoverFromRunId: this.input.takeoverFromRunId } : {}),
-        imageAttachments: this.input.attachments
-          .filter((attachment) => attachment.kind === "image" && attachment.filePath)
-          .map((attachment) => ({
-            name: attachment.name,
-            filePath: attachment.filePath!,
-            mime: attachment.mime,
-          })),
+        imageAttachments,
       });
       if (!ack.success) throw new Error(ack.error ?? t("chatPage.errorModelRequestStartFailed"));
       // 新 run 已被主进程接受：同会话旧的守卫冲突操作卡（若有）不再有效

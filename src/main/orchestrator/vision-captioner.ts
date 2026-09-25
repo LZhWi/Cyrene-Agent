@@ -21,6 +21,23 @@ export type VisionImage =
   | { url: string };                  // 公网图片地址，http(s) 开头
 
 const VISION_TIMEOUT_MS = resolveTimeoutPolicy({ stage: "vision-caption" }).totalMs;
+const VISION_FALLBACK_MODEL = "glm-4.1v-thinking-flash";
+const OVERLOAD_RETRY_INTERVAL_MS = 1_000;
+const OVERLOAD_RETRY_MAX = 10;
+
+export const VISION_RETRY_POLICY = {
+  fallbackModel: VISION_FALLBACK_MODEL,
+  retryIntervalMs: OVERLOAD_RETRY_INTERVAL_MS,
+  retryMax: OVERLOAD_RETRY_MAX,
+} as const;
+
+export type VisionAnalyze = (
+  image: VisionImage,
+  userQuery: string,
+  config: VisionConfig,
+  externalSignal: AbortSignal | undefined,
+  maxTokens: number,
+) => Promise<string>;
 
 /**
  * 构造框架指令。判断全交给视觉模型——它本身是语言模型，
@@ -53,6 +70,7 @@ export async function captionImage(
   userQuery: string,
   config: VisionConfig,
   externalSignal?: AbortSignal,
+  maxTokens = 512,
 ): Promise<string> {
   const instruction = buildInstruction(userQuery);
   // base64 本地数据拼 data URL；公网 URL 原样直传，厂商服务器自行拉图
@@ -76,7 +94,7 @@ export async function captionImage(
     // 视觉描述用不到 4096 默认值，512 够用且防回灌撑爆主模型上下文。
     // 只传 max_tokens（最通用）。不传 max_completion_tokens——火山不允许两者同时设，
     // MiniMax 虽标 max_tokens 弃用但仍兼容（弃用≠删除）。
-    max_tokens: 512,
+    max_tokens: maxTokens,
     stream: false,
   };
 
@@ -131,6 +149,55 @@ export async function captionImage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isRetryableConnectionError(errorText: string): boolean {
+  if (errorText.includes("请求超时") || errorText.includes("未返回有效内容")) return false;
+  return /HTTP (429|5\d\d)/.test(errorText) || errorText.includes("请求异常");
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error("视觉模型请求已取消"));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("视觉模型请求已取消"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * 统一视觉韧性策略：429/5xx/网络异常每秒重试，最多 10 次；仍失败时在
+ * 同一端点和凭据下将模型名替换为 glm-4.1v-thinking-flash 再调用一次。
+ * 超时、空内容、主动取消不重试；当前已经是兜底模型时也不重复降级。
+ */
+export async function captionImageWithRetryAndFallback(
+  image: VisionImage,
+  userQuery: string,
+  config: VisionConfig,
+  externalSignal?: AbortSignal,
+  maxTokens = 512,
+  analyze: VisionAnalyze = captionImage,
+): Promise<string> {
+  const canFallback = config.model !== VISION_FALLBACK_MODEL;
+  let result = await analyze(image, userQuery, config, externalSignal, maxTokens);
+  for (
+    let attempt = 0;
+    canFallback && attempt < OVERLOAD_RETRY_MAX && result.startsWith("[错误") && isRetryableConnectionError(result);
+    attempt += 1
+  ) {
+    await waitForRetry(OVERLOAD_RETRY_INTERVAL_MS, externalSignal);
+    result = await analyze(image, userQuery, config, externalSignal, maxTokens);
+  }
+  if (canFallback && result.startsWith("[错误") && isRetryableConnectionError(result)) {
+    return analyze(image, userQuery, { ...config, model: VISION_FALLBACK_MODEL }, externalSignal, maxTokens);
+  }
+  return result;
 }
 
 /** 拼接 baseUrl + /chat/completions，兼容用户填的带或不带尾斜杠。 */

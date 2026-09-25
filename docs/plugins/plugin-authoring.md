@@ -108,7 +108,7 @@ userData/plugin-data/<plugin-id>/
 | `entry` | string | 是 | 插件目录内裸文件名；支持 `.cjs`、`.js`、`.mjs` |
 | `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`、`.jpg`、`.jpeg`、`.webp`、`.svg`；≤2MiB。在聊天窗口插件卡片左侧展示；不合法时静默忽略，不影响加载 |
 | `defaultEnabled` | boolean | 否 | 缺省 true，但只对内置插件生效 |
-| `deps` | string[] | 否 | 可选 `channels`、`llm`、`secrets`、`workspace`、`conversations`、`assistant-delivery`、`screen-observation`、`user-presence`、`weather-context`、`scheduler`、`speech-input` |
+| `deps` | string[] | 否 | 可选 `channels`、`llm`、`secrets`、`workspace`、`conversations`、`assistant-delivery`、`screen-observation`、`user-presence`、`weather-context`、`companion-context`、`memory-retrieval`、`scheduler`、`speech-input` |
 
 以下情况会拒绝加载：
 
@@ -275,6 +275,8 @@ Provider id 在当前插件内唯一，框架会补全为 `plugin:<插件id>:<pr
 也可使用 `"tool"`、`"tone"` 或 `"soul-tail"`；它们分别进入最终人格前缀、Tool 调度层、
 宿主场景语气匹配和最终 Soul 近端锚点。稳定 Provider 不接收 `userText`，仅在宿主明确选择桌面
 `companion` Chat 时消费，不影响原生后端、渠道与其他模式。
+输入中的可选 `styleId` 表示主程序当前 Chat 风格。插件可据此提供稳定人格变体；`custom` 风格应由
+主程序自定义提示词独占，插件不要再叠加任一内建风格。
 
 #### sources 场景声明
 
@@ -444,6 +446,46 @@ if (weather && Date.parse(weather.expiresAt) > Date.now()) {
 ```
 
 成功快照缓存 30 分钟；失败结果 5 分钟后才允许重试。读取不会触发聊天中的天气卡片。
+
+### Companion-context（通话／Minecraft／音乐只读上下文）
+
+manifest 声明 `"deps": ["companion-context"]` 后可用。该接口只读取宿主已经整理好的陪伴上下文，
+不会推进事件游标、激活值或消费状态。宿主尚未接入对应数据源时不会提供此依赖；插件应把返回内容
+标记为历史事实资料，不能把其中的文本当作当前指令。
+
+```js
+const snapshot = await ctx.deps.companionContext.snapshot({
+  conversationId,
+  userText,
+  kinds: ["call", "minecraft", "music"],
+  signal,
+});
+for (const item of snapshot.items) {
+  ctx.log(`${item.kind}: ${item.content}`);
+}
+```
+
+`kind` 固定为 `call`、`minecraft` 或 `music`。`observedAt` 是可选的 ISO 时间；插件不得据此推断
+宿主没有提供的定位、窗口或账户信息。
+
+### Memory-retrieval（插件私有记忆的宿主原生排序）
+
+manifest 声明 `"deps": ["memory-retrieval"]` 后可用。插件仍自行保存正文和向量；宿主只提供当前
+Embedding Provider，以及与原生记忆一致的向量、BM25 和可用 reranker 排序。候选正文不会写入宿主
+记忆库，服务也不会替插件推进 DMAE 或生命周期。
+
+```js
+const { vectors, identity } = await ctx.deps.memoryRetrieval.embed(["需要建立索引的记忆"], { signal });
+const result = await ctx.deps.memoryRetrieval.rank({
+  query: "用户最近的计划",
+  candidates: [{ id: "m1", text: "记忆正文", embedding: vectors[0], weight: 1, lastRecalledAt: Date.now() }],
+  topK: 5,
+  signal,
+});
+```
+
+`rank()` 返回最终 `rankedIds` 和参与向量 topK 的 `vectorHitIds`。权重、最近召回时间和实际注入回执仍由
+插件在自己的事务边界内更新。
 
 ### Scheduler（插件调度任务）
 

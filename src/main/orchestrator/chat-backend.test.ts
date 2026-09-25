@@ -21,7 +21,7 @@ describe("resolveChatBackend", () => {
     expect(resolveChatBackend({ mode: "chat", chatBackend: "companion" })).toBe("native");
   });
 
-  it("陪伴后端只旁路本地主动聊天，手机渠道仍保持上游原生", () => {
+  it("陪伴后端完整接管主动聊天开关，不因旧投递目标重新启动上游控制器", () => {
     expect(shouldUseNativeProactiveChat({
       chatBackend: "companion", proactiveChatMode: "on", proactiveDeliveryTarget: "local",
     })).toBe(false);
@@ -30,7 +30,7 @@ describe("resolveChatBackend", () => {
     })).toBe(true);
     expect(shouldUseNativeProactiveChat({
       chatBackend: "companion", proactiveChatMode: "on", proactiveDeliveryTarget: "wechat",
-    })).toBe(true);
+    })).toBe(false);
     expect(shouldUseNativeProactiveChat({
       chatBackend: "companion", proactiveChatMode: "off", proactiveDeliveryTarget: "local",
     })).toBe(false);

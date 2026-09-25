@@ -64,7 +64,8 @@ describe("Harness Todo working notebook policy", () => {
 
     expect(layers.stablePrefix).toContain("COLLAB_TOOL_RULES");
     expect(layers.stablePrefix).not.toContain("COMPANION_SOUL_PERSONA");
-    expect(layers.runtimeContext).toContain("PLUGIN_MEMORY");
+    expect(layers.runtimeContext).toBeUndefined();
+    expect(layers.stablePrefix).not.toContain("TODO_WORKING_NOTEBOOK_POLICY");
   });
 
   it("assembles the same persona prompt for Work and Code", () => {

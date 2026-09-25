@@ -7,6 +7,10 @@ afterEach(() => {
 });
 
 describe("PluginEventBus 普通发布（旁路）", () => {
+  it("事件监听超时统一为 120 秒", () => {
+    expect(PLUGIN_EVENT_LISTENER_TIMEOUT_MS).toBe(120_000);
+  });
+
   it("发布函数返回时不在当前调用栈进入监听器，监听器从后续宏任务开始", async () => {
     const bus = createPluginEventBus();
     const calls: string[] = [];

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   PluginAssistantMessageFeedbackEvent,
+  PluginConversationChangedEvent,
   PluginPromptAcceptedEvent,
   PluginSchedulerFinishedEvent,
   PluginToolFinishedEvent,
@@ -17,6 +18,7 @@ export type SchedulerFinishedInput = Omit<PluginSchedulerFinishedEvent, "eventId
 export type ToolFinishedInput = Omit<PluginToolFinishedEvent, "eventId" | "timestamp">;
 export type PromptAcceptedInput = Omit<PluginPromptAcceptedEvent, "eventId" | "timestamp">;
 export type AssistantMessageFeedbackInput = Omit<PluginAssistantMessageFeedbackEvent, "eventId" | "timestamp">;
+export type ConversationChangedInput = Omit<PluginConversationChangedEvent, "eventId" | "timestamp">;
 
 export interface LifecyclePublisherDeps {
   /** 事件发布入口：接 PluginManager.publishHostEvent（旁路发布，不等待监听器）。 */
@@ -33,6 +35,7 @@ export interface LifecyclePublisher {
   publishToolFinished(event: ToolFinishedInput): void;
   publishPromptAccepted(event: PromptAcceptedInput): Promise<void>;
   publishAssistantMessageFeedback(event: AssistantMessageFeedbackInput): Promise<void>;
+  publishConversationChanged(event: ConversationChangedInput): Promise<void>;
 }
 
 /**
@@ -79,6 +82,9 @@ export function createLifecyclePublisher(deps: LifecyclePublisherDeps): Lifecycl
     },
     publishAssistantMessageFeedback(event) {
       return publishAwaited("assistant-message:feedback", { ...event });
+    },
+    publishConversationChanged(event) {
+      return publishAwaited("conversation:changed", { ...event });
     },
   };
 }

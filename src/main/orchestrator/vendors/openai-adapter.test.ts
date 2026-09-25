@@ -182,6 +182,49 @@ describe("OpenAICompatAdapter", () => {
     });
   });
 
+  test("replays hidden Tool reasoning for the Soul request only through the provider-declared field", () => {
+    const adapter = new OpenAICompatAdapter("deepseek", {
+      ...capability,
+      thinkingField: "reasoning_content",
+      supportsThinking: true,
+    });
+    const request = adapter.buildRequest({
+      model: "deepseek-reasoner",
+      messages: [{
+        role: "assistant",
+        content: null,
+        thinking: "隐藏的工具决策过程",
+        toolCalls: [{ id: "call-1", name: "weather", arguments: "{}" }],
+      }],
+      stream: false,
+    }, {
+      provider: "deepseek",
+      baseUrl: "https://example.test/v1",
+      model: "deepseek-reasoner",
+      apiKey: "key",
+    });
+
+    expect(JSON.parse(request.body).messages[0]).toEqual({
+      role: "assistant",
+      content: null,
+      reasoning_content: "隐藏的工具决策过程",
+      tool_calls: [{
+        id: "call-1",
+        type: "function",
+        function: { name: "weather", arguments: "{}" },
+      }],
+    });
+
+    const withoutDeclaredField = new OpenAICompatAdapter("plain", capability).buildRequest({
+      model: "m",
+      messages: [{ role: "assistant", content: "内部", thinking: "不得裸发" }],
+    }, { provider: "plain", baseUrl: "https://example.test/v1", model: "m", apiKey: "key" });
+    expect(JSON.parse(withoutDeclaredField.body).messages[0]).toEqual({
+      role: "assistant",
+      content: "内部",
+    });
+  });
+
   test("buildRequest uses Authorization Bearer when authStyle=bearer", () => {
     const adapter = new OpenAICompatAdapter("test-openai", { ...capability, authStyle: "bearer" });
     const req = adapter.buildRequest(

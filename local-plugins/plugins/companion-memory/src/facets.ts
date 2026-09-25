@@ -7,9 +7,14 @@ export interface RetrievalPlan {
   semanticResults: number;
   kindResults: number;
   maxResults: number;
+  candidateDepth: number;
   characterBudget: number;
   queryKind?: MemoryKind;
+  queryKinds?: MemoryKind[];
 }
+export interface QueryRouteDecision { needsExpansion: boolean; retrievalKinds: MemoryKind[]; scope: RetrievalScope; confidence: number }
+const QUERY_ROUTE_MIN_CONFIDENCE = 0.5;
+const QUERY_ROUTE_FULL_SCOPE_CONFIDENCE = 0.75;
 const kinds = new Set<string>(MEMORY_KINDS);
 
 export function normalizeStoredFacets(input: unknown): MemoryFacets | undefined {
@@ -20,6 +25,29 @@ export function normalizeStoredFacets(input: unknown): MemoryFacets | undefined 
   const retrievalKinds = [...new Set(raw.retrievalKinds as MemoryKind[])];
   if (!retrievalKinds.includes(raw.primaryKind as MemoryKind)) retrievalKinds.unshift(raw.primaryKind as MemoryKind);
   return { primaryKind: raw.primaryKind as MemoryKind, retrievalKinds: retrievalKinds.slice(0, 3), source: raw.source as MemoryFacets["source"], pendingClassification: raw.pendingClassification };
+}
+
+export function normalizeModelFacets(input: unknown): MemoryFacets {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { primaryKind: "other", retrievalKinds: ["other"], source: "pending", pendingClassification: true };
+  }
+  const raw = input as Record<string, unknown>;
+  const primaryKind = typeof raw.primaryKind === "string" && kinds.has(raw.primaryKind)
+    ? raw.primaryKind as MemoryKind
+    : typeof raw.kind === "string" && kinds.has(raw.kind)
+      ? raw.kind as MemoryKind
+      : undefined;
+  if (!primaryKind) return { primaryKind: "other", retrievalKinds: ["other"], source: "pending", pendingClassification: true };
+  const rawKinds = Array.isArray(raw.retrievalKinds) ? raw.retrievalKinds : [primaryKind];
+  let meaningful = [...new Set(rawKinds.filter((kind): kind is MemoryKind => typeof kind === "string" && kinds.has(kind) && kind !== "other"))];
+  const normalizedPrimary = primaryKind === "other" && meaningful.length ? meaningful[0] : primaryKind;
+  if (normalizedPrimary !== "other") meaningful = [normalizedPrimary, ...meaningful.filter((kind) => kind !== normalizedPrimary)];
+  return {
+    primaryKind: normalizedPrimary,
+    retrievalKinds: normalizedPrimary === "other" ? ["other"] : meaningful.slice(0, 3),
+    source: "model",
+    pendingClassification: false,
+  };
 }
 
 /** 查询规则只做召回路由，不反向改写记忆分类。无法明确识别时不缩小候选。 */
@@ -38,19 +66,23 @@ export const isFacetListQuery = (text: string) => /哪些|所有|全部|列出|�
 export const isExhaustiveFacetListQuery = (text: string) => /每一个|每一条|所有|全部|完整列出|一个不漏/u.test(text.normalize("NFC"));
 export const matchesFacet = (facets: MemoryFacets | undefined, kind: MemoryKind | undefined) => Boolean(kind && facets?.source === "model" && facets.retrievalKinds.includes(kind));
 
-/** 与本地版 memory-facets 的数量和正文预算保持一致；规则无法可靠识别时只取原语义 Top 5。 */
-export function resolveRetrievalPlan(query: string): RetrievalPlan {
-  const queryKind = inferQueryKind(query);
-  if (!queryKind || !isFacetListQuery(query)) {
-    return { scope: "normal", semanticResults: 5, kindResults: 0, maxResults: 5, characterBudget: 1800 };
-  }
-  const scope: RetrievalScope = isExhaustiveFacetListQuery(query) ? "exhaustive_list" : "scoped_list";
+/** 与本地版 memory-facets 保持一致：只有可选模型路由达到阈值时才扩大分面召回。 */
+export function resolveRetrievalPlan(query: string, route?: QueryRouteDecision): RetrievalPlan {
+  void query;
+  const confidence = typeof route?.confidence === "number" && Number.isFinite(route.confidence) ? Math.max(0, Math.min(route.confidence, 1)) : 1;
+  const queryKinds = route?.needsExpansion === true && confidence >= QUERY_ROUTE_MIN_CONFIDENCE
+    ? [...new Set(route.retrievalKinds.filter((kind) => kind !== "other"))].slice(0, 3)
+    : [];
+  if (!queryKinds.length) return { scope: "normal", semanticResults: 5, kindResults: 0, maxResults: 5, candidateDepth: 20, characterBudget: 1800, queryKinds: [] };
+  const scope = confidence >= QUERY_ROUTE_FULL_SCOPE_CONFIDENCE ? route?.scope ?? "normal" : "normal";
   return {
     scope,
     semanticResults: 5,
-    kindResults: scope === "exhaustive_list" ? 15 : 8,
-    maxResults: scope === "exhaustive_list" ? 20 : 13,
-    characterBudget: scope === "exhaustive_list" ? 4000 : 3000,
-    queryKind,
+    kindResults: scope === "exhaustive_list" ? 15 : scope === "scoped_list" ? 8 : 5,
+    maxResults: scope === "exhaustive_list" ? 20 : scope === "scoped_list" ? 13 : 10,
+    candidateDepth: scope === "normal" ? 20 : 48,
+    characterBudget: scope === "normal" ? 1800 : scope === "scoped_list" ? 3000 : 4000,
+    queryKinds,
+    queryKind: queryKinds[0],
   };
 }

@@ -72,37 +72,31 @@ describe("完整记忆块预算", () => {
     expect(result.text).not.toContain("[记忆 ordinary；");
   });
 
-  it("历史轮次也不能在预算边缘留下半条用户或助手内容", () => {
+  it("L2 预算渲染不再混入历史轮次，历史由独立共享检索管线负责", () => {
     const turn = {
       id: "history-1", sessionId: "synthetic", user: "用户问茶的来源", assistant: "助手答复茶的完整说明",
       userAt: 1, assistantAt: 2,
     };
     const { memory } = memoryFixture([], [turn]);
-    const full = memory.searchWithBudget("茶", [], [], [], undefined, 24_000);
-
-    expect(full.text).toContain("[历史 history-1；");
-    expect(full.text).toContain(turn.assistant);
-    expect(memory.searchWithBudget("茶", [], [], [], undefined, full.text.length - 1)).toEqual({
+    expect(memory.searchWithBudget("茶", [], [], [], undefined, 24_000)).toEqual({
       text: "",
       includedMemoryIds: [],
     });
   });
 
-  it("真实记忆占满预算时仍优先保留一条匹配的私有历史轮次", () => {
+  it("L2 预算只由结构化记忆占用，不再为历史轮次预留空间", () => {
     const turn = {
       id: "recent", sessionId: "synthetic", user: "乌龙茶是我刚才说的偏好", assistant: "已记下乌龙茶偏好",
       userAt: 10, assistantAt: 11,
     };
     const entries = [entry("one", "乌龙茶相关旧记忆一"), entry("two", "乌龙茶相关旧记忆二")];
     const { memory } = memoryFixture(entries, [turn]);
-    const historyLength = memoryFixture([], [turn]).memory.searchWithBudget("乌龙茶", [], [], [], undefined, 24_000).text.length;
     const firstLength = memoryFixture([entries[0]]).memory.searchWithBudget("乌龙茶", [], [], [], undefined, 24_000).text.length;
-    const result = memory.searchWithBudget("乌龙茶", [], [], [], undefined, historyLength + 2 + firstLength);
+    const result = memory.searchWithBudget("乌龙茶", [], [], [], undefined, firstLength);
 
-    expect(result.text).toContain("[历史 recent；");
-    expect(result.text).toContain(turn.user);
     expect(result.text).toContain("[记忆 one；");
     expect(result.text).not.toContain("[记忆 two；");
+    expect(result.text).not.toContain(turn.user);
     expect(result.includedMemoryIds).toEqual(["one"]);
   });
 
@@ -114,21 +108,41 @@ describe("完整记忆块预算", () => {
     const render = vi.fn((query: string, expansions: string[], semanticIds: string[], rerankedIds: string[], selectedIds: string[] | undefined, maxChars: number) =>
       data.memory.searchWithBudget(query, expansions, semanticIds, rerankedIds, selectedIds, maxChars));
     const preview = vi.fn((ids: string[]) => dmae.preview(ids, entries).selectedIds);
-    const commit = vi.fn((ids: string[]) => { dmae.apply(ids, entries); lifecycle.record(ids, entries); });
+    const commit = vi.fn((includedIds: string[], recalledIds: string[]) => { dmae.commit(recalledIds, includedIds, entries); lifecycle.record(recalledIds, entries); });
     const retrieval = createRetrieval(data.value, render, vi.fn(), undefined, undefined, undefined,
       () => ["too-large", "included"], preview, commit);
     const budget = data.memory.searchWithBudget("茶", [], [], [], ["included"], 24_000).text.length;
 
     const result = await retrieval.searchForPrompt("茶", signal(), true, budget);
 
-    expect(render).toHaveBeenCalledWith("茶", [], [], [], ["too-large", "included"], budget);
+    expect(render).toHaveBeenCalledWith("茶", [], [], [], ["too-large", "included"], budget, false, "automatic", expect.objectContaining({ scope: "normal", maxResults: 5 }));
     expect(result).toContain("[记忆 included；");
     expect(result).not.toContain("[记忆 too-large；");
     expect(commit).toHaveBeenCalledOnce();
-    expect(commit).toHaveBeenCalledWith(["included"]);
+    expect(commit).toHaveBeenCalledWith(["included"], ["included"]);
     expect((data.map.get("dmae-state") as any).states).toHaveProperty("included");
     expect((data.map.get("dmae-state") as any).states).not.toHaveProperty("too-large");
     expect((data.map.get("lifecycle-state") as any).recalls).toHaveProperty("included");
     expect((data.map.get("lifecycle-state") as any).recalls).not.toHaveProperty("too-large");
+  });
+
+  it("相关 L2 的预览不提前注入常驻画像、实体和 Dream 上下文", async () => {
+    const entries = [entry("long", `茶-${"长".repeat(500)}`), entry("short", "茶-短条")];
+    const data = memoryFixture(entries);
+    const alwaysOn = "【用户画像】\n称呼：小涟\n\n【人物关系】\n· 小鹿（人物）\n\n[长期陪伴叙事]\n· 一段长期印象";
+    const render = vi.fn((query: string, expansions: string[], semanticIds: string[], rerankedIds: string[], selectedIds: string[] | undefined, maxChars: number) =>
+      data.memory.searchWithBudget(query, expansions, semanticIds, rerankedIds, selectedIds, maxChars, false, "automatic-related"));
+    const retrieval = createRetrieval(data.value, render, vi.fn(), undefined, undefined, undefined,
+      () => ["long", "short"], (ids) => ids, vi.fn(), () => alwaysOn);
+    const shortText = data.memory.searchWithBudget("茶", [], [], [], ["short"], 24_000, false, "automatic").text;
+    const budget = shortText.length + 2 + alwaysOn.length;
+
+    const result = await retrieval.previewForPrompt("茶", signal(), budget);
+
+    expect(render).toHaveBeenCalledWith("茶", [], [], [], ["long", "short"], budget, false, "automatic-related", expect.any(Object));
+    expect(result.text).not.toContain(alwaysOn);
+    expect(result.text).toBe("");
+    expect(result.text).not.toContain("茶-长");
+    expect(result.includedMemoryIds).toEqual([]);
   });
 });

@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   userDataDir: "",
   handlers: new Map<string, (...args: any[]) => unknown>(),
   openPath: vi.fn(async () => ""),
+  scheduleVisual: vi.fn(),
 }));
+
+vi.mock("../chat/visual-history-caption", () => ({ scheduleVisualHistoryCaption: mocks.scheduleVisual }));
 
 vi.mock("electron", () => ({
   app: {
@@ -35,6 +38,7 @@ describe("chats IPC mode filtering", () => {
     vi.resetModules();
     mocks.handlers.clear();
     mocks.openPath.mockClear();
+    mocks.scheduleVisual.mockClear();
     mocks.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-chats-ipc-"));
   });
 
@@ -76,6 +80,22 @@ describe("chats IPC mode filtering", () => {
     }));
   });
 
+  it("does not resend unchanged historical images for background captioning", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    registerChatsIpc();
+    const event = { sender: {} };
+    const create = mocks.handlers.get(IPC.CHATS_CREATE)!;
+    const append = mocks.handlers.get(IPC.CHATS_APPEND)!;
+    const replace = mocks.handlers.get(IPC.CHATS_REPLACE_MESSAGES)!;
+    const session = await create(event, { mode: "chat" }) as { id: string };
+    const message = { id: "photo-1", role: "user", content: "看这张图", at: 1,
+      attachments: [{ kind: "image", name: "photo.png", filePath: "C:/photo.png", status: "done" }] };
+    await append(event, { id: session.id, message });
+    expect(mocks.scheduleVisual).toHaveBeenCalledTimes(1);
+    await replace(event, { id: session.id, messages: [message] });
+    expect(mocks.scheduleVisual).toHaveBeenCalledTimes(1);
+  });
+
   it("publishes one ignore event only for the latest pending message of a running plugin", async () => {
     const { registerChatsIpc } = await import("./chats-ipc");
     const store = await import("./chats-store");
@@ -107,6 +127,35 @@ describe("chats IPC mode filtering", () => {
     expect(store.getSession(proactive.id)?.messages.at(-1)?.pluginDelivery?.ignoreFeedback).toBe("ignored");
     expect(await ignore({ sender: {} }, { conversationId: proactive.id, messageId: "message-1" })).toEqual({ ok: false });
     expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it("publishes persisted message invalidation for round and conversation deletion", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const publish = vi.fn(async () => undefined);
+    registerChatsIpc(undefined, { publishConversationChanged: publish });
+    const create = mocks.handlers.get(IPC.CHATS_CREATE);
+    const append = mocks.handlers.get(IPC.CHATS_APPEND);
+    const deleteMessage = mocks.handlers.get(IPC.CHATS_DELETE_MESSAGE);
+    const deleteConversation = mocks.handlers.get(IPC.CHATS_DELETE);
+    if (!create || !append || !deleteMessage || !deleteConversation) throw new Error("chat mutation handlers were not registered");
+    const event = { sender: {} };
+    const session = await create(event, { mode: "chat" }) as { id: string };
+    await append(event, { id: session.id, message: { id: "user-1", role: "user", content: "原文", at: 1 } });
+    await append(event, { id: session.id, message: { id: "model-1", role: "model", content: "回复", at: 2 } });
+    await deleteMessage(event, { id: session.id, messageId: "user-1" });
+    expect(publish).toHaveBeenNthCalledWith(1, {
+      conversationId: session.id,
+      reason: "message-round-deleted",
+      allMessages: false,
+      invalidatedMessageIds: ["user-1", "model-1"],
+    });
+    await deleteConversation(event, session.id);
+    expect(publish).toHaveBeenNthCalledWith(2, {
+      conversationId: session.id,
+      reason: "conversation-deleted",
+      allMessages: true,
+      invalidatedMessageIds: [],
+    });
   });
 
   it("does not register the removed Cline plan/act IPC", async () => {

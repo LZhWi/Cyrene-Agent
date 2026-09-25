@@ -49,3 +49,16 @@
 .cy-segment-label {
   line-height: 1;
 }
+
+.cy-page.is-chat-mode .cy-segmented {
+  height: 36px;
+  background: rgb(246 247 250 / 60%);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 10%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  backdrop-filter: blur(14px) saturate(150%);
+}
+
+.cy-page.is-chat-mode .cy-segment.is-active {
+  background: linear-gradient(135deg, #ffe3ee, #e6d9ff);
+  border-color: rgb(232 74 120 / 22%);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 6%), inset 0 1px 0 rgb(255 255 255 / 65%);
+}

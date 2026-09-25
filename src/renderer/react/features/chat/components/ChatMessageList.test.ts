@@ -16,7 +16,7 @@ vi.mock("@ant-design/x-markdown", () => ({ XMarkdown: ({ content }: { content?: 
 vi.mock("@ant-design/x-markdown/plugins/Latex", () => ({ default: () => ({}) }));
 vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
 
-import { createMessageItems, formatChannelSourceLabel, resolveChannelConversationLabel, RunActivityDetail, type ChatMessageItem } from "./ChatMessageList";
+import { createMessageItems, formatChannelSourceLabel, formatMessageTime, resolveChannelConversationLabel, RunActivityDetail, type ChatMessageItem } from "./ChatMessageList";
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 
 describe("React chat sticker messages", () => {
@@ -31,6 +31,31 @@ describe("React chat sticker messages", () => {
 });
 
 describe("formal answer visibility", () => {
+  it("carries timestamp and Cyrene-style blank-line segments to the visible assistant bubble", () => {
+    const message: ChatMessageItem = {
+      id: "assistant-segmented",
+      role: "assistant",
+      content: "第一段\n\n第二段",
+      at: new Date(2026, 0, 1, 7, 5).getTime(),
+    };
+
+    const assistant = createMessageItems([message], [], "chat", "chat").find((item) => item.role === "assistant");
+    expect(assistant?.extraInfo?.segments).toEqual(["第一段", "第二段"]);
+    expect(assistant?.extraInfo?.at).toBe(message.at);
+    expect(formatMessageTime(message.at)).toBe("07:05");
+  });
+
+  it("does not apply the Chat segmentation layout to upstream Work mode", () => {
+    const message: ChatMessageItem = {
+      id: "assistant-work",
+      role: "assistant",
+      content: "第一段\n\n第二段",
+    };
+
+    const assistant = createMessageItems([message], [], "work", "all").find((item) => item.role === "assistant");
+    expect(assistant?.extraInfo?.segments).toEqual([message.content]);
+  });
+
   it("keeps an interrupted run in the process area without creating an empty assistant bubble", () => {
     const message: ChatMessageItem = {
       id: "assistant-interrupted",

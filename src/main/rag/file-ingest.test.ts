@@ -9,6 +9,8 @@ import {
   ingestPaths,
   describePendingAttachment,
   isBinary,
+  hasUtf16Bom,
+  decodeTextBuffer,
   isImageExt,
   isTextExt,
   isUnsupportedExt,
@@ -54,6 +56,25 @@ describe("isBinary", () => {
   });
   it("只含第一个 null → true", () => {
     expect(isBinary(Buffer.from([0x48, 0x00, 0x69]))).toBe(true);
+  });
+});
+
+describe("UTF text ingestion", () => {
+  const utf16le = (value: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(value, "utf16le")]);
+  const utf16be = (value: string) => {
+    const body = Buffer.from(value, "utf16le");
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(body).swap16()]);
+  };
+
+  it("detects and decodes UTF-16 LE/BE instead of rejecting it as binary", async () => {
+    expect(hasUtf16Bom(utf16le("hi"))).toBe(true);
+    expect(decodeTextBuffer(utf16be("会议纪要"))).toBe("会议纪要");
+    const fp = write("谈话记录.txt", utf16le("这是一份谈话记录。"));
+    await expect(ingestOneFile(fp, async () => ({ importId: "utf16", chunkCount: 1 }))).resolves.toMatchObject({
+      kind: "indexed",
+      importId: "utf16",
+      text: "这是一份谈话记录。",
+    });
   });
 });
 
@@ -138,14 +159,14 @@ describe("ingestOneFile", () => {
     mockImport = vi.fn().mockResolvedValue({ importId: "import-test", chunkCount: 3 });
   });
 
-  it("小文本文件 → kind:text 内容返回", async () => {
+  it("小文本文件同时建立索引并在当轮返回全文", async () => {
     const fp = write("hello.txt", "Hello, 世界！");
     const r = await ingestOneFile(fp, mockImport);
-    expect(r.kind).toBe("text");
-    if (r.kind === "text") {
+    expect(r.kind).toBe("indexed");
+    if (r.kind === "indexed") {
       expect(r.text).toBe("Hello, 世界！");
     }
-    expect(mockImport).not.toHaveBeenCalled();
+    expect(mockImport).toHaveBeenCalledOnce();
   });
 
   it("大文本文件（>30k） → kind:indexed 调用 importFn", async () => {
@@ -230,9 +251,9 @@ describe("ingestOneFile", () => {
     const exact = "x".repeat(SMALL_THRESHOLD);
     const fp = write("exact.txt", exact);
     const r = await ingestOneFile(fp, mockImport);
-    // > threshold 才索引，== threshold 应算小（<=）
-    expect(r.kind).toBe("text");
-    expect(mockImport).not.toHaveBeenCalled();
+    expect(r.kind).toBe("indexed");
+    expect(r).toMatchObject({ text: exact });
+    expect(mockImport).toHaveBeenCalledOnce();
   });
 
   it("空文件 → kind:empty", async () => {
@@ -269,10 +290,10 @@ describe("ingestOneFile", () => {
     expect(r.kind).toBe("unsupported");
   });
 
-  it("无扩展名、文本 → text", async () => {
+  it("无扩展名、文本 → indexed 并内联全文", async () => {
     const fp = write("readme", "This is my readme.");
     const r = await ingestOneFile(fp, mockImport);
-    expect(r.kind).toBe("text");
+    expect(r).toMatchObject({ kind: "indexed", text: "This is my readme." });
   });
 
   it("文本扩展名但含 null 字节 → unsupported（二进制兜底）", async () => {
@@ -352,7 +373,7 @@ describe("ingestPaths", () => {
     const fp = write("single.txt", "hello");
     const r = await ingestPaths([fp], mockImport);
     expect(r).toHaveLength(1);
-    expect(r[0].kind).toBe("text");
+    expect(r[0].kind).toBe("indexed");
     expect(r[0].name).toBe("single.txt");
   });
 
@@ -372,7 +393,7 @@ describe("ingestPaths", () => {
     write("sub/code.js", "const x = 1;");
     const r = await ingestPaths([fp, tmpDir], mockImport);
     expect(r).toHaveLength(3);
-    expect(r.filter((a) => a.kind === "text")).toHaveLength(2);
+    expect(r.filter((a) => a.kind === "indexed")).toHaveLength(2);
     expect(r.filter((a) => a.kind === "unsupported")).toHaveLength(1);
   });
 

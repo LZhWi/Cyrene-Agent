@@ -55,4 +55,15 @@ describe("人工确认的 archived 冷召回", () => {
     memory.editEntry({ id: "hot", content: "用户最近在系统学习法语", pinned: false, status: "active", revision: 0 });
     expect(() => memory.restoreArchivedRecall({ ...preview, entryIds: ["cold"] })).toThrow("记忆已发生变化");
   });
+
+  it("当轮临时使用不改状态；事后确认只激活未变化的归档条目且能撤销", () => {
+    const { memory } = fixture();
+    const candidate = memory.previewArchivedRecall({ query: "京都红叶" }).candidates[0];
+    expect(memory.view().entries.find((entry) => entry.id === "cold")?.status).toBe("archived");
+    expect(() => memory.restoreArchivedFromPrompt({ ...candidate, content: "已改写" })).toThrow("已变化");
+    const applied = memory.restoreArchivedFromPrompt(candidate);
+    expect(memory.view().entries.find((entry) => entry.id === "cold")?.status).toBe("active");
+    memory.undoLifecycleTransition({ id: applied.lifecycleChangeId, revision: memory.view().revision });
+    expect(memory.view().entries.find((entry) => entry.id === "cold")?.status).toBe("archived");
+  });
 });

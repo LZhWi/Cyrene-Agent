@@ -33,7 +33,7 @@ function ChevronIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>;
 }
 
-export function StyleControl() {
+export function StyleControl({ titlebar = false }: { titlebar?: boolean }) {
   const { t } = useTranslation();
   const [styleId, setStyleId] = useState<StyleId>("default");
   const [open, setOpen] = useState(false);
@@ -83,8 +83,13 @@ export function StyleControl() {
       }
     >
       <button type="button" className="cy-composer__agent-button cy-style-control">
-        <img className="cy-style-icon" src={current.iconUrl} alt="" />
-        <span>style · {t(current.labelKey)}</span>
+        {!titlebar && <img className="cy-style-icon" src={current.iconUrl} alt="" />}
+        {titlebar ? (
+          <>
+            <span className="cy-title-control-label">风格</span>
+            <span className="cy-title-control-value">{t(current.labelKey)}</span>
+          </>
+        ) : <span>style · {t(current.labelKey)}</span>}
         <ChevronIcon />
       </button>
     </Popover>

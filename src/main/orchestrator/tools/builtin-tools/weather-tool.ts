@@ -26,6 +26,7 @@ const WEATHER_TIMEOUT_MS = 15_000;
 
 /** 注入的配置获取器（由 index.ts 启动时调 setWeatherConfig 设置）。 */
 let weatherCityGetter: (() => string) | null = null;
+let weatherCoordinatesGetter: (() => { latitude: number; longitude: number } | null) | null = null;
 let weatherSourceGetter: (() => string) | null = null;
 let amapKeyGetter: (() => string) | null = null;
 let weatherEnabledGetter: (() => boolean) | null = null;
@@ -76,11 +77,13 @@ export function setWeatherConfig(
   amapKeyFn: () => string,
   cardCb?: (card: WeatherCardData, context?: ToolContext) => void,
   enabledGetter?: () => boolean,
+  coordinatesGetter?: () => { latitude: number; longitude: number } | null,
 ): void {
   weatherCityGetter = cityGetter;
   weatherSourceGetter = sourceGetter;
   amapKeyGetter = amapKeyFn;
   weatherEnabledGetter = enabledGetter ?? null;
+  weatherCoordinatesGetter = coordinatesGetter ?? null;
   if (cardCb) weatherCardCallback = cardCb;
 }
 
@@ -108,8 +111,15 @@ async function omResolveCity(city: string): Promise<OMCity | null> {
 }
 
 /** Open-Meteo 实时天气查询（免费免 key）。 */
-async function omFetchWeather(city: string, context?: ToolContext, emitCard = true): Promise<string> {
-  const loc = await omResolveCity(city);
+async function omFetchWeather(
+  city: string,
+  context?: ToolContext,
+  emitCard = true,
+  coordinates?: { latitude: number; longitude: number },
+): Promise<string> {
+  const loc: OMCity | null = coordinates
+    ? { name: "当前位置", latitude: coordinates.latitude, longitude: coordinates.longitude, country: "" }
+    : await omResolveCity(city);
   if (!loc) {
     return `[错误] 找不到城市"${city}"，请确认城市名（支持中文/拼音）。`;
   }
@@ -306,6 +316,7 @@ async function executeWeather(args: Record<string, unknown>, context?: ToolConte
 
   // 城市：参数优先，没传读用户信息默认城市
   let city = String(args.city ?? "").trim();
+  const coordinates = city ? null : weatherCoordinatesGetter?.() ?? null;
   if (!city) {
     city = (weatherCityGetter?.() ?? "").trim();
   }
@@ -313,16 +324,23 @@ async function executeWeather(args: Record<string, unknown>, context?: ToolConte
   // 脱敏：仅记城市名（公开地理名）+ 来源标签；不带用户 ID/任何凭证。
   const argsCityRaw = String(args.city ?? "").trim();
   const defaultCityRaw = (weatherCityGetter?.() ?? "").trim();
-  const source2: "arg" | "default" | "none" = argsCityRaw
+  const source2: "arg" | "location" | "default" | "none" = argsCityRaw
     ? "arg"
+    : coordinates
+      ? "location"
     : defaultCityRaw
       ? "default"
       : "none";
   console.log(
     `[Weather] city resolution: argsCity=${argsCityRaw || "(empty)"} defaultCity=${defaultCityRaw || "(empty)"} final=${city || "(empty)"} source=${source2}`,
   );
-  if (!city) {
+  if (!city && !coordinates) {
     return "[提示] 没有指定城市，也没设置默认城市。请告诉用户：在 设置 → 我的信息 填默认城市，或直接说出要查的城市名。";
+  }
+
+  // 自动定位直接使用经纬度；固定城市再遵循用户选择的天气源。
+  if (coordinates) {
+    return omFetchWeather("", context, emitCard, coordinates);
   }
 
   // 按天气源分支

@@ -93,12 +93,24 @@ function factory() {
     storage: fakeStorage,
     chatsReader: reader,
     assistantDeliverySink,
-    screenObservation: { observe: async ({ focus } = {}) => `screen:${focus ?? ""}` },
+    screenObservation: {
+      observe: async ({ focus } = {}) => `screen:${focus ?? ""}`,
+      observeSnapshot: async () => ({ text: "screen:periodic", noChange: false }),
+    },
     userPresence: { snapshot: async () => ({ at: "2026-09-20T00:00:00.000Z", idleSeconds: 12, screenLocked: false }) },
     weatherContext: { snapshot: async () => ({
       observedAt: "2026-09-20T00:00:00.000Z", expiresAt: "2026-09-20T00:30:00.000Z",
       category: "clear", temperatureC: 24, precipitationMm: 0,
     }) },
+    companionContext: {
+      snapshot: async ({ kinds }) => ({
+        items: (kinds ?? ["call", "minecraft", "music"]).map((kind) => ({
+          kind,
+          content: `${kind}-context`,
+        })),
+      }),
+    },
+    proactiveDocuments: { search: async (query) => `【相关文档】${query}` },
     schedulerStore,
   });
 }
@@ -108,6 +120,10 @@ describe("宿主服务装配工厂", () => {
     const hostServices = factory();
     const a = hostServices.createForPlugin({ pluginId: "plugin-a", signal: new AbortController().signal, trackResource: undefined as never });
     const b = hostServices.createForPlugin({ pluginId: "plugin-b", signal: new AbortController().signal, trackResource: undefined as never });
+    const companion = hostServices.createForPlugin({ pluginId: "companion-chat", signal: new AbortController().signal, trackResource: undefined as never });
+
+    expect(a.proactiveDocuments).toBeUndefined();
+    expect(await companion.proactiveDocuments?.search("测试文档")).toBe("【相关文档】测试文档");
 
     expect(a.channels?.has("builtin")).toBe(true);
     expect(a.channels?.has("other")).toBe(false);
@@ -133,8 +149,22 @@ describe("宿主服务装配工厂", () => {
       allowIgnoreFeedback: false,
     });
     expect(await a.screenObservation?.observe({ focus: "当前窗口" })).toBe("screen:当前窗口");
+    expect(await a.screenObservation?.observeSnapshot({ previousSummary: "screen:before" })).toEqual({
+      text: "screen:periodic",
+      noChange: false,
+    });
     expect(await a.userPresence?.snapshot()).toMatchObject({ idleSeconds: 12, screenLocked: false });
     expect(await a.weatherContext?.snapshot()).toMatchObject({ category: "clear", temperatureC: 24 });
+    expect(await a.companionContext?.snapshot({
+      conversationId: "conv-1",
+      userText: "继续",
+      kinds: ["call", "music"],
+    })).toEqual({
+      items: [
+        { kind: "call", content: "call-context" },
+        { kind: "music", content: "music-context" },
+      ],
+    });
 
     // scheduler 服务已装配且能创建任务（新任务必然处于停用状态等待用户授权）
     const created = await a.scheduler?.createTask({
@@ -176,6 +206,9 @@ describe("宿主服务装配工厂", () => {
       (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
     );
     await expect(deps.weatherContext?.snapshot()).rejects.toSatisfy(
+      (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
+    );
+    await expect(deps.companionContext?.snapshot({ userText: "继续" })).rejects.toSatisfy(
       (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
     );
   });

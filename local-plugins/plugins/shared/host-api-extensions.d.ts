@@ -1,14 +1,28 @@
 import type { PluginPromptMode } from "@playa0v0/cyrene-plugin-sdk";
 
 declare module "@playa0v0/cyrene-plugin-sdk" {
+  interface PluginConversationSummary {
+    purpose?: "proactive-chat";
+  }
+
+  interface PluginDeps {
+    proactiveDocuments?: { search(query: string, signal?: AbortSignal): Promise<string> };
+  }
+
+  interface PluginLlmGenerateOptions {
+    reasoning?: "inherit" | "on" | "off";
+  }
+
   interface PluginAssistantDeliveryResult {
     conversationId: string;
     messageId: string;
     at: string;
+    deliveredText?: string;
   }
 
   interface PluginAssistantDeliveryService {
     postProactiveMessage(text: string, options?: { allowIgnoreFeedback?: boolean }): Promise<PluginAssistantDeliveryResult>;
+    canPostProactiveMessage?(): Promise<boolean>;
   }
 
   interface PluginAssistantMessageFeedbackEvent {
@@ -20,11 +34,15 @@ declare module "@playa0v0/cyrene-plugin-sdk" {
     action: "ignore";
   }
 
+  interface PluginScreenObservationService {
+    observeSnapshot(input?: { previousSummary?: string; signal?: AbortSignal }): Promise<{
+      text: string;
+      noChange: boolean;
+    }>;
+  }
+
   interface PluginDeps {
     assistantDelivery?: PluginAssistantDeliveryService;
-    screenObservation?: {
-      observe(input?: { focus?: string; signal?: AbortSignal }): Promise<string>;
-    };
   }
 
   interface PluginStablePromptProviderInput {

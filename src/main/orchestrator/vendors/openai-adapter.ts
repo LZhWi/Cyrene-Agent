@@ -15,7 +15,10 @@ import { resolveApiEndpoint } from "../../../shared/api-endpoint";
 import { buildStableCacheFingerprint } from "../prompt-layers";
 
 /** 把统一消息翻译成 OpenAI wire messages。 */
-function toWireMessages(messages: ChatMessage[]): unknown[] {
+function toWireMessages(
+  messages: ChatMessage[],
+  thinkingField: ProviderCapability["thinkingField"],
+): unknown[] {
   return messages.map(m => {
     if (m.role === "system") return { role: "system", content: m.content ?? "" };
     if (m.role === "user") return { role: "user", content: m.content ?? "" };
@@ -30,6 +33,11 @@ function toWireMessages(messages: ChatMessage[]): unknown[] {
     }
     // assistant：回传 content + tool_calls（OpenAI 多轮要求 assistant 消息带 tool_calls）
     const wire: Record<string, unknown> = { role: "assistant", content: m.content || null };
+    // 与本地 2FC 一致：仅按当前厂商声明的隐藏字段回传上一轮推理。
+    // 它属于协议元数据，不会写入 content，也不会作为用户可见文本交给 Soul。
+    if (m.thinking && (thinkingField === "reasoning_content" || thinkingField === "thinking")) {
+      wire[thinkingField] = m.thinking;
+    }
     if (m.toolCalls && m.toolCalls.length > 0) {
       wire.tool_calls = m.toolCalls.map(tc => ({
         id: tc.id,
@@ -56,7 +64,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
   buildRequest(req: ChatRequest, cfg: VendorConfig): HttpRequest {
     const body: Record<string, unknown> = {
       model: req.model,
-      messages: toWireMessages(req.messages),
+      messages: toWireMessages(req.messages, this.capability.thinkingField),
       stream: req.stream ?? false,
     };
     // OpenAI 流式协议默认不返回 usage；显式开启 include_usage 让最后一个 chunk 带 usage。

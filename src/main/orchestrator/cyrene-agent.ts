@@ -71,6 +71,7 @@ import { ExecutionLedgerStore, type ExecutionLedger } from "./execution-ledger";
 import { perf } from "../perf-trace";
 import { debugLog, flowLog } from "../agent-log";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
+import type { VisionConfig } from "./vision-captioner";
 import { requestUserClarification } from "../user-choice";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
@@ -94,6 +95,8 @@ export type AgentExecutionMode = "work" | "chat";
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
 export interface CyreneRunOptions {
   settings: AgentLoopSettings;
+  /** 仅用于桌面 Chat 两阶段链路的 Tool 阶段；Soul 仍使用 settings.reasoning。 */
+  toolReasoning?: import("../../shared/reasoning").ReasoningPreference;
   /** 本 Run 快照的 Harness 安全工具并发上限。 */
   maxParallelToolCalls?: number;
   /**
@@ -134,6 +137,10 @@ export interface CyreneRunOptions {
   permissionMode?: "normal" | "allow_all";
   /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
+  /** 本轮用户图片附件；只传入 ToolContext，供 Chat 内建图片追问工具读取。 */
+  imageAttachments?: ReadonlyArray<{ name: string; filePath: string; mime?: string }>;
+  /** 本轮按模型档案冻结的视觉任务后端；null 表示本轮没有可用视觉配置。 */
+  visionConfig?: VisionConfig | null;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。 */
   toolSystemContent: string;
   /** toolSystemContent 中 Skill 目录段（skillCatalog + 自动注入 skill 上下文）的独立副本，
@@ -455,9 +462,12 @@ export class CyreneAgent extends AbstractAgent {
               adapter,
               messages: options.messages,
               soulSystemBaseContent: options.soulSystemBaseContent,
-              runtimeContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext].filter(Boolean).join("\n\n---\n\n"),
+              systemContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext].filter(Boolean).join("\n\n---\n\n"),
+              tailSystemContext: options.soulTailAnchorContent,
               soulSampling: options.soulSampling,
               timeoutMs: options.timeoutMs,
+              streaming: false,
+              fallbackRevealIntervalMs: 0,
               imageCaptionFallback: options.imageCaptionFallback,
               onEvent,
               signal: abortController.signal,
@@ -489,10 +499,15 @@ export class CyreneAgent extends AbstractAgent {
                   adapter,
                   messages: toolTranscript,
                   soulSystemBaseContent: options.soulSystemBaseContent,
-                  // 普通动态资料已在 Harness 启动时物化；最终行为锚点只在 Soul 生成点追加。
-                  runtimeContext: options.soulTailAnchorContent,
+                  // Tool 阶段刻意看不到人格资料；最终 Soul 对齐本地 2FC：
+                  // 动态资料进入开头 system，最终行为锚点作为 transcript 后的独立 system。
+                  systemContext: options.soulRuntimeContext,
+                  tailSystemContext: options.soulTailAnchorContent,
                   soulSampling: options.soulSampling,
                   timeoutMs: options.timeoutMs,
+                  streaming: false,
+                  fallbackRevealIntervalMs: 0,
+                  diagnosticFailureReply: true,
                   onEvent,
                   signal: abortController.signal,
                   mode: options.conversationMode,

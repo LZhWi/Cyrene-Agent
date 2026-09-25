@@ -60,8 +60,8 @@ describe("Schema 与 Loader 一致性", () => {
     }
   });
 
-  it("八项扩展能力均通过 Schema 枚举并可用于 deps", () => {
-    for (const dep of ["secrets", "workspace", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context", "scheduler", "speech-input"]) {
+  it("扩展能力均通过 Schema 枚举并可用于 deps", () => {
+    for (const dep of ["secrets", "workspace", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context", "companion-context", "memory-retrieval", "scheduler", "speech-input"]) {
       expect(validateManifestData({ ...validInput, deps: [dep] }).ok).toBe(true);
     }
     const inspected = inspectWithData({

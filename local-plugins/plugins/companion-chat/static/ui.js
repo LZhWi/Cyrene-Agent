@@ -73,7 +73,7 @@ $("mode").onchange = modelFields; $("reuse").onchange = modelFields;
 $("settings").onclick = async () => {
   try {
     const { model, life } = await refresh();
-    for (const [id, key] of [["mode","mode"],["reuse","reuse"],["source-path","sourcePath"],["base-url","baseUrl"],["model","model"],["persona-style","personaStyle"],["system-prompt","systemPrompt"]]) $(id).value = model[key];
+    for (const [id, key] of [["mode","mode"],["reuse","reuse"],["source-path","sourcePath"],["base-url","baseUrl"],["model","model"],["system-prompt","systemPrompt"]]) $(id).value = model[key];
     $("memory-enabled").checked = memoryEnabled;
     $("proactive-enabled").checked = proactiveEnabled;
     $("feedback-learning-enabled").checked = feedbackLearningEnabled;
@@ -89,15 +89,7 @@ $("model-dialog").addEventListener("close", () => { $("api-key").value = ""; });
 $("model-form").onsubmit = async (event) => {
   event.preventDefault();
   try {
-    await invoke("save-model", { mode: $("mode").value, reuse: $("reuse").value, sourcePath: $("source-path").value, baseUrl: $("base-url").value, model: $("model").value, personaStyle: $("persona-style").value, apiKey: $("api-key").value, systemPrompt: $("system-prompt").value });
-    const link = await invoke("save-memory-link", { enabled: $("memory-enabled").checked }); memoryEnabled = link.enabled;
-    const proactive = await invoke("save-proactive-settings", {
-      enabled: $("proactive-enabled").checked,
-      feedbackLearningEnabled: $("feedback-learning-enabled").checked,
-    });
-    proactiveEnabled = proactive.enabled; feedbackLearningEnabled = proactive.feedbackLearningEnabled;
-    const screenMonitor = await invoke("save-screen-monitor-settings", { enabled: $("screen-monitor-enabled").checked }); screenMonitorEnabled = screenMonitor.enabled;
-    lifeSettings = await invoke("save-life-settings", { enabled: $("life-enabled").checked, importantDatesText: $("important-dates").value });
+    await invoke("save-model", { mode: $("mode").value, reuse: $("reuse").value, sourcePath: $("source-path").value, baseUrl: $("base-url").value, model: $("model").value, apiKey: $("api-key").value, systemPrompt: $("system-prompt").value });
     $("api-key").value = ""; $("model-dialog").close();
     await refresh();
     status("模型来源已保存；原主程序配置未修改。");

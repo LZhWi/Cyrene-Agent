@@ -10,6 +10,7 @@ export const windowCornerRadiusVal = document.getElementById("window-corner-radi
 export const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTMLInputElement;
 export const petVisibleInput = document.getElementById("pet-visible") as HTMLInputElement;
 export const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
+export const petIdleMotionsEnabledInput = document.getElementById("pet-idle-motions-enabled") as HTMLInputElement;
 export const petZoomVal = document.getElementById("pet-zoom-val") as HTMLElement;
 export const chatLineHeightInput = document.getElementById("chat-line-height") as HTMLInputElement;
 export const chatLineHeightVal = document.getElementById("chat-line-height-val") as HTMLElement;

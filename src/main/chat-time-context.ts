@@ -14,6 +14,8 @@ export interface ConversationTimeContext {
   timeContext: string;
 }
 
+export type ChatTimestampPresentation = "private" | "local-visible";
+
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const LEADING_TIME_METADATA_RE = /^(?:\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}, [A-Za-z_]+(?:\/[A-Za-z_+-]+)+\]\s*)+/;
@@ -96,12 +98,32 @@ function formatLocalDateTime(timestamp: number, timezone: string): string {
   return formatLocalTime(timestamp, timezone).replace(/, [^,]+$/, "");
 }
 
-function withTimePrefix(message: ChatContextMessage, timezone: string): ChatContextMessage {
-  if (!isValidTimestamp(message.at) || message.role !== "user") return { ...message };
+function withTimePrefix(
+  message: ChatContextMessage,
+  timezone: string,
+  presentation: ChatTimestampPresentation,
+): ChatContextMessage {
+  if (!isValidTimestamp(message.at)) return { ...message };
+  if (presentation === "local-visible") {
+    return {
+      ...message,
+      content: `[${formatLocalTime(message.at, timezone)}]\n${message.content}`,
+    };
+  }
+  if (message.role !== "user") return { ...message };
   return {
     ...message,
     content: `<internal_context>用户发送这条消息的时间：${formatLocalDateTime(message.at, timezone)}；用户时区：${resolveChatContextTimezone(timezone)}。</internal_context>\n\n${message.content}`,
   };
+}
+
+function buildTimestampUseRule(messages: ChatContextMessage[]): string {
+  if (!messages.some((message) => isValidTimestamp(message.at))) return "";
+  return [
+    "[时间戳使用规则]",
+    "历史消息开头的方括号时间是系统提供的元数据，只用于理解对话顺序和连续性。",
+    "不要复述、引用或输出这些方括号时间标签；回复应只包含你要对用户说的话。",
+  ].join("\n");
 }
 
 function formatDuration(ms: number): string {
@@ -161,14 +183,21 @@ export function stripLeakedChatTimeContext(text: string): string {
   return text.replace(LEADING_TIME_METADATA_RE, "").trimStart();
 }
 
-export function buildConversationTimeContext(messages: ChatContextMessage[], timezone: string): ConversationTimeContext {
+export function buildConversationTimeContext(
+  messages: ChatContextMessage[],
+  timezone: string,
+  presentation: ChatTimestampPresentation = "private",
+): ConversationTimeContext {
   const resolvedTimezone = resolveChatContextTimezone(timezone);
   const gapNotice = buildGapNotice(messages, resolvedTimezone);
-  const timestampedMessages = messages.map((message) => withTimePrefix(message, resolvedTimezone));
+  const timestampedMessages = messages.map((message) => withTimePrefix(message, resolvedTimezone, presentation));
   return {
     cleanMessages: messages.map((message) => ({ ...message })),
     timestampedMessages,
     messages: timestampedMessages,
-    timeContext: [buildInternalContextPolicy(messages), gapNotice].filter(Boolean).join("\n\n"),
+    timeContext: [
+      presentation === "local-visible" ? buildTimestampUseRule(messages) : buildInternalContextPolicy(messages),
+      gapNotice,
+    ].filter(Boolean).join("\n\n"),
   };
 }

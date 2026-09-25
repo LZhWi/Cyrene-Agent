@@ -226,6 +226,8 @@ export interface HarnessInput {
    * 让稳定前缀与每轮运行时上下文分离。
    */
   systemPrompt: string;
+  /** Chat/Collab 两阶段兼容：工具结果和窗口压缩采用本地循环的 transcript 规则。 */
+  transcriptPolicy?: "harness" | "local-two-phase";
   /** 缓存友好的提示词分层；Todo 等每轮状态不得放入 stablePrefix。 */
   promptLayers?: import("../prompt-layers").PromptLayers;
   /**
@@ -278,6 +280,8 @@ export interface HarnessInput {
   requestUserClarification?: (card: unknown) => Promise<unknown>;
   /** 是否向模型公布并允许 Ask/不确定副作用确认工具；默认 true。 */
   includeInteractiveTools?: boolean;
+  /** 是否公布 Todo、子任务和计划工具；默认 true。两阶段 Chat 关闭。 */
+  includeTaskOrientedTools?: boolean;
   /** 计划模式状态；控制计划工具组可见性（undefined = 不注入计划工具，兼容旧调用方/子任务）。 */
   planState?: import("../plan-mode").PlanStateName;
   /** 工具上下文（权限检查等） */

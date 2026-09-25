@@ -4,6 +4,7 @@
 export const visionBaseUrlInput = document.getElementById("vision-base-url") as HTMLInputElement;
 export const visionApiKeyInput = document.getElementById("vision-api-key") as HTMLInputElement;
 export const visionModelInput = document.getElementById("vision-model") as HTMLInputElement;
+export const visionBackendSelect = document.getElementById("vision-backend-select") as HTMLSelectElement;
 export const visionFieldsWrap = document.getElementById("vision-fields-wrap") as HTMLElement;
 export const testVisionBtn = document.getElementById("test-vision-btn") as HTMLButtonElement;
 export const visionTestStatus = document.getElementById("vision-test-status") as HTMLElement;

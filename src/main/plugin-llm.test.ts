@@ -21,6 +21,7 @@ function settings(patch: Partial<ModelSettings> = {}): ModelSettings {
     rerankerMode: "none",
     embeddingModel: "bgem3",
     multimodal: false,
+    visionBackend: "main",
     contextWindowTokens: 128000,
     ...patch,
   };
@@ -85,8 +86,30 @@ describe("pluginGenerateText", () => {
         settings(),
         h.llmClient,
         h.enqueueTask,
-        { maxTokens: 9000 },
+        { maxTokens: 32769 },
       ),
     ).rejects.toThrow(/maxTokens/);
+  });
+
+  it("允许记忆提取使用本地版预算并逐请求强制开启思考", async () => {
+    const h = harness();
+    await pluginGenerateText(
+      [{ role: "user", content: "提取记忆" }],
+      settings(),
+      h.llmClient,
+      h.enqueueTask,
+      { maxTokens: 32768, timeoutMs: 300000, reasoning: "on", purpose: "memory-extraction" },
+    );
+
+    expect(h.chatNonStream).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-5-mini" }),
+      [{ role: "user", content: "提取记忆" }],
+      undefined,
+      300000,
+      "plugin:memory-extraction",
+      { mode: "on" },
+      { maxTokens: 32768 },
+      undefined,
+    );
   });
 });

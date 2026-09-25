@@ -6,7 +6,8 @@
  * 本文件内的闭包只做构造与委托；任何长期任务都必须由对应启动阶段显式启动。
  */
 
-import { app, BrowserWindow, dialog, screen } from "electron";
+import { app, BrowserWindow, dialog, screen, session, type WebContents } from "electron";
+import { backfillVisualHistoryCaptions } from "../chat/visual-history-caption";
 import * as path from "path";
 import { autoUpdater } from "electron-updater";
 
@@ -23,6 +24,7 @@ import {
   onGeneralSettingsChanged,
 } from "../settings/settings-facade";
 import {
+  callWindow,
   getCurrentAppIconPath,
   markStartupPhaseReady,
   reactChatWindow,
@@ -31,6 +33,7 @@ import {
   settingsWindow,
   tasksWindow,
 } from "../windows/window-state";
+import { isAudioMediaCheck, isAudioOnlyMediaRequest, isClipboardWritePermission } from "../media-permission";
 import { loadModelSettings, saveModelSettings } from "../settings/model-settings";
 import { registerSettingsIpc } from "../settings/settings-ipc";
 import {
@@ -88,6 +91,7 @@ import { toastEvents } from "../toast/toast-events";
 import { createToastWindowShell } from "../windows/create-toast-window";
 import * as chatsStore from "../chats/chats-store";
 import { flush as flushTokenUsage } from "../token-usage-store";
+import { flushVectorStoreSync } from "../rag";
 import { TtsSessionService } from "../tts/tts-session-service";
 import { registerTtsIpc } from "../tts/tts-ipc";
 import { loadUserProfile } from "../settings-store";
@@ -134,6 +138,54 @@ import type { ApplicationDependencies } from "./application";
 
 /** Loading 最短展示时长（ms）：从实际 show() 时刻起算。 */
 const SPLASH_MIN_MS = 2500;
+
+function configureSessionPermissions(): void {
+  const isTrustedRenderer = (urlString: string): boolean => {
+    try {
+      const url = new URL(urlString);
+      if (isDev) return url.protocol === "http:" && url.hostname === "localhost";
+      return url.protocol === "file:";
+    } catch {
+      return false;
+    }
+  };
+  const isTrustedAudioRequester = (webContents: WebContents | null, urlString: string): boolean => (
+    Boolean(webContents)
+    && isTrustedRenderer(urlString)
+    && (webContents === settingsWindow?.webContents || webContents === callWindow?.webContents)
+  );
+  const isTrustedClipboardWriter = (webContents: WebContents | null, urlString: string): boolean => (
+    Boolean(webContents)
+    && isTrustedRenderer(urlString)
+    && webContents === reactChatWindow?.webContents
+  );
+
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (!webContents) return false;
+    const requestingUrl = details.requestingUrl ?? requestingOrigin ?? webContents.getURL();
+    if (permission === "geolocation") return isTrustedRenderer(requestingUrl);
+    if (permission === "media") return isTrustedAudioRequester(webContents, requestingUrl) && isAudioMediaCheck(details.mediaType);
+    if (isClipboardWritePermission(permission)) return isTrustedClipboardWriter(webContents, requestingUrl);
+    return false;
+  });
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const requestingUrl = details.requestingUrl ?? webContents.getURL();
+    if (permission === "geolocation") {
+      callback(isTrustedRenderer(requestingUrl));
+      return;
+    }
+    if (permission === "media") {
+      const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
+      callback(isTrustedAudioRequester(webContents, requestingUrl) && isAudioOnlyMediaRequest(mediaTypes));
+      return;
+    }
+    if (isClipboardWritePermission(permission)) {
+      callback(isTrustedClipboardWriter(webContents, requestingUrl));
+      return;
+    }
+    callback(false);
+  });
+}
 /** 受控退出总超时（ms）：超时后中止信号并记录未完成资源。 */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -166,6 +218,21 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 export function createDefaultApplicationDependencies(): ApplicationDependencies {
   // Agent Runtime 早于插件管理器构造；通过窄闭包在运行期转发宿主事件，避免反转启动顺序。
   let pluginManager: PluginManager | undefined;
+  const publishChatPreferences = (manager = pluginManager): Promise<void> => {
+    if (!manager) return Promise.resolve();
+    const preferences = loadGeneralSettings();
+    return manager.publishHostEvent("chat-preferences:changed", {
+      chatBackend: preferences.chatBackend,
+      proactiveChatMode: preferences.proactiveChatMode,
+      companionProactivePace: preferences.companionProactivePace,
+      proactiveDeliveryTarget: preferences.proactiveDeliveryTarget,
+      chatSocialContextEnabled: preferences.chatSocialContextEnabled,
+      companionFeedbackLearningEnabled: preferences.companionFeedbackLearningEnabled,
+      companionScreenMonitorEnabled: preferences.companionScreenMonitorEnabled,
+      companionLifeEnabled: preferences.companionLifeEnabled,
+      companionImportantDatesText: preferences.companionImportantDatesText,
+    });
+  };
   // 生命周期事件发布器：插件系统就绪前发布的事件没有监听器，直接丢弃
   const lifecyclePublisher = createLifecyclePublisher({
     publish: (event, payload) => pluginManager
@@ -218,36 +285,40 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
       activation,
     }),
 
-    startShell: () => startShell({
-      readiness,
-      activation,
-      shutdown,
-      writeStartupLog: () => {
+    startShell: () => {
+      configureSessionPermissions();
+      return startShell({
+        readiness,
+        activation,
+        shutdown,
+        writeStartupLog: () => {
         // banner 是纯文本（无色彩、无日志前缀），与 logger 输出区分开
         process.stdout.write("\n" + renderBanner() + "\n\n");
         logger.info(LogTag.Runtime, "starting Cyrene Agent");
-      },
-      createIpcScope: () => createIpcScope(),
-      createSplashWindow: (options) => createSplashWindow({ isDev, onShown: options.onShown }),
-      createWindowManager: () => createWindowManager({
-        getCurrentAppIconPath,
-        isDev,
-        loadPetWindowSettingsSlice: loadGeneralSettings,
-        persistPetWindowPosition: ({ x, y }) => saveGeneralSettings({ petWindowX: x, petWindowY: y }),
-      }),
-      createChatShell: (windowManager) => windowManager.createReactChatWindowShell(),
-      registerProtocolHandlers,
-      registerShellIpc: ({ ipc, windowManager, live2dWindowLifecycle }) => {
-        registerWindowSystemIpc({ ipc, windowManager });
-        registerChatUiIpc({ ipc, live2dWindowLifecycle, windowManager });
-      },
-      createTray: (input) => createTray({
-        togglePetWindow: input.togglePetWindow,
-        requestActivation: input.requestActivation,
-        quit: () => app.quit(),
-      }),
-      flushTokenUsage,
-    }),
+        },
+        createIpcScope: () => createIpcScope(),
+        createSplashWindow: (options) => createSplashWindow({ isDev, onShown: options.onShown }),
+        createWindowManager: () => createWindowManager({
+          getCurrentAppIconPath,
+          isDev,
+          loadPetWindowSettingsSlice: loadGeneralSettings,
+          persistPetWindowPosition: ({ x, y }) => saveGeneralSettings({ petWindowX: x, petWindowY: y }),
+        }),
+        createChatShell: (windowManager) => windowManager.createReactChatWindowShell(),
+        registerProtocolHandlers,
+        registerShellIpc: ({ ipc, windowManager, live2dWindowLifecycle }) => {
+          registerWindowSystemIpc({ ipc, windowManager });
+          registerChatUiIpc({ ipc, live2dWindowLifecycle, windowManager });
+        },
+        createTray: (input) => createTray({
+          togglePetWindow: input.togglePetWindow,
+          requestActivation: input.requestActivation,
+          quit: () => app.quit(),
+        }),
+        flushTokenUsage,
+        flushVectorStore: flushVectorStoreSync,
+      });
+    },
 
     startCore: (shell) => startCore({
       shell,
@@ -442,7 +513,10 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           schedulerStore: scheduler.store,
           agentRuntime: runtime,
           // 插件启停后让调度引擎重新归一化逾期任务并重排计时器（不补跑）。
-          onPluginRunningStateChange: () => scheduler.engine.refreshPluginTasks(),
+          onPluginRunningStateChange: () => {
+            scheduler.engine.refreshPluginTasks();
+            void publishChatPreferences();
+          },
           // 面板宿主窗口（首版=设置窗口）：settingsWindow 为 CJS live-binding，
           // 必须在请求时刻读取
           getPanelHostWebContents: () => settingsWindow?.webContents ?? null,
@@ -463,6 +537,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
             }];
           },
         });
+        await publishChatPreferences(pluginManager);
         return pluginManager;
       },
 
@@ -478,15 +553,28 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
 
       registerCoreIpc: ({ ipc, runtime, services }) => {
         // 设置变更反应：窗口/托盘/截图热键/主动服务联动
-        onGeneralSettingsChanged((before, after) =>
+        onGeneralSettingsChanged((before, after) => {
           handleGeneralSettingsChanged(before, after, {
             windowManager: shell.windowManager,
             tray: shell.tray,
             screenshotService: services.screenshot,
             proactiveLifecycle: services.proactive,
             broadcastToAuxWindows,
-          }),
-        );
+          });
+          if (
+            before.chatBackend !== after.chatBackend
+            || before.proactiveChatMode !== after.proactiveChatMode
+            || before.companionProactivePace !== after.companionProactivePace
+            || before.proactiveDeliveryTarget !== after.proactiveDeliveryTarget
+            || before.chatSocialContextEnabled !== after.chatSocialContextEnabled
+            || before.companionFeedbackLearningEnabled !== after.companionFeedbackLearningEnabled
+            || before.companionScreenMonitorEnabled !== after.companionScreenMonitorEnabled
+            || before.companionLifeEnabled !== after.companionLifeEnabled
+            || before.companionImportantDatesText !== after.companionImportantDatesText
+          ) {
+            void publishChatPreferences();
+          }
+        });
 
         registerSettingsIpc({
           ipc,
@@ -507,6 +595,11 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           ipc,
           windowManager: shell.windowManager,
           embeddingIndexService: services.embedding,
+          getChatBackend: () => loadGeneralSettings().chatBackend,
+          invokeCompanionMemoryUi: async (action, data) => {
+            if (!pluginManager) throw new Error("插件系统尚未启动");
+            return pluginManager.invokePluginIpc("companion-memory", "ui", [action, data]);
+          },
         });
 
         // ── TTS IPC ──
@@ -516,7 +609,9 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         registerChatsIpc(ipc, {
           isPluginRunning: (pluginId) => pluginManager?.isRunning(pluginId) ?? false,
           publishPluginAssistantFeedback: (event) => lifecyclePublisher.publishAssistantMessageFeedback(event),
+          publishConversationChanged: (event) => lifecyclePublisher.publishConversationChanged(event),
         });
+        setTimeout(backfillVisualHistoryCaptions, 10_000);
         registerMomentsIpc(ipc);
         registerCodeGitIpc({ ipc, service: services.git });
 
@@ -656,12 +751,11 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         core.services.embedding.scheduleStartupRefreshes();
       },
       initializeReranker: async () => {
-        // initReranker 内部检测模型是否安装，未安装自动降级为 none
         try {
-          const { initReranker } = await import("../rag/reranker");
+          const { configureRerankerForLazyInit } = await import("../rag/reranker");
           const modelSettings = loadModelSettings();
-          await initReranker(modelSettings.rerankerMode);
-          logger.info(LogTag.Reranker, "initialized with mode:", modelSettings.rerankerMode);
+          configureRerankerForLazyInit(modelSettings.rerankerMode);
+          logger.info(LogTag.Reranker, "configured lazy mode:", modelSettings.rerankerMode);
         } catch (err) {
           logger.warn(LogTag.Reranker, "startup init failed:", err);
         }

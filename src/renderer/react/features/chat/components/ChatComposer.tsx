@@ -42,6 +42,7 @@ interface ChatComposerProps {
   onChooseSticker: (id: string) => void;
   activeModelProfileId?: string;
   onSelectModelProfile?: (id: string) => void;
+  titlebarControls?: boolean;
   /** 上下文容量快照：运行中实时刷新，空闲时为最近一次终态快照；无快照不渲染圆环。 */
   contextUsage?: ContextUsageSnapshot;
 }
@@ -223,6 +224,7 @@ export function ChatComposer({
   onChooseSticker,
   activeModelProfileId,
   onSelectModelProfile,
+  titlebarControls = false,
   contextUsage,
 }: ChatComposerProps) {
   const { t } = useTranslation();
@@ -412,11 +414,11 @@ export function ChatComposer({
         {supportsPermission && (
           <PermissionControl />
         )}
-        {supportsStyle && <StyleControl />}
+        {supportsStyle && !titlebarControls && <StyleControl />}
         {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
         <span className="cy-composer__footer-spacer" />
         <ContextUsageRing usage={contextUsage} sessionId={conversationId} busy={modelBusy} />
-        <ReasoningControl sessionId={conversationId} modelProfileId={activeModelProfileId} />
+        {!titlebarControls && <ReasoningControl sessionId={conversationId} modelProfileId={activeModelProfileId} />}
         </div>
       </div>
     </div>

@@ -5,9 +5,17 @@ import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { getStickerManagerConfig, setStickerEnabled } from "../orchestrator/sticker-settings";
 import { addUserSticker, deleteUserSticker } from "../sticker-storage";
-import { loadMemoryPanelData } from "./panel";
+import { loadImportedDocs, loadMemoryPanelData } from "./panel";
+import {
+  deleteCompanionMemoryEntry,
+  editCompanionMemoryEntry,
+  loadCompanionMemoryPanelData,
+  saveCompanionProfile,
+} from "./companion-memory-panel";
+import { deleteL2MemoryForUser, editL2MemoryForUser } from "./l2-user-management";
 import { deleteImportedDoc } from "../rag";
-import { loadUserProfile, saveUserProfile, getAvatarPath } from "../settings-store";
+import { loadUserProfile, saveUserProfile, getAvatarPath, type UserProfile } from "../settings-store";
+import { clearLocation, loadLocation, saveLocation } from "../location-store";
 import { addMcpServer, removeMcpServer, listMcpServers } from "../orchestrator/mcp-manager";
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
@@ -31,6 +39,8 @@ import { startVaultWatcher, stopVaultWatcher } from "./obsidian-importer";
 export interface MemoryUserToolIpcDependencies {
   get windowManager(): WindowManager | null;
   embeddingIndexService: EmbeddingIndexService;
+  getChatBackend?: () => "native" | "companion";
+  invokeCompanionMemoryUi?: (action: string, data?: unknown) => Promise<unknown>;
   /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
   ipc?: IpcScope;
 }
@@ -137,7 +147,56 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
   });
 
   // Memory panel
-  ipc.handle(IPC.MEMORY_PANEL_GET_DATA, () => loadMemoryPanelData());
+  const useCompanionMemory = () => deps.getChatBackend?.() === "companion";
+  const invokeCompanionMemory = (action: string, data?: unknown) => {
+    if (!deps.invokeCompanionMemoryUi) throw new Error("companion-memory 宿主桥不可用");
+    return deps.invokeCompanionMemoryUi(action, data);
+  };
+  const invokeColdRecall = async (action: string, data: unknown) => {
+    const result = await invokeCompanionMemory(action, data) as { ok?: boolean; data?: unknown; error?: string };
+    if (result?.ok !== true) throw new Error(result?.error || "归档记忆操作失败");
+    return result.data;
+  };
+
+  ipc.handle(IPC.MEMORY_COLD_RECALL_GET, async (_event, raw: { conversationId?: unknown }) => {
+    if (!useCompanionMemory()) return [];
+    if (typeof raw?.conversationId !== "string" || !raw.conversationId) throw new Error("会话 ID 无效");
+    return invokeColdRecall("cold-recall-for-conversation", { conversationId: raw.conversationId });
+  });
+
+  ipc.handle(IPC.MEMORY_COLD_RECALL_FEEDBACK, async (_event, raw: {
+    conversationId?: unknown; messageId?: unknown; entryId?: unknown; action?: unknown;
+  }) => {
+    if (!useCompanionMemory()) throw new Error("仅陪伴 Chat 可反馈归档记忆");
+    if (typeof raw?.conversationId !== "string" || typeof raw.messageId !== "string" || typeof raw.entryId !== "string"
+      || !["related", "unrelated", "undo"].includes(String(raw.action))) throw new Error("归档记忆反馈参数无效");
+    return invokeColdRecall("resolve-cold-recall", raw);
+  });
+
+  ipc.handle(IPC.MEMORY_PANEL_GET_DATA, async () => {
+    if (!useCompanionMemory()) return loadMemoryPanelData();
+    return loadCompanionMemoryPanelData(invokeCompanionMemory, await loadImportedDocs());
+  });
+
+  ipc.handle(IPC.MEMORY_QUERY_ROUTER_GET, async () => {
+    if (!useCompanionMemory()) throw new Error("请先选择陪伴聊天后端");
+    return invokeColdRecall("get-query-router", null);
+  });
+
+  ipc.handle(IPC.MEMORY_QUERY_ROUTER_SAVE, async (_event, settings: unknown) => {
+    if (!useCompanionMemory()) throw new Error("请先选择陪伴聊天后端");
+    return invokeColdRecall("save-query-router", settings);
+  });
+
+  ipc.handle(IPC.MEMORY_PANEL_EDIT_L2, async (_event, payload: { id?: unknown; content?: unknown }) => {
+    if (useCompanionMemory()) return editCompanionMemoryEntry(invokeCompanionMemory, payload?.id, payload?.content);
+    return editL2MemoryForUser(payload?.id, payload?.content);
+  });
+
+  ipc.handle(IPC.MEMORY_PANEL_DELETE_L2, async (_event, payload: { id?: unknown }) => {
+    if (useCompanionMemory()) return deleteCompanionMemoryEntry(invokeCompanionMemory, payload?.id);
+    return deleteL2MemoryForUser(payload?.id);
+  });
 
   ipc.handle(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, (_event, payload: { importId: string; fileName?: string }) => {
     const deleted = deleteImportedDoc(payload.importId, payload.fileName);
@@ -145,6 +204,10 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
   });
 
   ipc.handle(IPC.MEMORY_PANEL_SAVE_L0, async (_event, raw: Record<string, unknown>) => {
+    if (useCompanionMemory()) {
+      await saveCompanionProfile(invokeCompanionMemory, "L0", raw);
+      return { ok: true };
+    }
     const patch: Partial<{
       preferredName: string;
       occupation: string;
@@ -162,6 +225,10 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
   });
 
   ipc.handle(IPC.MEMORY_PANEL_SAVE_L1, async (_event, raw: Record<string, unknown>) => {
+    if (useCompanionMemory()) {
+      await saveCompanionProfile(invokeCompanionMemory, "L1", raw);
+      return { ok: true };
+    }
     const patch: Partial<{
       recentGoals: string;
       recentPreferences: string;
@@ -233,10 +300,21 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
 
   ipc.handle(IPC.USER_GET_PROFILE, () => loadUserProfile());
 
-  ipc.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<{ avatarPath?: string } & Record<string, unknown>>) => {
+  ipc.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) => {
     const saved = saveUserProfile(profile);
+    if (saved.weatherLocationMode === "off") clearLocation();
     broadcastToAuxWindows(IPC.USER_PROFILE_CHANGED, saved);
     return saved;
+  });
+
+  ipc.handle(IPC.LOCATION_UPDATE, (_event, location: unknown) => {
+    const saved = saveLocation(location);
+    return saved ? { ok: true, location: saved } : { ok: false, error: "invalid-location" };
+  });
+  ipc.handle(IPC.LOCATION_GET_STATUS, () => loadLocation());
+  ipc.handle(IPC.LOCATION_CLEAR, () => {
+    clearLocation();
+    return { ok: true };
   });
 
   ipc.handle(IPC.USER_UPLOAD_AVATAR, async () => {

@@ -163,6 +163,25 @@ export interface ChatMessage {
   };
 }
 
+/** A tentative archived-memory reference used by one completed Chat reply. */
+export interface ChatColdRecallCandidate {
+  id: string;
+  content: string;
+  sourceAt: number;
+  quote: string;
+  evidence: string;
+  status: "pending" | "related" | "unrelated" | "undone";
+  lifecycleChangeId?: string;
+}
+
+export interface ChatColdRecallRecord {
+  conversationId: string;
+  inputMessageId: string;
+  messageId: string;
+  queryHash: string;
+  candidates: ChatColdRecallCandidate[];
+}
+
 export type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;
 
 export interface ImageMessageAttachment {
@@ -172,6 +191,12 @@ export interface ImageMessageAttachment {
   mime: string;
   previewUrl?: string;
   caption?: string;
+  /** Background description for visual history search; not part of the original chat turn. */
+  visualIndexCaption?: string;
+  /** Model-generated 10–30 character preview; not a prefix of the full caption. */
+  visualIndexSummary?: string;
+  /** Time the background visual index first became available. */
+  visualIndexedAt?: number;
   status: "pending" | "done" | "error";
 }
 

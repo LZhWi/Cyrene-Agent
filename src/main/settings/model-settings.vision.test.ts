@@ -28,17 +28,18 @@ function makeSettings(overrides: Record<string, unknown> = {}): ModelSettings {
   return normalizeModelSettings({ ...MINIMAX_BASE, ...overrides });
 }
 
-describe("loadVisionConfig 主模型 Anthropic 协议降级", () => {
-  it("multimodal=true + anthropic 协议 + 独立视觉模型齐全 → 用独立视觉模型（不再 404）", () => {
-    const s = makeSettings({ multimodal: true, vision: COMPLETE_VISION });
+describe("loadVisionConfig 独立视觉任务后端", () => {
+  it("聊天图片直发 + 独立视觉后端 → 视觉任务使用独立 VLM", () => {
+    const s = makeSettings({ multimodal: true, visionBackend: "independent", vision: COMPLETE_VISION });
     const cfg = loadVisionConfig(s);
     expect(cfg?.baseUrl).toBe("https://api.minimaxi.com/v1");
     expect(cfg?.apiKey).toBe("sk-vision");
   });
 
-  it("multimodal=true + anthropic 协议 + 视觉模型不齐全 → 回落主模型配置（行为不变）", () => {
+  it("聊天图片直发 + 主模型视觉后端 → 视觉任务使用主模型", () => {
     const s = makeSettings({
       multimodal: true,
+      visionBackend: "main",
       vision: { baseUrl: "https://api.minimaxi.com/v1", apiKey: "", model: "MiniMax-M3" },
     });
     const cfg = loadVisionConfig(s);
@@ -46,24 +47,29 @@ describe("loadVisionConfig 主模型 Anthropic 协议降级", () => {
     expect(cfg?.apiKey).toBe("sk-test");
   });
 
-  it("multimodal=true + openai 协议 → 仍用主模型配置直发（行为不变）", () => {
+  it("聊天图片转述 + 主模型视觉后端 → 转述仍可使用主模型", () => {
     const s = makeSettings({
       provider: "Kimi（月之暗面）",
       baseUrl: "https://api.moonshot.cn/v1",
       explicitTransport: "openai",
-      multimodal: true,
+      multimodal: false,
+      visionBackend: "main",
       vision: COMPLETE_VISION,
     });
     expect(loadVisionConfig(s)?.baseUrl).toBe("https://api.moonshot.cn/v1");
   });
 
-  it("multimodal=false → 用独立视觉模型（既有行为不变）", () => {
-    const s = makeSettings({ multimodal: false, vision: COMPLETE_VISION });
+  it("聊天图片转述 + 独立视觉后端 → 使用独立 VLM", () => {
+    const s = makeSettings({ multimodal: false, visionBackend: "independent", vision: COMPLETE_VISION });
     expect(loadVisionConfig(s)?.baseUrl).toBe("https://api.minimaxi.com/v1");
   });
 
-  it("多模态开着但主模型没配 key → null（诚实拒绝）", () => {
-    const s = makeSettings({ multimodal: true, apiKey: "" });
+  it("选择独立 VLM 但配置不完整 → null（不静默换回主模型）", () => {
+    const s = makeSettings({
+      multimodal: true,
+      visionBackend: "independent",
+      vision: { baseUrl: "https://api.minimaxi.com/v1", apiKey: "", model: "MiniMax-M3" },
+    });
     expect(loadVisionConfig(s)).toBeNull();
   });
 });
@@ -72,6 +78,7 @@ describe("normalizeModelSettings 旧配置迁移", () => {
   it("旧配置无 multimodal 字段 + 独立视觉模型齐全 → multimodal 落 false（不静默旁路）", () => {
     const s = normalizeModelSettings({ ...MINIMAX_BASE, vision: COMPLETE_VISION });
     expect(s.multimodal).toBe(false);
+    expect(s.visionBackend).toBe("independent");
     expect(loadVisionConfig(s)?.baseUrl).toBe("https://api.minimaxi.com/v1");
   });
 
@@ -81,16 +88,19 @@ describe("normalizeModelSettings 旧配置迁移", () => {
       vision: { ...COMPLETE_VISION, syncWithMain: true },
     });
     expect(s.multimodal).toBe(true);
+    expect(s.visionBackend).toBe("independent");
   });
 
   it("旧配置无视觉模型 → multimodal 维持默认 true", () => {
     const s = normalizeModelSettings({ ...MINIMAX_BASE });
     expect(s.multimodal).toBe(true);
+    expect(s.visionBackend).toBe("main");
   });
 
   it("multimodal 已持久化 → 不被迁移翻转（用户显式选择优先）", () => {
     const s = normalizeModelSettings({ ...MINIMAX_BASE, multimodal: true, vision: COMPLETE_VISION });
     expect(s.multimodal).toBe(true);
+    expect(s.visionBackend).toBe("independent");
   });
 
   it("旧配置视觉模型不齐全 → multimodal 维持默认 true", () => {
@@ -99,5 +109,35 @@ describe("normalizeModelSettings 旧配置迁移", () => {
       vision: { baseUrl: "https://api.minimaxi.com/v1", apiKey: "", model: "MiniMax-M3" },
     });
     expect(s.multimodal).toBe(true);
+    expect(s.visionBackend).toBe("main");
+  });
+
+  it("显式视觉后端优先于旧版自动路由", () => {
+    const s = normalizeModelSettings({
+      ...MINIMAX_BASE,
+      multimodal: true,
+      visionBackend: "main",
+      vision: COMPLETE_VISION,
+    });
+    expect(s.visionBackend).toBe("main");
+    expect(loadVisionConfig(s)?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+  });
+
+  it("跟随主模型时按本轮指定档案解析，而不是误用默认档案", () => {
+    const s = normalizeModelSettings({
+      ...MINIMAX_BASE,
+      visionBackend: "main",
+      modelProfiles: [
+        { id: "default", provider: "A", baseUrl: "https://a.example/v1", apiKey: "a", model: "vision-a" },
+        { id: "bound", provider: "B", baseUrl: "https://b.example/v1", apiKey: "b", model: "vision-b" },
+      ],
+      defaultModelProfileId: "default",
+    });
+
+    expect(loadVisionConfig(s, "bound")).toEqual({
+      baseUrl: "https://b.example/v1",
+      apiKey: "b",
+      model: "vision-b",
+    });
   });
 });

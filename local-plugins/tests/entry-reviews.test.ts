@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import { createMemory } from "../plugins/companion-memory/src/memory";
+import { memoryCandidate } from "./support/memory-candidate";
 
 async function fixture() {
   const map = new Map<string, any>();
@@ -8,7 +9,10 @@ async function fixture() {
   const memory = createMemory(storage);
   const texts = ["我喜欢咖啡", "我不喜欢咖啡", "不应发送的第三条", "其他", "其他", "其他", "其他", "其他", "其他", "其他"];
   texts.forEach((user, i) => memory.ingest({ id: `t${i}`, sessionId: "s", user, assistant: "好", userAt: i + 1, assistantAt: i + 2 }));
-  await memory.maintain(async () => JSON.stringify(texts.slice(0, 3).map((text, i) => ({ content: text, quote: text, turnId: `t${i}` }))), new AbortController().signal);
+  await memory.maintain(async () => JSON.stringify(texts.slice(0, 3).map((text, index) => memoryCandidate({
+    layer: "L2", field: undefined, summary: text, sourceQuote: text, evidenceQuotes: [text], evidenceTurnRefs: [`T${index + 1}`],
+    facets: { primaryKind: "preference", retrievalKinds: ["preference"] },
+  }))), new AbortController().signal);
   const [left, right] = memory.view().entries;
   const raw = () => ({ leftId: left.id, rightId: right.id, revision: memory.view().revision });
   return { memory, raw, left, right, storage, map };
@@ -68,10 +72,10 @@ describe("L2 双条复核", () => {
     memory.editEntry({ ...left, pinned: true, revision: memory.view().revision });
     expect(() => memory.resolveEntryReview({ id: review.id, action: "apply-plan", revision: memory.view().revision })).toThrow("记忆已变化");
   });
-  it("自动应用仅接受高置信无变更结论或完整偏好演进，直接冲突保留人工确认", async () => {
+  it("自动应用本地 Resolver 的有效计划，并保留事务记录与撤销入口", async () => {
     const evolution = await fixture();
     const evolutionReview = await evolution.memory.reviewEntries(evolution.raw(), async () => resolverResult, signal());
-    expect(evolution.memory.autoApplyResolverReview({ id: evolutionReview.id, revision: evolution.memory.view().revision })).toMatchObject({ applied: true, reason: "applied-evolution", memoryChanged: true });
+    expect(evolution.memory.autoApplyResolverReview({ id: evolutionReview.id, revision: evolution.memory.view().revision })).toMatchObject({ applied: true, reason: "applied-local-resolver-plan", memoryChanged: true });
     expect(evolution.memory.view().entryReviews.find((item) => item.id === evolutionReview.id)?.status).toBe("plan-applied");
 
     const unrelated = await fixture();
@@ -83,8 +87,9 @@ describe("L2 双条复核", () => {
     const conflict = await fixture();
     const conflictResult = JSON.stringify({ resolutionType: "direct_conflict", confidence: 0.99, reason: "直接相反", actions: { createResolvedMemory: false, leftStatus: "archived", shouldAskUser: false, clarificationNeeded: false } });
     const conflictReview = await conflict.memory.reviewEntries(conflict.raw(), async () => conflictResult, signal());
-    expect(conflict.memory.autoApplyResolverReview({ id: conflictReview.id, revision: conflict.memory.view().revision })).toMatchObject({ applied: false, reason: "manual-confirmation-required" });
-    expect(conflict.memory.view().entryReviews.find((item) => item.id === conflictReview.id)?.status).toBe("pending");
+    expect(conflict.memory.autoApplyResolverReview({ id: conflictReview.id, revision: conflict.memory.view().revision })).toMatchObject({ applied: true, reason: "applied-local-resolver-plan", memoryChanged: true });
+    expect(conflict.memory.view().entryReviews.find((item) => item.id === conflictReview.id)?.status).toBe("plan-applied");
+    expect(conflict.memory.resolveEntryReview({ id: conflictReview.id, action: "undo-plan", revision: conflict.memory.view().revision }).entryReviews.find((item) => item.id === conflictReview.id)?.status).toBe("plan-undone");
   });
   it.each(["not json", '{"verdict":"delete","reason":"x"}', '{"verdict":"conflict","reason":""}'])("无效结果不落库 %s", async (value) => {
     const { memory, raw } = await fixture(), before = memory.view();

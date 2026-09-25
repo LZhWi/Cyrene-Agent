@@ -260,6 +260,64 @@ describe("runChatLoop", () => {
     expect(result.reply).toBe("SDK 真流式");
   });
 
+  it("matches the local 2FC Soul order: leading dynamic system, transcript, then a tail system anchor", async () => {
+    const adapter = new FakeAdapter();
+    await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter,
+      messages: [
+        { role: "user", content: "帮我看看天气" },
+        { role: "assistant", content: null, toolCalls: [{ id: "call-1", name: "weather", arguments: "{}" }] },
+        { role: "tool", toolCallId: "call-1", name: "weather", content: "晴，24℃" },
+      ],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      systemContext: "MEMORY_AND_LIFE",
+      tailSystemContext: "TONE_ANCHOR",
+      timeoutMs: 30_000,
+      streaming: false,
+      fallbackRevealIntervalMs: 0,
+      recordUsage: vi.fn(),
+    });
+
+    expect(adapter.requests[0].messages).toEqual([
+      { role: "system", content: "SOUL_SYSTEM\n\n---\n\nMEMORY_AND_LIFE" },
+      { role: "user", content: "帮我看看天气" },
+      { role: "assistant", content: null, toolCalls: [{ id: "call-1", name: "weather", arguments: "{}" }] },
+      { role: "tool", toolCallId: "call-1", name: "weather", content: "晴，24℃" },
+      { role: "system", content: "TONE_ANCHOR" },
+    ]);
+  });
+
+  it("uses one non-stream request and emits the completed Chat reply once when streaming is disabled", async () => {
+    const adapter = new FakeAdapter();
+    const streamChat = vi.fn();
+    const events: Array<{ type: string; delta?: string }> = [];
+    globalThis.fetch = vi.fn(async () => new Response('{"text":"完整回复"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      streaming: false,
+      fallbackRevealIntervalMs: 0,
+      streamChat: streamChat as never,
+      onEvent: (event) => events.push(event),
+      recordUsage: vi.fn(),
+    });
+
+    expect(streamChat).not.toHaveBeenCalled();
+    expect(adapter.requests.map((request) => request.stream)).toEqual([false]);
+    expect(events.filter((event) => event.type === "text_message_content")).toEqual([
+      expect.objectContaining({ delta: "完整回复" }),
+    ]);
+    expect(result.reply).toBe("完整回复");
+  });
+
   it("makes one plain Soul request without tools or structured output", async () => {
     const adapter = new FakeAdapter();
     const onEvent = vi.fn();
@@ -469,6 +527,41 @@ describe("runChatLoop", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(adapter.requests.map((request) => request.stream)).toEqual([true]);
+  });
+
+  it("returns the local diagnostic Soul fallback with completed tool results", async () => {
+    const adapter = new FakeAdapter();
+    const onEvent = vi.fn();
+    globalThis.fetch = vi.fn(async () => new Response(
+      'request_id=req-1 api_key=secret-value upstream unavailable',
+      { status: 500 },
+    )) as unknown as typeof fetch;
+
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter,
+      messages: [
+        { role: "user", content: "天气如何" },
+        { role: "assistant", content: null, toolCalls: [{ id: "call-1", name: "weather", arguments: "{}" }] },
+        { role: "tool", toolCallId: "call-1", name: "weather", content: "晴，24℃" },
+      ],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      streaming: false,
+      fallbackRevealIntervalMs: 0,
+      diagnosticFailureReply: true,
+      onEvent,
+      recordUsage: vi.fn(),
+    });
+
+    expect(result.reply).toContain("中断原因：模型请求失败：HTTP 500");
+    expect(result.reply).toContain("request_id=req-1");
+    expect(result.reply).toContain("api_key=[REDACTED]");
+    expect(result.reply).toContain("- 「weather」：晴，24℃");
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "text_message_content",
+      delta: result.reply,
+    }));
   });
 
   it("merges Anthropic-style usage split across stream events", async () => {

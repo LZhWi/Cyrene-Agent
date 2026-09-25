@@ -89,6 +89,7 @@ describe("Live2DManager.playAction", () => {
       tickerStarted: true,
       stageChildren: 1,
     });
+    expect((mgr as unknown as { app: { ticker: { maxFPS: number } } }).app.ticker.maxFPS).toBe(30);
 
     mgr.dispose();
     expect(mgr.getResourceMetrics()).toMatchObject({

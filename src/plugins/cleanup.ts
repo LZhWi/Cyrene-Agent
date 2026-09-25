@@ -1,5 +1,5 @@
 /** 单项第三方清理钩子的公共超时控制，供资源跟踪器和插件管理器共用。 */
-export const PLUGIN_CLEANUP_TIMEOUT_MS = 5_000;
+export const PLUGIN_CLEANUP_TIMEOUT_MS = 120_000;
 
 /** 等待单次第三方清理钩子；超时后抛错，让框架继续回收其余资源。 */
 export async function runPluginCleanup(

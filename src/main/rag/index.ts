@@ -14,6 +14,7 @@ import { feedEntityNamesToJieba } from "../memory/entity-graph";
 import { isL2LocallyRecallable } from "../memory/memory-types";
 import type { DocumentImportControl } from "./file-ingest";
 import { findPromptPath } from "../external-content-paths";
+import { ensureRerankerInitialized, getReranker } from "./reranker";
 
 // ── Global RAG instances ──
 let store: JsonVectorStore | null = null;
@@ -374,20 +375,107 @@ export async function importDocument(text: string, fileName: string): Promise<nu
   return result.chunkCount;
 }
 
-export async function searchImportedDocumentChunksForImportIds(
-  query: string,
-  importIds: string[],
-  topK = 6,
-): Promise<ImportedDocumentChunk[]> {
-  if (!retriever || !query.trim() || importIds.length === 0) return [];
-  const results = await retriever.retrieve(query, "imported_doc", topK, { importIds });
-  return results.map((result) => ({
+const DOCUMENT_MIN_HYBRID_SCORE = 0.01;
+const DOCUMENT_MIN_RERANKER_SCORE = -6;
+const DOCUMENT_AUTO_MIN_RERANKER_SCORE = -2;
+const DOCUMENT_AUTO_MIN_ADDITIONAL_RERANKER_SCORE = 0;
+const DOCUMENT_AUTO_MIN_BGE_M3_VECTOR_SCORE = 0.68;
+const DOCUMENT_AUTO_MIN_BM25_SCORE = 6;
+const DOCUMENT_AUTO_CANDIDATE_COUNT = 24;
+
+type ImportedDocumentSearchOptions = {
+  importIds?: string[];
+  automaticInjection?: boolean;
+};
+
+function toImportedDocumentChunk(result: Awaited<ReturnType<HybridRetriever["retrieve"]>>[number]): ImportedDocumentChunk {
+  return {
     text: result.entry.text,
     score: result.score,
     fileName: typeof result.entry.metadata?.fileName === "string" ? result.entry.metadata.fileName : undefined,
     chunkIndex: typeof result.entry.metadata?.chunkIndex === "number" ? result.entry.metadata.chunkIndex : undefined,
     importId: typeof result.entry.metadata?.importId === "string" ? result.entry.metadata.importId : undefined,
-  }));
+  };
+}
+
+export function formatImportedDocumentChunk(chunk: ImportedDocumentChunk): string {
+  const source = chunk.fileName
+    ? `${chunk.fileName}${typeof chunk.chunkIndex === "number" ? ` #${chunk.chunkIndex + 1}` : ""}`
+    : "未命名文档片段";
+  return `【${source}】${chunk.text}`;
+}
+
+/**
+ * 导入文档检索。automaticInjection 会使用比手动查询更严格的相关性门禁，
+ * 防止不相关文档在用户没有要求时自动污染 Soul 上下文。
+ */
+export async function searchImportedDocumentChunks(
+  query: string,
+  topK = 5,
+  options: ImportedDocumentSearchOptions = {},
+): Promise<ImportedDocumentChunk[]> {
+  if (!retriever || !query.trim() || topK <= 0) return [];
+  let results = (await retriever.retrieve(
+    query,
+    "imported_doc",
+    options.automaticInjection
+      ? Math.max(DOCUMENT_AUTO_CANDIDATE_COUNT, topK)
+      : Math.max(topK * 3, topK),
+    { importIds: options.importIds, recordRecall: false, rerank: false },
+  )).filter((result) => result.score >= DOCUMENT_MIN_HYBRID_SCORE);
+
+  try {
+    await ensureRerankerInitialized();
+  } catch (error) {
+    console.warn("[RAG] lazy reranker initialization failed for imported documents; using hybrid ranking:", error);
+  }
+  const reranker = getReranker();
+  let usedReranker = false;
+  if (reranker && results.length > 0) {
+    try {
+      const candidatesByText = new Map<string, typeof results>();
+      for (const result of results) {
+        const matches = candidatesByText.get(result.entry.text) ?? [];
+        matches.push(result);
+        candidatesByText.set(result.entry.text, matches);
+      }
+      const rerankedItems = await reranker.rerank(query, results.map((result) => result.entry.text));
+      results = rerankedItems.flatMap((item) => {
+        const match = candidatesByText.get(item.text)?.shift();
+        return match && item.score >= DOCUMENT_MIN_RERANKER_SCORE
+          ? [{ ...match, score: item.score }]
+          : [];
+      });
+      usedReranker = true;
+    } catch (error) {
+      console.warn("[RAG] imported document rerank failed; using hybrid ranking:", error);
+    }
+  }
+  if (options.automaticInjection) {
+    const model = provider?.cacheIdentity?.model.toLowerCase() ?? "";
+    results = results.filter((result, index) => {
+      if (usedReranker) {
+        return result.score >= (index === 0
+          ? DOCUMENT_AUTO_MIN_RERANKER_SCORE
+          : DOCUMENT_AUTO_MIN_ADDITIONAL_RERANKER_SCORE);
+      }
+      const signals = result.retrievalSignals;
+      if (!signals) return false;
+      return signals.bm25Score >= DOCUMENT_AUTO_MIN_BM25_SCORE + (index === 0 ? 0 : 1)
+        || (model.includes("bge-m3")
+          && signals.vectorScore >= DOCUMENT_AUTO_MIN_BGE_M3_VECTOR_SCORE + (index === 0 ? 0 : 0.02));
+    });
+  }
+  return results.slice(0, topK).map(toImportedDocumentChunk);
+}
+
+export async function searchImportedDocumentChunksForImportIds(
+  query: string,
+  importIds: string[],
+  topK = 6,
+): Promise<ImportedDocumentChunk[]> {
+  if (importIds.length === 0) return [];
+  return searchImportedDocumentChunks(query, topK, { importIds });
 }
 
 // ── Build memory context (legacy, kept for compatibility) ──
@@ -420,11 +508,16 @@ export async function buildMemoryContext(userInput: string): Promise<string> {
 
 // ── Reset ──
 export function resetRAG(): void {
+  store?.flushSync();
   store = null;
   retriever = null;
   worldbook = null;
   provider = null;
   resetEmbeddingProvider();
+}
+
+export function flushVectorStoreSync(): void {
+  store?.flushSync();
 }
 
 export function getRAGStats() {

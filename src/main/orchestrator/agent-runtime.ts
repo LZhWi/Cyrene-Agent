@@ -4,7 +4,7 @@ import type { ScheduledTask } from "../scheduler/types";
 import type { ChannelId } from "../channels/types";
 import type { ModelSettings } from "../settings/model-settings";
 import type { GeneralSettings } from "../settings/general-settings";
-import type { UserProfile } from "../settings-store";
+import { resolveUserDefaultCity, resolveUserTimezone, type UserProfile } from "../settings-store";
 import { loadVisionConfig } from "../settings/model-settings";
 import { getTimeoutSettings } from "../timeout-manager";
 import { resolveModelSettingsProfile } from "../settings/model-settings";
@@ -13,7 +13,7 @@ import { parseObserverFeeling } from "../chat-stream-utils";
 import { validateCaptionImagePath, IMAGE_CAPTION_PROMPT } from "../chat/image-caption";
 import { buildEnvironmentContext } from "./environment";
 import { buildToneInjection } from "./tone-injector";
-import { buildAlwaysOnContext, scheduleMemoryWrite } from "./index";
+import { buildAlwaysOnContext, buildReferenceInjection, scheduleMemoryWrite } from "./index";
 import { matchSticker } from "../sticker-embedder";
 import { buildRelationshipContext, recordRelationshipTurn } from "../relationship/relationship-log";
 import { compileSocialContextBlock } from "../social-context/context";
@@ -160,6 +160,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
   function buildBuildOptionsDeps(): BuildOptionsDeps {
     return {
       loadModelSettings: (modelProfileId?: string) => resolveModelSettingsProfile(rawDeps.loadModelSettings(), modelProfileId),
+      loadVisionConfig: (modelProfileId?: string) => loadVisionConfig(rawDeps.loadModelSettings(), modelProfileId),
       loadGeneralSettings: () => rawDeps.loadGeneralSettings(),
       loadUserProfile: () => rawDeps.loadUserProfile(),
       buildEnvironmentContext: ((model, profile) =>
@@ -189,6 +190,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         rawDeps.getSceneEmbeddingProvider() as unknown) as BuildOptionsDeps["getSceneEmbeddingProvider"],
       buildAlwaysOnContext: ((userText, messages, includeNativeChatContext) =>
         buildAlwaysOnContext(userText, messages as any, includeNativeChatContext)) as BuildOptionsDeps["buildAlwaysOnContext"],
+      buildReferenceInjection,
       buildRelationshipContext,
       buildModePrompt,
       buildToolSystemPrompt: ((mode, enabledTools) =>
@@ -215,8 +217,8 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         const visionCfg = loadVisionConfig();
         if (!visionCfg) return { ok: false, error: "未配置视觉模型，无法分析图片" };
         try {
-          const { captionImage } = await import("./vision-captioner");
-          const caption = await captionImage(
+          const { captionImageWithRetryAndFallback } = await import("./vision-captioner");
+          const caption = await captionImageWithRetryAndFallback(
             { base64: validated.buffer.toString("base64"), mime: validated.mime },
             IMAGE_CAPTION_PROMPT,
             visionCfg,
@@ -336,7 +338,17 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         : rawDeps.skillRegistry.getEnabledForMode(mode, generalSettings.skillModeOverrides);
       const systemContent = [
         buildModePrompt(mode),
-        buildEnvironmentContext({ provider: settings.provider, model: settings.model }, profile),
+        buildEnvironmentContext(
+          { provider: settings.provider, model: settings.model },
+          {
+            nickname: profile.nickname,
+            callPreference: profile.callPreference,
+            birthday: profile.birthday,
+            defaultCity: resolveUserDefaultCity(profile),
+            timezone: resolveUserTimezone(profile),
+            gender: profile.gender,
+          },
+        ),
         buildSkillCatalog(scheduledSkills),
         await buildAlwaysOnContext(task.prompt, messages),
         await rawDeps.buildPluginPromptContext({

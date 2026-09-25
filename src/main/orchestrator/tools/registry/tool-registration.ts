@@ -17,6 +17,7 @@ import type { GitService } from "../../../code-git/git-service";
 import { registerCodeGitTools } from "../git-tools";
 import type { LspManager } from "../../../lsp/manager";
 import { registerLspTool } from "../lsp-tool";
+import { registerAttachedImageTool } from "../attached-image-tool";
 import "../built-in-tools";
 
 export function syncBuiltInToolToggles(settings: GeneralSettings): void {
@@ -33,6 +34,7 @@ export function registerAllTools(deps: { codeGitService: GitService; lspManager:
   registerAstGrepTools();
   registerRecallHistoryTool();
   registerDocumentTools();
+  registerAttachedImageTool();
 
   setTranslateConfig(() => {
     const s = loadModelSettings();

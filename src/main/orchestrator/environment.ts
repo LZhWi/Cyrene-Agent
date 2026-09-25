@@ -15,8 +15,6 @@ import * as os from "os";
 import { listMcpServers } from "./mcp-manager";
 import { ACCESS_LEVEL_LABEL, getCurrentLevel } from "../permission";
 import { getCapability } from "./vendors/capabilities";
-import { resolveChatContextTimezone } from "../chat-time-context";
-import { getDateLocale } from "../locale-context";
 
 const LOG_PREFIX = "[Env]";
 
@@ -45,53 +43,23 @@ function safeGetPath(name: "desktop" | "documents" | "downloads" | "home"): stri
   }
 }
 
-/**
- * 把 d 在 tz 时区下的"年月日 星期 时分"按 part 类型固定组装成 `YYYY-MM-DD 周X HH:MM`。
- * 不依赖 Intl 本地化字符串的标点/顺序（不同 Node/locale 下 `format()` 输出不稳定），
- * 因此走 `formatToParts` 拿结构化字段，再固定拼装。
- * 注：short weekday 在 zh-CN 下通常是"周一"等，否则按 JS Date.getDay() 兜底映射。
- */
-function formatDate(d: Date, tz: string): string {
-  let parts: Intl.DateTimeFormatPart[];
+function safeUsername(): string {
   try {
-    parts = new Intl.DateTimeFormat(getDateLocale(), {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      weekday: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(d);
+    return os.userInfo().username;
   } catch (err) {
-    console.warn(LOG_PREFIX, "formatToParts 失败，回退系统本地时间:", err);
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
-    const hh = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd} ${week} ${hh}:${min}`;
+    console.warn(LOG_PREFIX, "读取系统用户名失败:", err);
+    return process.env.USERNAME?.trim() || "unknown";
   }
+}
 
-  const get = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((p) => p.type === type)?.value ?? "";
-
-  const yyyy = get("year");
-  const mm = get("month");
-  const dd = get("day");
-  const weekdayRaw = get("weekday");
-  // zh-CN short weekday 形如"周一"；其它 locale 兜底按 d.getUTCDay() 映射
-  // （注意：getUTCDay 对 tz 不是 tz 本地日，下方回退仅在 Intl 异常路径使用）。
-  const weekMap = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-  const week =
-    weekdayRaw && /[周星期]/.test(weekdayRaw)
-      ? weekdayRaw
-      : weekMap[d.getDay()];
-  const hh = get("hour");
-  const min = get("minute");
-  return `${yyyy}-${mm}-${dd} ${week} ${hh}:${min}`;
+// 只到日期粒度：环境上下文位于 system 前缀头部，分钟级时钟会让 prompt 缓存每分钟失效。
+// 精确到分钟的当前时间由尾部动态区和消息时间戳前缀提供。
+function formatDate(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
+  return `${yyyy}-${mm}-${dd} ${week}`;
 }
 
 function platformLabel(): string {
@@ -116,10 +84,9 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
   const documents = safeGetPath("documents");
   const downloads = safeGetPath("downloads");
   const home = safeGetPath("home");
-  const username = os.userInfo().username;
-  // 用户时区（profile.timezone 缺/非法时由 resolver 回退 Asia/Shanghai），不再读系统时区。
-  const tz = resolveChatContextTimezone(userInfo?.timezone);
-  const dateStr = formatDate(new Date(), tz);
+  const username = safeUsername();
+  const dateStr = formatDate(new Date());
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
 
   // MCP server 状态
   let mcpLine = "未连接任何 MCP server";
@@ -137,7 +104,7 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
   const lines: string[] = [];
   lines.push("## 运行环境（机器实际状态，不要再凭印象猜）");
   lines.push("");
-  lines.push(`- 当前时间：${dateStr}（时区 ${tz}）`);
+  lines.push(`- 今天日期：${dateStr}（时区 ${tz}；精确的当前时间以对话消息的时间戳为准）`);
   lines.push(`- 操作系统：${platformLabel()}`);
   lines.push(`- 当前用户名：${username}`);
   if (home) lines.push(`- 用户主目录：${home}`);
@@ -177,10 +144,6 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
     if (userInfo.defaultCity) lines.push(`- 默认城市：${userInfo.defaultCity}（用户问天气/位置且没指定其他城市时，默认用这个）`);
     if (userInfo.gender === "male") lines.push(`- 性别：男`);
     else if (userInfo.gender === "female") lines.push(`- 性别：女`);
-    const preferredAddress = userInfo.callPreference?.trim() || userInfo.nickname?.trim();
-    if (preferredAddress) {
-      lines.push(`- 称呼使用：在重要提问或确认时，可以自然使用一次「${preferredAddress}」；不要每句话重复称呼。`);
-    }
     if (userInfo.gender === "male") {
       lines.push("- 性别约束：不得使用女性指向称呼；性别只用于防止误称，不要求主动提及。");
     } else if (userInfo.gender === "female") {
@@ -188,9 +151,7 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
     } else {
       lines.push("- 性别约束：性别未知或保密时只使用中性称呼，不得根据昵称、头像或语气推断。");
     }
-    lines.push("");
-    // 时区≠地点：明确告知模型 timezone 与 defaultCity 是两个独立维度，不得交叉推断。
-    lines.push("> 用户时区仅用于时间计算，不代表用户所在地，不得根据时区推断用户所在城市。默认城市仅用于天气等需要定位的工具。");
+    if (userInfo.timezone && userInfo.timezone !== tz) lines.push(`- 用户时区：${userInfo.timezone}`);
     lines.push("");
   }
 

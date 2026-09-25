@@ -226,6 +226,7 @@ describe("JsonVectorStore — index metadata and dimension validation", () => {
     const store1 = new JsonVectorStore(tmpDir);
     const provider1024 = makeLocalProvider(1024);
     await store1.add("old entry", "test", provider1024);
+    store1.flushSync();
 
     // Delete metadata to simulate old index
     const metaPath = path.join(tmpDir, "memory-store-meta.json");

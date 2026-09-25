@@ -2,7 +2,8 @@ import type { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import type { GeneralSettings } from "../settings/general-settings";
 import { loadModelSettings, resolveModelSettingsProfile } from "../settings/model-settings";
-import { loadUserProfile } from "../settings-store";
+import { loadUserProfile, resolveUserDefaultCity, resolveUserTimezone } from "../settings-store";
+import { loadLocation } from "../location-store";
 import {
   setSearchConfig,
   setUserTimezoneConfig,
@@ -44,7 +45,7 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
   // 注入天气工具配置获取器：每次工具执行时实时读 key/默认城市
   // （用户改了设置不用重启就能生效）
   setWeatherConfig(
-    () => loadUserProfile().defaultCity,
+    () => resolveUserDefaultCity(loadUserProfile()),
     () => loadGeneralSettings().weatherSource,
     () => loadGeneralSettings().amapKey,
     // 天气卡片回调：工具拿到结构化数据后，发 Custom 事件给 react 聊天窗口渲染卡片
@@ -62,10 +63,16 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
       }
     },
     () => loadGeneralSettings().weatherEnabled,
+    () => {
+      const profile = loadUserProfile();
+      if (profile.weatherLocationMode !== "auto") return null;
+      const location = loadLocation();
+      return location ? { latitude: location.latitude, longitude: location.longitude } : null;
+    },
   );
 
   // 注入用户时区 getter：工具侧通过 currentUserTimezone() 统一拿用户时区（缺/非法回退 Asia/Shanghai）
-  setUserTimezoneConfig(() => loadUserProfile().timezone);
+  setUserTimezoneConfig(() => resolveUserTimezone(loadUserProfile()));
 
   // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给 react 聊天窗口
   setChoiceCardSender((cardData) => {

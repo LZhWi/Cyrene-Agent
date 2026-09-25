@@ -38,6 +38,7 @@ const cyreneApi = {
     ipcRenderer.send(IPC.WINDOW_SET_DRAGGING, isDragging),
   captureFrame: () => ipcRenderer.invoke(IPC.WINDOW_CAPTURE_FRAME),
   getCursorPosition: () => ipcRenderer.invoke(IPC.WINDOW_GET_CURSOR_POSITION),
+  getIdleState: () => ipcRenderer.invoke(IPC.WINDOW_GET_IDLE_STATE),
   onPetZoom: (callback: (zoom: number) => void) => {
     const listener = (_e: unknown, zoom: number) => callback(zoom);
     ipcRenderer.on(IPC.PET_ZOOM, listener);
@@ -47,6 +48,11 @@ const cyreneApi = {
     const listener = (_e: unknown, visible: boolean) => callback(visible);
     ipcRenderer.on(IPC.PET_VISIBILITY_CHANGED, listener);
     return () => ipcRenderer.off(IPC.PET_VISIBILITY_CHANGED, listener);
+  },
+  onPetIdleMotionsChanged: (callback: (enabled: boolean) => void) => {
+    const listener = (_e: unknown, enabled: boolean) => callback(enabled);
+    ipcRenderer.on(IPC.PET_IDLE_MOTIONS_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.PET_IDLE_MOTIONS_CHANGED, listener);
   },
 };
 
@@ -614,8 +620,46 @@ const userApi = {
   },
 };
 
+const locationApi = {
+  systemTimezone: (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  getStatus: () => ipcRenderer.invoke(IPC.LOCATION_GET_STATUS),
+  clear: () => ipcRenderer.invoke(IPC.LOCATION_CLEAR),
+  refresh: (): Promise<{ ok: boolean; location?: { latitude: number; longitude: number; accuracy: number; obtainedAt: number }; error?: string }> =>
+    new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve({ ok: false, error: "geolocation-unavailable" });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const location = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            obtainedAt: position.timestamp || Date.now(),
+          };
+          try {
+            const result = await ipcRenderer.invoke(IPC.LOCATION_UPDATE, location) as { ok: boolean; location?: typeof location; error?: string };
+            resolve(result);
+          } catch {
+            resolve({ ok: false, error: "location-save-failed" });
+          }
+        },
+        (error) => resolve({ ok: false, error: error.code === error.PERMISSION_DENIED ? "permission-denied" : error.code === error.TIMEOUT ? "timeout" : "position-unavailable" }),
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30 * 60 * 1000 },
+      );
+    }),
+};
+
 const memoryPanelApi = {
   getData: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_DATA),
+  getQueryRouter: () => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_GET),
+  saveQueryRouter: (settings: unknown) => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_SAVE, settings),
+  getColdRecall: (conversationId: string) => ipcRenderer.invoke(IPC.MEMORY_COLD_RECALL_GET, { conversationId }),
+  resolveColdRecall: (conversationId: string, messageId: string, entryId: string, action: "related" | "unrelated" | "undo") =>
+    ipcRenderer.invoke(IPC.MEMORY_COLD_RECALL_FEEDBACK, { conversationId, messageId, entryId, action }),
+  editL2: (id: string, content: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_EDIT_L2, { id, content }),
+  deleteL2: (id: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_L2, { id }),
   deleteImportedDoc: (importId: string, fileName?: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, { importId, fileName }),
   saveL0: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L0, patch),
   saveL1: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L1, patch),
@@ -628,6 +672,7 @@ const memoryPanelApi = {
 };
 
 contextBridge.exposeInMainWorld("user", userApi);
+contextBridge.exposeInMainWorld("cyreneLocation", locationApi);
 contextBridge.exposeInMainWorld("memoryPanel", memoryPanelApi);
 contextBridge.exposeInMainWorld("runtimeState", runtimeStateApi);
 
@@ -699,6 +744,8 @@ const chatStoreApi = {
   rename: (id: string, title: string) =>
     ipcRenderer.invoke(IPC.CHATS_RENAME, { id, title }),
   delete: (id: string) => ipcRenderer.invoke(IPC.CHATS_DELETE, id),
+  deleteMessage: (id: string, messageId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_DELETE_MESSAGE, { id, messageId }),
   setPinned: (id: string, pinned: boolean) =>
     ipcRenderer.invoke(IPC.CHATS_SET_PINNED, { id, pinned }),
   setModelProfile: (id: string, modelProfileId?: string) =>

@@ -191,6 +191,19 @@ export class PluginManager {
   }
 
   /**
+   * 宿主内部复用插件已经登记的 IPC 契约；不向插件上下文暴露额外私有能力。
+   */
+  invokePluginIpc(pluginId: string, channel: string, args: unknown[] = []): unknown {
+    if (!this.isRunning(pluginId)) {
+      throw new Error(`插件未运行: ${pluginId}`);
+    }
+    if (!this.opts.runtime.invokeIpc) {
+      throw new Error("当前插件运行时不支持宿主内部调用");
+    }
+    return this.opts.runtime.invokeIpc(`plugin:${pluginId}:${channel}`, args);
+  }
+
+  /**
    * 订阅插件运行状态变化（激活完成 → running，停用完成 → 非 running）。
    * 调度引擎据此暂停/恢复插件任务；单个监听器失败只告警不中断。
    */

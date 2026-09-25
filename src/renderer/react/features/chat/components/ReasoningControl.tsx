@@ -44,7 +44,7 @@ function ChevronIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>;
 }
 
-export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: string; modelProfileId?: string }) {
+export function ReasoningControl({ sessionId, modelProfileId, titlebar = false }: { sessionId?: string; modelProfileId?: string; titlebar?: boolean }) {
   const { t } = useTranslation();
   const [providerKey, setProviderKey] = useState("");
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
@@ -67,7 +67,9 @@ export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: st
   useEffect(() => { void refresh(); }, [sessionId, modelProfileId]);
 
   const activeKey = view ? preferenceKey(view.activePreference) : "auto:";
-  const label = `thinking · ${preferenceLabel(view?.activePreference ?? { mode: "auto" })}`;
+  const activePreference = view?.activePreference ?? { mode: "auto" as const };
+  const preferenceText = preferenceLabel(activePreference);
+  const label = `thinking · ${preferenceText}`;
 
   async function select(value: string | number) {
     const item = view?.items.find((candidate) => preferenceKey(candidate.preference) === value);
@@ -110,8 +112,13 @@ export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: st
       overlayClassName="cy-reasoning-popover"
     >
       <button type="button" className="cy-composer__agent-button cy-reasoning-control" disabled={view?.disabled}>
-        <img className="cy-reasoning-icon" src={thinkingIconUrl} alt="" />
-        <span>{label}</span>
+        {!titlebar && <img className="cy-reasoning-icon" src={thinkingIconUrl} alt="" />}
+        {titlebar ? (
+          <>
+            <span className="cy-title-control-label">推理</span>
+            <span className="cy-title-control-value">{activePreference.mode === "auto" ? t("reasoning.followModel") : preferenceText}</span>
+          </>
+        ) : <span>{label}</span>}
         <ChevronIcon />
       </button>
     </Popover>

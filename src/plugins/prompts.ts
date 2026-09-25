@@ -8,7 +8,7 @@ import type {
 
 const PROMPT_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
-export const PLUGIN_PROMPT_PROVIDER_TIMEOUT_MS = 2_000;
+export const PLUGIN_PROMPT_PROVIDER_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_PROMPT_CHARS = 16_000;
 export const MAX_PLUGIN_PROMPT_TOTAL_CHARS = 32_000;
 export interface PluginPromptReceipt {
@@ -52,6 +52,14 @@ function fullProviderId(ownerId: string, providerId: string): string {
   return `plugin:${ownerId}:${providerId}`;
 }
 
+function usesLocalCompanionPromptContract(entry: PromptEntry, input: PluginPromptBuildInput): boolean {
+  const chatBackend = (input as PluginPromptBuildInput & { chatBackend?: string }).chatBackend;
+  return input.source === "conversation"
+    && input.mode === "chat"
+    && chatBackend === "companion"
+    && (entry.ownerId === "companion-chat" || entry.ownerId === "companion-memory");
+}
+
 /** 单个 Provider 失败或超时时返回空内容，避免第三方插件阻塞整轮对话。 */
 interface ResolvedPromptContribution {
   content: string;
@@ -73,7 +81,7 @@ async function resolveProvider(entry: PromptEntry, input: PluginPromptBuildInput
     if (typeof content !== "string") throw new Error("提示词 Provider 必须返回字符串");
     const normalized = content.trim();
     if (!normalized) return { content: "", complete: true };
-    if (normalized.length > MAX_PLUGIN_PROMPT_CHARS) {
+    if (!usesLocalCompanionPromptContract(entry, input) && normalized.length > MAX_PLUGIN_PROMPT_CHARS) {
       console.warn(`[plugins] ${fullId} 提示词超过 ${MAX_PLUGIN_PROMPT_CHARS} 字符，已截断`);
       return {
         content: normalized.slice(0, MAX_PLUGIN_PROMPT_CHARS),
@@ -101,6 +109,7 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
     const snapshot = [...entries.values()]
       .filter((entry) => {
         if (entry.signal.aborted) return false;
+        if ((entry.provider.target ?? "soul") !== (input.target ?? "soul")) return false;
         if (!(entry.provider.sources ?? LEGACY_PROMPT_SOURCES).includes(input.source)) return false;
         if (input.source === "moments-post") return true;
         return !entry.provider.modes || entry.provider.modes.includes(input.mode);
@@ -109,22 +118,35 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
     const contributions = await Promise.all(snapshot.map((entry) => resolveProvider(entry, input)));
     const blocks: string[] = [];
     const receipts: PluginPromptReceipt[] = [];
-    let totalChars = 0;
+    let limitedChars = 0;
     for (let index = 0; index < snapshot.length; index += 1) {
       const contribution = contributions[index];
       if (!contribution.content) continue;
-      const fullId = fullProviderId(snapshot[index].ownerId, snapshot[index].provider.id);
-      const separator = blocks.length > 0 ? "\n\n---\n\n" : "";
+      const entry = snapshot[index];
+      const fullId = fullProviderId(entry.ownerId, entry.provider.id);
+      const localCompanion = usesLocalCompanionPromptContract(entry, input);
+      const separator = blocks.length > 0 ? (localCompanion ? "\n\n" : "\n\n---\n\n") : "";
+      if (localCompanion) {
+        blocks.push(separator + contribution.content);
+        if (entry.provider.consumptionReceipt && input.runId) {
+          receipts.push({
+            providerId: fullId,
+            acceptedChars: contribution.content.length,
+            complete: contribution.complete,
+          });
+        }
+        continue;
+      }
       const header = `[插件上下文：${fullId}]\n`;
-      const remaining = MAX_PLUGIN_PROMPT_TOTAL_CHARS - totalChars - separator.length - header.length;
+      const remaining = MAX_PLUGIN_PROMPT_TOTAL_CHARS - limitedChars - separator.length - header.length;
       if (remaining <= 0) {
         console.warn(`[plugins] 插件提示词总长度超过 ${MAX_PLUGIN_PROMPT_TOTAL_CHARS} 字符，已忽略后续内容`);
         break;
       }
       const accepted = contribution.content.slice(0, remaining);
       blocks.push(separator + header + accepted);
-      totalChars += separator.length + header.length + accepted.length;
-      if (snapshot[index].provider.consumptionReceipt && input.runId) {
+      limitedChars += separator.length + header.length + accepted.length;
+      if (entry.provider.consumptionReceipt && input.runId) {
         receipts.push({
           providerId: fullId,
           acceptedChars: accepted.length,
@@ -156,6 +178,9 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
       }
       if (provider.consumptionReceipt !== undefined && typeof provider.consumptionReceipt !== "boolean") {
         throw new Error("提示词 Provider consumptionReceipt 必须为布尔值");
+      }
+      if (provider.target !== undefined && provider.target !== "soul" && provider.target !== "tool") {
+        throw new Error("提示词 Provider target 非法");
       }
       if (provider.modes && (
         !Array.isArray(provider.modes)

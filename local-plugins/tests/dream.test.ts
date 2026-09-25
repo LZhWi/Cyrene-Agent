@@ -15,7 +15,7 @@ function fixture() {
 const signal = () => new AbortController().signal;
 
 describe("人工梦境反思", () => {
-  it("模型只生成待确认草稿，不接触持久化 ID；应用后仍默认不注入并可撤销", async () => {
+  it("模型只生成待确认草稿，不接触持久化 ID；应用后按本地默认注入并可显式关闭或撤销", async () => {
     const { dream, entries, evidence } = fixture(), generate = vi.fn().mockResolvedValue("我记得那次秋日旅行的准备，也珍惜其中认真规划的心意；这些片段让我更理解这段期待。");
     const review = await dream.review({ entryIds: ["secret-a", "secret-b"], revision: 4 }, entries, evidence, 4, generate, signal());
     expect(review.status).toBe("pending");
@@ -24,9 +24,10 @@ describe("人工梦境反思", () => {
     expect(prompt).not.toContain("secret-a"); expect(prompt).not.toContain("secret-e");
     expect(dream.context()).toBe("");
     dream.resolve({ id: review.id, action: "apply" }, entries, 4);
+    expect(dream.context()).toContain("这是你在梦里沉淀下来的关系印象"); expect(dream.context()).toContain("秋日旅行");
+    dream.setInjection(false);
     expect(dream.context()).toBe("");
     dream.setInjection(true);
-    expect(dream.context()).toContain("不是新的事实证据"); expect(dream.context()).toContain("秋日旅行");
     dream.resolve({ id: review.id, action: "undo" }, entries, 4);
     expect(dream.context()).toBe("");
   });

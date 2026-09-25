@@ -65,6 +65,8 @@ export interface ModelSettings {
   /** Embedding 维度（可选，仅 cloud 模式）。留空 = 自动探测。 */
   embeddingDimensions?: number;
   multimodal: boolean;
+  /** 屏幕观察、图片工具与图片转述使用哪个后端。 */
+  visionBackend: "main" | "independent";
   thinkingOverride?: -1 | 0 | 1;
   /** 禁用 max_tokens 注入。仅对自定义端点生效（与主进程 model-settings.ts 对齐）。 */
   disableMaxToken?: boolean;
@@ -106,6 +108,11 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   citaSemanticEngine: "remote" | "local";
   chatSocialContextEnabled: boolean;
   chatBackend: "native" | "companion";
+  companionToolReasoning: ReasoningPreference;
+  companionFeedbackLearningEnabled: boolean;
+  companionScreenMonitorEnabled: boolean;
+  companionLifeEnabled: boolean;
+  companionImportantDatesText: string;
   momentsEnabled: boolean;
   chatMomentsContextEnabled: boolean;
   cyreneMomentsPostingEnabled: boolean;
@@ -116,6 +123,7 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
+  petIdleMotionsEnabled: boolean;
   disableGpuElectron?: boolean;
   sidebarVisible: boolean;
   tasksVisible: boolean;
@@ -134,6 +142,7 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   segmentedOutputMode: SegmentedOutputMode;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
+  companionProactivePace: "quiet" | "normal" | "lively";
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   /** 聊天段落间距（em）。目前仅设置窗口 UI 使用，主进程归一化尚未持久化该字段。 */
   chatParaSpacing?: number;
@@ -141,11 +150,18 @@ export interface GeneralSettings extends ChatAppearanceSettings {
 }
 
 export interface UserApi {
-  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; avatarPath: string; defaultCity: string; gender: string }>;
+  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; timezoneMode: "system" | "manual"; avatarPath: string; defaultCity: string; weatherLocationMode: "auto" | "fixed" | "off"; gender: string }>;
   saveProfile: (profile: Record<string, unknown>) => Promise<unknown>;
   uploadAvatar: () => Promise<{ avatarPath: string } | null>;
   getAvatar: () => Promise<string | null>;
   onAvatarChanged: (callback: () => void) => () => void;
+}
+
+export interface LocationApi {
+  systemTimezone: () => string;
+  getStatus: () => Promise<{ latitude: number; longitude: number; accuracy: number; obtainedAt: number } | null>;
+  clear: () => Promise<{ ok: boolean }>;
+  refresh: () => Promise<{ ok: boolean; location?: { latitude: number; longitude: number; accuracy: number; obtainedAt: number }; error?: string }>;
 }
 
 export interface MemoryPanelPayload {
@@ -165,9 +181,11 @@ export interface MemoryPanelPayload {
     id: string;
     content: string;
     triggerText: string;
-    status: "active" | "aging" | "archived";
+    status: "active" | "aging" | "archived" | "superseded" | "merged";
     weight: number;
     createdAt: number;
+    sourceAt?: number;
+    sourceEndAt?: number;
   }>;
   importedDocs: Array<{
     importId: string | null;
@@ -191,6 +209,12 @@ export interface ObsidianVaultConfig {
 
 export interface MemoryPanelApi {
   getData: () => Promise<MemoryPanelPayload>;
+  getQueryRouter: () => Promise<{ enabled: boolean; provider: string; baseUrl: string; model: string; explicitTransport: "auto" | "openai" | "anthropic"; reasoning: "auto" | "off" | "low"; hasKey: boolean }>;
+  saveQueryRouter: (settings: { enabled: boolean; provider: string; baseUrl: string; model: string; explicitTransport: "auto" | "openai" | "anthropic"; reasoning: "auto" | "off" | "low"; apiKey?: string }) => ReturnType<MemoryPanelApi["getQueryRouter"]>;
+  getColdRecall: (conversationId: string) => Promise<import("../../../shared/chat-types").ChatColdRecallRecord[]>;
+  resolveColdRecall: (conversationId: string, messageId: string, entryId: string, action: "related" | "unrelated" | "undo") => Promise<import("../../../shared/chat-types").ChatColdRecallRecord>;
+  editL2: (id: string, content: string) => Promise<{ ok: boolean; indexed: boolean; error?: string }>;
+  deleteL2: (id: string) => Promise<{ ok: boolean; deleted: boolean; deletedVectors: number; error?: string }>;
   deleteImportedDoc: (importId: string, fileName?: string) => Promise<{ ok: boolean; deleted: number }>;
   saveL0: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
   saveL1: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;

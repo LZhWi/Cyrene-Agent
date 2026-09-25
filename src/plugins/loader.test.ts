@@ -78,11 +78,11 @@ describe("readManifest", () => {
     expect(readManifest(dir)).toBeNull();
   });
 
-  it("接受八项扩展能力作为 deps", () => {
+  it("接受扩展能力作为 deps", () => {
     const dir = fixture("new-deps", {
       "manifest.json": JSON.stringify({
         ...validManifest,
-        deps: ["secrets", "workspace", "conversations", "assistant-delivery", "screen-observation", "user-presence", "scheduler", "speech-input"],
+        deps: ["secrets", "workspace", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context", "companion-context", "memory-retrieval", "scheduler", "speech-input"],
       }),
       "index.cjs": `module.exports = { register() {} };`,
     });
@@ -93,6 +93,9 @@ describe("readManifest", () => {
       "assistant-delivery",
       "screen-observation",
       "user-presence",
+      "weather-context",
+      "companion-context",
+      "memory-retrieval",
       "scheduler",
       "speech-input",
     ]);

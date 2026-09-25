@@ -1,6 +1,6 @@
-import { JsonVectorStore, SearchResult } from "./vectorstore";
+import { JsonVectorStore, SearchResult, cosineSimilarity } from "./vectorstore";
 import { EmbeddingProvider, getEmbeddingProvider } from "./embedding";
-import { getReranker } from "./reranker";
+import { getReranker, type RerankerProvider } from "./reranker";
 
 // ── @node-rs/jieba 分词（Node 24 兼容；nodejieba 已弃用） ──
 import { Jieba } from "@node-rs/jieba";
@@ -49,6 +49,128 @@ const NOUN_WEIGHT = 1.3;
 export interface RetrieveOptions {
   importIds?: string[];
   allowedEntryIds?: string[];
+  recordRecall?: boolean;
+  rerank?: boolean;
+}
+
+export interface DetachedMemoryCandidate {
+  id: string;
+  text: string;
+  embedding: number[];
+  weight: number;
+  lastRecalledAt: number;
+}
+
+export function detachedBm25TopScore(query: string, documents: string[]): number {
+  if (!query.trim() || !documents.length) return 0;
+  const queryTokens = tokenize(query);
+  const docTokens = documents.map((text) => tokenize(text));
+  const averageLength = docTokens.reduce((sum, tokens) => sum + tokens.length, 0) / documents.length;
+  const frequencies = new Map<string, number>();
+  for (const tokens of docTokens) for (const word of new Set(tokens.map((token) => token.word))) {
+    frequencies.set(word, (frequencies.get(word) ?? 0) + 1);
+  }
+  return Math.max(0, ...docTokens.map((tokens) => bm25Score(queryTokens, tokens, frequencies, documents.length, averageLength)));
+}
+
+/**
+ * 给插件私有记忆复用原生检索算法，不读取或写入宿主 RAG 库。
+ * 算法顺序与 HybridRetriever.retrieve 一致：向量 topK*3、BM25 topK*3、
+ * 归一化 0.7/0.3 融合、topK 候选、原生 cross-encoder 精排。
+ */
+export async function rankDetachedMemoryCandidates(
+  query: string,
+  candidates: DetachedMemoryCandidate[],
+  topK: number,
+  services: { provider?: EmbeddingProvider | null; reranker?: RerankerProvider | null; now?: number; mode?: "hybrid" | "semantic" | "lexical"; rawScore?: boolean } = {},
+): Promise<{
+  rankedIds: string[];
+  vectorHitIds: string[];
+  ranked: Array<{ id: string; score: number; method: "reranker" | "hybrid" | "semantic" }>;
+}> {
+  const provider = services.provider === undefined ? getEmbeddingProvider() : services.provider;
+  if (candidates.length === 0) return { rankedIds: [], vectorHitIds: [], ranked: [] };
+  if (!provider || services.mode === "lexical") {
+    const queryTokens = tokenize(query);
+    const documents = candidates.map((candidate) => tokenize(candidate.text));
+    const averageLength = documents.reduce((sum, tokens) => sum + tokens.length, 0) / candidates.length;
+    const frequencies = new Map<string, number>();
+    for (const tokens of documents) for (const word of new Set(tokens.map((token) => token.word))) {
+      frequencies.set(word, (frequencies.get(word) ?? 0) + 1);
+    }
+    const ranked = candidates.map((candidate, index) => ({
+      id: candidate.id,
+      score: bm25Score(queryTokens, documents[index], frequencies, candidates.length, averageLength),
+    })).sort((left, right) => right.score - left.score).slice(0, topK);
+    return { rankedIds: ranked.map((row) => row.id), vectorHitIds: [], ranked: ranked.map((row) => ({ ...row, method: "hybrid" as const })) };
+  }
+  const queryEmbedding = await provider.embed(query);
+  const now = services.now ?? Date.now();
+  const vectorResults = candidates.map((candidate) => {
+    const similarity = candidate.embedding.length === queryEmbedding.length
+      ? cosineSimilarity(candidate.embedding, queryEmbedding)
+      : Number.NEGATIVE_INFINITY;
+    const hoursSinceRecall = Math.max(0, now - candidate.lastRecalledAt) / (1000 * 60 * 60);
+    return { candidate, score: services.mode === "semantic" || services.rawScore ? similarity : similarity * candidate.weight * Math.pow(0.95, hoursSinceRecall / 24) };
+  }).filter((row) => row.score >= 0.3)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, topK * 3);
+
+  if (services.mode === "semantic") {
+    const semantic = vectorResults.slice(0, topK);
+    return {
+      rankedIds: semantic.map((row) => row.candidate.id),
+      vectorHitIds: semantic.map((row) => row.candidate.id),
+      ranked: semantic.map((row) => ({ id: row.candidate.id, score: row.score, method: "semantic" })),
+    };
+  }
+
+  const queryTokenInfo = tokenize(query);
+  const docTokensList = candidates.map((candidate) => tokenize(candidate.text));
+  const avgDocLen = docTokensList.reduce((sum, tokens) => sum + tokens.length, 0) / candidates.length;
+  const docFreq = new Map<string, number>();
+  for (const tokens of docTokensList) {
+    for (const word of new Set(tokens.map((token) => token.word))) {
+      docFreq.set(word, (docFreq.get(word) ?? 0) + 1);
+    }
+  }
+  const bm25Results = candidates.map((candidate, index) => ({
+    candidate,
+    score: bm25Score(queryTokenInfo, docTokensList[index], docFreq, candidates.length, avgDocLen),
+  })).sort((left, right) => right.score - left.score).slice(0, topK * 3);
+
+  const merged = new Map<string, { candidate: DetachedMemoryCandidate; vectorScore: number; bm25Score: number }>();
+  for (const row of vectorResults) merged.set(row.candidate.id, { candidate: row.candidate, vectorScore: row.score, bm25Score: 0 });
+  for (const row of bm25Results) {
+    const current = merged.get(row.candidate.id);
+    if (current) current.bm25Score = row.score;
+    else merged.set(row.candidate.id, { candidate: row.candidate, vectorScore: 0, bm25Score: row.score });
+  }
+  const values = [...merged.values()];
+  const maxVector = Math.max(...values.map((value) => value.vectorScore), 1);
+  const maxBm25 = Math.max(...values.map((value) => value.bm25Score), 1);
+  const ranked = values.map((value) => ({
+    ...value,
+    score: value.vectorScore / maxVector * 0.7 + value.bm25Score / maxBm25 * 0.3,
+  })).sort((left, right) => right.score - left.score).slice(0, topK);
+
+  const reranker = services.reranker === undefined ? getReranker() : services.reranker;
+  let rerankerScores: Map<string, number> | undefined;
+  if (reranker && ranked.length > 1) {
+    const reranked = await reranker.rerank(query, ranked.map((row) => row.candidate.text));
+    rerankerScores = new Map(reranked.map((row) => [row.text, row.score]));
+    ranked.sort((left, right) => (rerankerScores!.get(right.candidate.text) ?? Number.NEGATIVE_INFINITY)
+      - (rerankerScores!.get(left.candidate.text) ?? Number.NEGATIVE_INFINITY));
+  }
+  return {
+    rankedIds: ranked.map((row) => row.candidate.id),
+    vectorHitIds: vectorResults.map((row) => row.candidate.id),
+    ranked: ranked.map((row) => ({
+      id: row.candidate.id,
+      score: rerankerScores?.get(row.candidate.text) ?? row.score,
+      method: rerankerScores ? "reranker" : "hybrid",
+    })),
+  };
 }
 
 // ── 自定义词表（entity-graph 维护） ──
@@ -216,7 +338,11 @@ export class HybridRetriever {
     // 如果没有 provider，向量检索不可用，只用 BM25
     if (!this.provider) {
       const bm25Results = this.bm25Search(query, source, topK, options);
-      return bm25Results;
+      return bm25Results.map((result) => ({
+        ...result,
+        retrievalSignals: { vectorScore: 0, bm25Score: result.score },
+        rankingSource: "hybrid" as const,
+      }));
     }
 
     // 1. Vector 检索
@@ -246,9 +372,11 @@ export class HybridRetriever {
     const maxV = Math.max(...all.map((m) => m.vectorScore), 1);
     const maxB = Math.max(...all.map((m) => m.bm25Score), 1);
 
-    const scored = all.map((m) => ({
+    const scored: SearchResult[] = all.map((m) => ({
       ...m.result,
       score: (m.vectorScore / maxV) * vectorWeight + (m.bm25Score / maxB) * bm25Weight,
+      retrievalSignals: { vectorScore: m.vectorScore, bm25Score: m.bm25Score },
+      rankingSource: "hybrid" as const,
     }));
 
     scored.sort((a, b) => b.score - a.score);
@@ -256,7 +384,7 @@ export class HybridRetriever {
 
     // ── Reranker 精排 ──
     // 如果 reranker 可用，用 cross-encoder 对候选结果做精排
-    const reranker = getReranker();
+    const reranker = options.rerank === false ? null : getReranker();
     if (reranker && candidates.length > 1) {
       try {
         const docs = candidates.map((c) => c.entry.text);
@@ -268,6 +396,7 @@ export class HybridRetriever {
           const rerankScore = scoreMap.get(c.entry.text);
           if (rerankScore !== undefined) {
             c.score = rerankScore;
+            c.rankingSource = "reranker";
           }
         }
         candidates.sort((a, b) => b.score - a.score);

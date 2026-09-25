@@ -41,8 +41,9 @@ function load(storage: PluginStorage): AutoDreamState {
 }
 
 /**
- * Plugin API 没有系统级空闲时间，因此这里只把原生桌面 Chat 无新活动 15 分钟视为近似空闲。
- * 模型输出仍进入 dream.review 的待确认列表；本调度器不保存叙事、不注入，也不改来源记忆。
+ * 与本地版一致，把原生桌面 Chat 无新活动 15 分钟视为空闲窗口。
+ * 容量迁移、叙事与 aging 蒸馏合并由调用方组成同一完整 Dream 周期；
+ * 是否自动采用模型结果由独立开关控制，并保留复核及撤销记录。
  */
 export function createAutoDream(
   storage: PluginStorage,

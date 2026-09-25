@@ -144,8 +144,10 @@ export interface ModelSettings {
   embeddingDimensions?: number;
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
   vision?: VisionModelConfig;
-  /** 主模型是否多模态。true 时图片直发主模型（direct），vision 配置保留但忽略。 */
+  /** 聊天图片是否直接发送给主模型；false 时先由视觉任务后端转述。 */
   multimodal: boolean;
+  /** 屏幕观察、图片工具及转述/直发失败降级所使用的视觉任务后端。 */
+  visionBackend: "main" | "independent";
   thinkingOverride?: -1 | 0 | 1;
   disableMaxToken?: boolean;
   /** 上下文窗口大小（Token）。默认 256000，来自 DEFAULT_CONTEXT_WINDOW_TOKENS。唯一定义点。 */
@@ -177,6 +179,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   rerankerMode: "standard",
   embeddingModel: "bgem3",
   multimodal: true,
+  visionBackend: "main",
   contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
 };
 
@@ -322,6 +325,21 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     }
   }
 
+  const defaultModelProfileId = typeof input?.defaultModelProfileId === "string"
+    ? input.defaultModelProfileId
+    : modelProfiles[0]?.id;
+  const legacyVisionProfile = resolveDefaultModelProfile(modelProfiles, defaultModelProfileId) ?? profile;
+  const legacyChatDirect = legacyVisionProfile.multimodal ?? multimodal;
+  const completeVision = Boolean(rawVision?.baseUrl && rawVision.apiKey && rawVision.model);
+  // 旧配置没有独立的视觉后端选项，按升级前的实际路由迁移：关闭直发时使用
+  // 独立 VLM；Anthropic 主模型若已配完整 VLM，也曾自动改走独立端点。
+  const visionBackend: ModelSettings["visionBackend"] = input?.visionBackend === "main"
+    || input?.visionBackend === "independent"
+    ? input.visionBackend
+    : (!legacyChatDirect || (legacyVisionProfile.explicitTransport === "anthropic" && completeVision))
+      ? "independent"
+      : "main";
+
   return {
     mode,
     provider,
@@ -333,7 +351,7 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     reasoning: profile.reasoning,  // 顶层镜像：与 explicitTransport 同源（perProvider[currentProvider].reasoning）
     perProvider,
     modelProfiles,
-    defaultModelProfileId: typeof input?.defaultModelProfileId === "string" ? input.defaultModelProfileId : modelProfiles[0]?.id,
+    defaultModelProfileId,
     runtimeSync: input?.runtimeSync === "llm" ? "llm" : input?.runtimeSync === "local" ? "local" : "off",
     stickerEnabled: input?.stickerEnabled !== false,
     stickerSize: input?.stickerSize === "small" || input?.stickerSize === "large" ? input.stickerSize : "standard",
@@ -356,6 +374,7 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
       : undefined,
     vision: normalizeVisionConfig(rawVision),
     multimodal,
+    visionBackend,
     thinkingOverride: input?.thinkingOverride,
     disableMaxToken: input?.disableMaxToken,
     contextWindowTokens: typeof input?.contextWindowTokens === "number" && Number.isFinite(input.contextWindowTokens)
@@ -451,24 +470,16 @@ export function loadModelSettings(): ModelSettings {
 
 /**
  * 运行时解析视觉配置。
- * multimodal=true：主模型本身支持视觉，返回主模型配置（让 read_image 等工具可用）。
- * multimodal=false：返回独立视觉模型配置（三字段齐全才有效），否则 null。
+ * visionBackend=main：视觉任务使用本轮指定档案的主模型；未指定时使用默认档案。
+ * visionBackend=independent：使用独立视觉模型（三字段齐全才有效），否则 null。
  *
- * 先展开默认档案再取顶层镜像（与 channel bot / 欢迎页同策略）：顶层镜像可能指向
- * 空壳 provider（真实配置在默认档案里），直接读会把多模态主模型误判为"未启用视觉"。
+ * 先展开本轮指定档案（缺省为默认档案）再取顶层镜像：顶层镜像可能指向空壳
+ * provider（真实配置在模型档案里），直接读会把多模态主模型误判为"未启用视觉"。
  */
-export function loadVisionConfig(from: ModelSettings = loadModelSettings()): VisionConfig | null {
-  const settings = resolveModelSettingsProfile(from);
+export function loadVisionConfig(from: ModelSettings = loadModelSettings(), modelProfileId?: string): VisionConfig | null {
+  const settings = resolveModelSettingsProfile(from, modelProfileId);
 
-  if (settings.multimodal) {
-    // 主模型走 Anthropic 协议时，视觉链路（永远按 OpenAI 兼容拼 /chat/completions）
-    // 复用主模型 baseUrl 必然 404；已配好独立视觉模型则优先用，避免发图即失败
-    if (settings.explicitTransport === "anthropic") {
-      const v = settings.vision;
-      if (v?.baseUrl && v.apiKey && v.model) {
-        return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model };
-      }
-    }
+  if (settings.visionBackend === "main") {
     if (!settings.apiKey || !settings.model) return null;
     return { baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model };
   }

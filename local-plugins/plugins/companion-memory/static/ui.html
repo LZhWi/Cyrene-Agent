@@ -53,13 +53,13 @@
     <button>保存 Provider</button><button type="button" id="embedding-test">发送固定测试文本</button>
   </form><p id="embedding-status"></p>
   <h2>新记忆语义索引</h2>
-  <p>这是与查询外发分开的权限，默认关闭。启用时只把当前已有记忆记录为本地基线，不会上传；之后仅将新提取或手动编辑的可检索 L2 摘要正文发送给上方 Provider，不发送原话、证据或聊天历史。</p>
+  <p>这是与查询外发分开的权限，默认关闭。启用后会与本地版一致，自动为既有及此后新增或编辑的可检索 L2 摘要补齐当前语义向量；只发送摘要正文，不发送原话、证据或聊天历史。</p>
   <form id="semantic-index-form">
     <label><input type="checkbox" id="semantic-index-enabled">为此后新提取或编辑的记忆建立语义向量</label>
     <button>保存新记忆索引设置</button><button type="button" id="semantic-index-retry">重试待处理摘要</button>
   </form><p id="semantic-index-status"></p>
-  <h3>既有摘要向量补建</h3>
-  <p>先只读列出尚无当前向量的有效摘要，再选择本次范围。只有最终确认后才会把所选摘要正文逐条发送给 Provider；单次最多 100 条。</p>
+  <h3>既有摘要向量诊断</h3>
+  <p>正常情况下会自动补齐。这里用于只读检查失败后仍缺少当前向量的有效摘要，并可选择范围手动重试；单次最多 100 条。</p>
   <button type="button" id="semantic-backfill-preview">只读预检补建范围</button>
   <form id="semantic-backfill-form">
     <label for="semantic-backfill-entries">选择本次补建的摘要（可多选）</label>
@@ -72,6 +72,18 @@
   <h2>画像变更确认</h2>
   <p>同字段的新表述不会自动覆盖旧值。请核对两份证据；过时候选不能覆盖后续编辑。处理记录会保留。</p><section id="profile-changes"></section>
   <label><input type="checkbox" id="query-expansion">启用模型辅助查询扩展（额外请求；非向量检索）</label>
+  <h2>记忆查询路由器</h2>
+  <p>与本地版行为一致，默认关闭。启用后只把当前查询发送给单独配置的小模型，判断是否需要按记忆类型扩大 Top 5；不发送记忆正文、历史、证据或画像。失败两次后自动退回语义 Top 5。</p>
+  <form id="query-router-form">
+    <label><input type="checkbox" id="query-router-enabled">启用查询路由</label>
+    <label for="query-router-provider">供应商</label><input id="query-router-provider" maxlength="2048" value="自定义">
+    <label for="query-router-url">API 地址</label><input id="query-router-url" maxlength="2048" placeholder="https://example.com/v1">
+    <label for="query-router-model">模型</label><input id="query-router-model" maxlength="2048">
+    <label for="query-router-transport">传输格式</label><select id="query-router-transport"><option value="auto">自动</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select>
+    <label for="query-router-reasoning">思考</label><select id="query-router-reasoning"><option value="off">关闭</option><option value="low">低</option><option value="auto">自动</option></select>
+    <label for="query-router-key">API Key（留空保留已有密钥）</label><input id="query-router-key" type="password" maxlength="8192" autocomplete="new-password">
+    <button>保存查询路由</button><button type="button" id="query-router-test">发送固定测试查询</button>
+  </form><p id="query-router-status"></p>
   <h2>模型辅助候选重排</h2>
   <p>默认关闭，仅用于独立聊天和本窗口手动搜索。启用后会把当前查询与最多 12 条非置顶 L2 摘要发送给当前宿主官方模型服务；不发送原话、证据、历史或持久化 ID。置顶记忆仍保持最前，原生回复注入不会调用重排模型。</p>
   <label><input type="checkbox" id="reranker-enabled">启用模型辅助重排</label><p id="reranker-status"></p>
@@ -109,6 +121,7 @@
   <label><input type="checkbox" id="auto-reflection">每 20 个成功桌面聊天轮次后台反思一次现有 L0/L1</label><p id="auto-reflection-status"></p><p>只使用插件私有、当前可检索且能与保存的用户轮次或已核验历史证据对上的 L2 原话，最多生成 8 条待确认画像变更；不会新增空字段、直接覆盖画像或绕过 L0 锁定。模型自报置信度不构成自动采用依据。</p>
   <button type="button" id="maintenance-preview">本地扫描维护候选</button><button type="button" id="maintenance-add" disabled>保存所选候选到收件箱</button><button type="button" id="maintenance-review-batch">模型辅助复核所选收件箱候选</button>
   <p id="maintenance-status"></p><section id="maintenance-preview-results"></section><section id="maintenance-inbox"></section>
+  <h3>自动冲突变更记录</h3><p>显示本地冲突链路对插件私有记忆执行的降级或纠正取代。只要相关记忆此后没有变化，就可以精确撤销。</p><section id="conflict-changes"></section>
   <h2>相似 L2 候选预检</h2>
   <p>只在插件私有向量中计算余弦相似度，不调用模型、不更新 DMAE 或访问统计。相似不等于重复或冲突；结果只能用于填入下方人工双条复核。</p>
   <button type="button" id="related-pairs-preview">本地预检相似候选</button><p id="related-pairs-status"></p><section id="related-pairs"></section>

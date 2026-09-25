@@ -11,12 +11,14 @@ const visible = process.argv.includes("--visible");
 const nativeUiTurn = process.argv.includes("--native-ui-turn");
 const boundedModelUiTurn = process.argv.includes("--bounded-model-ui-turn");
 const liveModel = process.argv.includes("--live-model");
+const localModel = process.argv.includes("--local-model");
 const nativeTurn = process.argv.includes("--native-turn") || nativeUiTurn || boundedModelUiTurn;
 const realSnapshot = process.argv.includes("--real-snapshot");
 const realImportAudit = process.argv.includes("--real-import-audit");
 const visibleProbe = process.argv.includes("--visible-probe");
 const companionAcceptance = process.argv.includes("--companion-acceptance");
-if (liveModel && !boundedModelUiTurn) throw new Error("真实模型只允许受控原生 Chat 页面测试");
+if ((liveModel || localModel) && !boundedModelUiTurn) throw new Error("真实模型只允许受控原生 Chat 页面测试");
+if (liveModel && localModel) throw new Error("Kimi 与本地模型测试不能同时启用");
 if (boundedModelUiTurn && (visible || nativeUiTurn || process.argv.includes("--native-turn")
   || (realSnapshot !== realImportAudit))) {
   throw new Error("受控模型页面测试仅允许隐藏合成模式，或完整快照导入模式");
@@ -99,18 +101,29 @@ if (process.argv.includes("--preflight")) {
 const runRoot = createRunDirectory(localRoot, runName);
 try {
 let modelSecret = null;
-if (boundedModelUiTurn && liveModel) {
-  const raw = JSON.parse(readFileSync(path.join(protectedRoots.roamingCyrene, "model-settings.json"), "utf8"));
-  const profile = raw.perProvider?.[raw.provider] ?? raw;
-  if (raw.provider !== "Kimi（月之暗面）" || profile.model !== "kimi-k2.6" || !profile.apiKey
-    || new URL(profile.baseUrl).protocol !== "https:"
-    || new URL(profile.baseUrl).hostname !== "api.moonshot.cn") {
+if (boundedModelUiTurn && (liveModel || localModel)) {
+  const configPath = localModel
+    ? path.join(projectContainerRoot, "AppData", "Roaming", "live2d-cyrene-n", "model-settings.json")
+    : path.join(protectedRoots.roamingCyrene, "model-settings.json");
+  const raw = JSON.parse(readFileSync(configPath, "utf8"));
+  const selectedProfile = Array.isArray(raw.modelProfiles)
+    ? raw.modelProfiles.find((entry) => entry?.id === raw.defaultModelProfileId)
+    : null;
+  const profile = selectedProfile ?? raw.perProvider?.[raw.provider] ?? raw;
+  const endpoint = new URL(profile.baseUrl);
+  if (localModel) {
+    if (!profile.model || !profile.apiKey || !["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname)
+      || !["http:", "https:"].includes(endpoint.protocol)) {
+      throw new Error("-N 默认模型不是可验证的本地 OpenAI-compatible 端点");
+    }
+  } else if (raw.provider !== "Kimi（月之暗面）" || profile.model !== "kimi-k2.6" || !profile.apiKey
+    || endpoint.protocol !== "https:" || endpoint.hostname !== "api.moonshot.cn") {
     throw new Error("原版主模型并非已授权的官方 Kimi K2.6，拒绝真实请求");
   }
   modelSecret = profile.apiKey;
   // 密钥只暂存本次 -N 运行目录；既不传进命令行，也不写进持久报告。
   writeFileSync(path.join(runRoot, "isolated-model-source.json"), JSON.stringify({
-    provider: raw.provider, baseUrl: profile.baseUrl, model: profile.model,
+    provider: profile.provider ?? raw.provider, baseUrl: profile.baseUrl, model: profile.model,
     apiKey: profile.apiKey, explicitTransport: "openai",
     reasoning: profile.reasoning ?? raw.reasoning,
   }));
@@ -162,6 +175,7 @@ childEnv.CYRENE_ISOLATED_NATIVE_TURN = nativeTurn ? "1" : "0";
 childEnv.CYRENE_ISOLATED_NATIVE_UI_TURN = nativeUiTurn ? "1" : "0";
 childEnv.CYRENE_ISOLATED_BOUNDED_MODEL_UI = boundedModelUiTurn ? "1" : "0";
 childEnv.CYRENE_ISOLATED_LIVE_MODEL = liveModel ? "1" : "0";
+childEnv.CYRENE_ISOLATED_LOCAL_MODEL = localModel ? "1" : "0";
 childEnv.CYRENE_ISOLATED_REAL_SNAPSHOT = realSnapshot ? "1" : "0";
 childEnv.CYRENE_ISOLATED_REAL_IMPORT_AUDIT = realImportAudit ? "1" : "0";
 childEnv.CYRENE_ISOLATED_VISIBLE_PROBE = visibleProbe ? "1" : "0";
@@ -184,7 +198,7 @@ const result = spawnSync(executable, [
   encoding: "utf8",
   env: childEnv,
   windowsHide: !visible,
-  timeout: visible ? 670_000 : boundedModelUiTurn && liveModel && realSnapshot ? 250_000
+  timeout: visible ? 670_000 : boundedModelUiTurn && (liveModel || localModel) && realSnapshot ? 250_000
     : boundedModelUiTurn ? 145_000 : 70_000,
   maxBuffer: 8 * 1024 * 1024,
 });
@@ -214,14 +228,14 @@ const report = {
     && childResult?.nativeChatMemoryDisabled === true && pluginsRunning && unchanged && copiedSnapshotUnchanged
     && (!realSnapshot || childResult?.snapshotPreview?.entries > 0)
     && (!realImportAudit || childResult?.importAudit?.passed === true)
-    && (!nativeTurn || (childResult?.nativeTurnPassed === true
+    && (!nativeTurn || boundedModelUiTurn || (childResult?.nativeTurnPassed === true
       && childResult?.promptProviderOrderPassed === true
       && childResult?.nativeRelationshipBypassed === true
       && childResult?.companionLifeStatusVisible === true)) && !secretLeak
     && (!companionAcceptance || childResult?.companionAcceptancePassed === true)
     && (!boundedModelUiTurn || (childResult?.boundedModelPassed === true
-      && childResult?.modelTest?.fixtureCalls === (liveModel ? 8 : 9)
-      && childResult?.modelTest?.liveCalls === (liveModel ? 1 : 0)
+      && childResult?.modelTest?.fixtureCalls === (liveModel || localModel ? 8 : 9)
+      && childResult?.modelTest?.liveCalls === (liveModel || localModel ? 1 : 0)
       && childResult?.modelTest?.unexpectedModelCalls === 0
       && childResult?.modelTest?.toolPhaseCalls === 5
       && childResult?.modelTest?.soulPhaseCalls === 3
@@ -257,7 +271,7 @@ const report = {
   ...(companionAcceptance ? { companionAcceptancePassed: childResult?.companionAcceptancePassed === true,
     companionAcceptance: childResult?.companionAcceptance ?? null } : {}),
   ...(boundedModelUiTurn ? { boundedModelPassed: childResult?.boundedModelPassed === true,
-    liveModel, modelTest: childResult?.modelTest ?? null } : {}),
+    liveModel, localModel, modelTest: childResult?.modelTest ?? null } : {}),
 };
 writeFileSync(path.join(runRoot, "stdout.log"), stdout);
 writeFileSync(path.join(runRoot, "stderr.log"), stderr);

@@ -3,6 +3,15 @@ import { isPluginHostError } from "../../plugins/api";
 import { createPluginAssistantDeliveryService } from "./assistant-delivery-service";
 
 describe("插件助手消息投递服务", () => {
+  it("发送前只读确认目标渠道可用，不会为了检查而写消息", async () => {
+    const append = vi.fn();
+    const service = createPluginAssistantDeliveryService({
+      pluginId: "companion-chat", sink: { canStart: () => false, append },
+    });
+    await expect(service.canPostProactiveMessage?.()).resolves.toBe(false);
+    expect(append).not.toHaveBeenCalled();
+  });
+
   it("只把插件身份和纯文本交给受控宿主写入口", async () => {
     const append = vi.fn(async () => ({
       conversationId: "proactive-1",
