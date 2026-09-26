@@ -2,6 +2,7 @@ import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 
 const SETTINGS_KEY = "life-context-settings";
 const CONTINUITY_KEY = "life-continuity";
+const STATE_KEY = "life-state";
 const DETAILED_CATCH_UP_MS = 72 * 60 * 60 * 1000;
 const CURSOR_CHECKPOINT_MS = 15 * 60 * 1000;
 
@@ -47,46 +48,93 @@ interface DaySlot {
   items: string[];
 }
 
-interface LifeEvent {
+export interface LifeEvent {
   id: string;
   date: string;
   text: string;
   startAt: number;
   endAt: number;
   worldLayer: "simulated_world";
-  status: "materialized";
+  status: "materialized" | "inferred" | "revoked";
+  source: "legacy_schedule" | "runtime_schedule" | "offline_inference";
+  revision: number;
 }
 
-interface ContinuityState {
-  version: 1;
+interface LifeState {
+  version: 2;
+  revision: number;
+  settings: LifeContextSettings;
   cursorAt: number;
+  recordAfterAt: number;
   events: LifeEvent[];
 }
 
-function validateContinuity(value: unknown): ContinuityState {
-  if (!value || typeof value !== "object") throw new Error("生活连续性记录损坏，拒绝覆盖");
-  const state = value as ContinuityState;
-  if (state.version !== 1 || !Number.isFinite(state.cursorAt) || state.cursorAt < 0
-    || !Array.isArray(state.events) || state.events.length > 100_000
-    || state.events.some((event) => !event || typeof event.id !== "string" || !event.id
-      || typeof event.date !== "string" || typeof event.text !== "string"
-      || !Number.isFinite(event.startAt) || !Number.isFinite(event.endAt)
-      || event.startAt > event.endAt || event.worldLayer !== "simulated_world" || event.status !== "materialized")) {
-    throw new Error("生活连续性记录损坏，拒绝覆盖");
-  }
-  return structuredClone(state);
+function validTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 8_640_000_000_000_000;
 }
 
-function advanceContinuity(state: ContinuityState, at: number): ContinuityState {
-  if (at <= state.cursorAt) return { ...state, cursorAt: at };
+function validDate(value: unknown, annual = false): value is string {
+  if (typeof value !== "string" || !(annual ? /^(\d{4}-)?\d{2}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/).test(value)) return false;
+  const [year, month, day] = (value.length === 5 ? `2000-${value}` : value).split("-").map(Number);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function validateEvents(value: unknown, legacy: boolean, cursorAt: number, revision: number): LifeEvent[] {
+  if (!Array.isArray(value) || value.length > 100_000) throw new Error("生活连续性记录损坏，拒绝覆盖");
+  const seen = new Set<string>();
+  return value.map((event) => {
+    if (!event || typeof event.id !== "string" || !event.id.trim() || seen.has(event.id)
+      || !validDate(event.date) || typeof event.text !== "string" || !event.text.trim()
+      || !validTimestamp(event.startAt) || !validTimestamp(event.endAt) || event.startAt >= event.endAt
+      || event.worldLayer !== "simulated_world"
+      || (legacy ? event.status !== "materialized"
+        : !["materialized", "inferred", "revoked"].includes(event.status)
+          || !["legacy_schedule", "runtime_schedule", "offline_inference"].includes(event.source)
+          || !Number.isSafeInteger(event.revision) || event.revision < 0 || event.revision > revision
+          || event.endAt > cursorAt
+          || (event.status === "inferred" && event.source !== "offline_inference")
+          || (event.status === "materialized" && event.source === "offline_inference"))) {
+      throw new Error("生活连续性记录损坏，拒绝覆盖");
+    }
+    seen.add(event.id);
+    return legacy ? { ...structuredClone(event), source: "legacy_schedule", revision: 0 } : structuredClone(event);
+  });
+}
+
+function validateLegacyContinuity(value: unknown): Pick<LifeState, "cursorAt" | "events"> {
+  if (!value || typeof value !== "object") throw new Error("生活连续性记录损坏，拒绝覆盖");
+  const state = value as { version: unknown; cursorAt: unknown; events: unknown };
+  if (state.version !== 1 || !validTimestamp(state.cursorAt)) throw new Error("生活连续性记录损坏，拒绝覆盖");
+  const events = validateEvents(state.events, true, state.cursorAt, 0);
+  // 旧版在系统时间倒退时会回拨游标；保留原记录并恢复已处理时间的高水位。
+  const cursorAt = events.reduce((latest, event) => Math.max(latest, event.endAt), state.cursorAt);
+  return { cursorAt, events };
+}
+
+function validateState(value: unknown): LifeState {
+  if (!value || typeof value !== "object") throw new Error("生活状态损坏，拒绝覆盖");
+  const state = value as LifeState;
+  if (state.version !== 2 || !Number.isSafeInteger(state.revision) || state.revision < 0
+    || !validTimestamp(state.cursorAt) || !validTimestamp(state.recordAfterAt) || state.recordAfterAt > state.cursorAt) {
+    throw new Error("生活状态损坏，拒绝覆盖");
+  }
+  return { ...structuredClone(state), settings: validateSettings(state.settings),
+    events: validateEvents(state.events, false, state.cursorAt, state.revision) };
+}
+
+function advanceContinuity(state: LifeState, at: number, runtimeStartedAt: number): LifeState {
+  if (at <= state.cursorAt) return state;
   const elapsed = at - state.cursorAt;
   if (elapsed > DETAILED_CATCH_UP_MS) {
     const event: LifeEvent = {
       id: `gap:${state.cursorAt}:${at}`, date: localDateKey(new Date(at)),
       text: "这段时间按原有生活节奏度过，未逐项保存活动",
-      startAt: state.cursorAt, endAt: at, worldLayer: "simulated_world", status: "materialized",
+      startAt: state.cursorAt, endAt: at, worldLayer: "simulated_world", status: "inferred",
+      source: "offline_inference", revision: state.revision + 1,
     };
-    return { ...state, cursorAt: at, events: [...state.events, event] };
+    return { ...state, cursorAt: at, recordAfterAt: at, events: [...state.events, event] };
   }
   const events = [...state.events], seen = new Set(events.map((event) => event.id));
   const start = new Date(state.cursorAt);
@@ -95,12 +143,17 @@ function advanceContinuity(state: ContinuityState, at: number): ContinuityState 
     day <= end; day.setDate(day.getDate() + 1)) {
     const date = localDateKey(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12));
     for (const slot of buildDaySlots(date)) {
-      const startAt = new Date(day.getFullYear(), day.getMonth(), day.getDate(), slot.startHour).getTime();
+      const slotStartAt = new Date(day.getFullYear(), day.getMonth(), day.getDate(), slot.startHour).getTime();
+      const startAt = Math.max(state.recordAfterAt, slotStartAt);
       const endAt = new Date(day.getFullYear(), day.getMonth(), day.getDate(), slot.endHour).getTime();
       const id = `${date}:${slot.label}`;
-      if (endAt <= state.cursorAt || endAt > at || seen.has(id)) continue;
-      events.push({ id, date, text: `${slot.label}：${slot.items.join("、")}`,
-        startAt, endAt, worldLayer: "simulated_world", status: "materialized" });
+      if (startAt >= endAt || endAt <= state.cursorAt || endAt > at || seen.has(id)) continue;
+      const inferred = startAt < runtimeStartedAt;
+      const itemDuration = (endAt - slotStartAt) / slot.items.length;
+      const items = slot.items.filter((_item, index) => slotStartAt + (index + 1) * itemDuration > startAt);
+      events.push({ id, date, text: `${slot.label}${startAt > slotStartAt ? "（部分时段）" : ""}：${items.join("、")}`,
+        startAt, endAt, worldLayer: "simulated_world", status: inferred ? "inferred" : "materialized",
+        source: inferred ? "offline_inference" : "runtime_schedule", revision: state.revision + 1 });
       seen.add(id);
     }
   }
@@ -178,8 +231,8 @@ function formatLifeStatus(activity: string | null): LifeStatus {
 function validateImportantDate(value: unknown): value is ImportantDate {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
-  return typeof item.date === "string" && /^(\d{4}-)?\d{2}-\d{2}$/.test(item.date)
-    && typeof item.label === "string" && item.label.length > 0 && item.label.length <= 200;
+  return validDate(item.date, true)
+    && typeof item.label === "string" && item.label.trim().length > 0 && item.label.length <= 200;
 }
 
 function validateSettings(value: unknown): LifeContextSettings {
@@ -217,11 +270,16 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
   const relativeDate = (days: number) => localDateKey(new Date(lifeDay.getFullYear(), lifeDay.getMonth(), lifeDay.getDate() - days, 12));
   const today = relativeDate(0);
   const writtenDate = /(?:20\d{2})-\d{2}-\d{2}/.exec(query)?.[0];
-  const available = events.filter((event) => event.endAt <= now.getTime());
-  if (writtenDate && writtenDate >= today) return { selected: [], requestedPast: false };
+  const available = events.filter((event) => event.status !== "revoked" && event.endAt <= now.getTime())
+    .sort((left, right) => left.endAt - right.endAt);
+  if (writtenDate && writtenDate > today) return { selected: [], requestedPast: false };
+  if (writtenDate === today || /今天|今日|刚才/.test(query)) {
+    const asksCompleted = /做了|做过|干了|干过|发生|完成|经历|刚才/.test(query);
+    return { selected: asksCompleted ? available.filter((event) => event.date === today) : [], requestedPast: asksCompleted };
+  }
   const requestedDate = writtenDate ?? (/前天/.test(query) ? relativeDate(2) : /昨天/.test(query) ? relativeDate(1) : undefined);
   if (requestedDate) return { selected: available.filter((event) => event.date === requestedDate), requestedPast: true };
-  if (/今天|今日|现在|此刻/.test(query)) return { selected: [], requestedPast: false };
+  if (/现在|此刻/.test(query)) return { selected: [], requestedPast: false };
   if (/上周/.test(query)) {
     const weekday = (lifeDay.getDay() + 6) % 7;
     const thisMonday = relativeDate(weekday);
@@ -249,67 +307,110 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], qu
   const specials = dates.filter((item) => item.date === dateKey || item.date === monthDay).map((item) => item.label);
   if (specials.length > 0) lines.push(`今天对你们来说是特别的日子：${specials.join("；")}。`);
   const history = selectLifeEvents(events, now, query);
-  if (history.selected.length) lines.push("[角色世界已发生的生活片段]",
-    ...history.selected.map((event) => `${event.date} ${event.text}`));
+  if (history.selected.length) lines.push("[角色世界生活记录]",
+    ...history.selected.map((event) => `${event.date} ${event.text}（${event.status === "inferred"
+      ? "离线推演，不能当作确定经历" : event.source === "legacy_schedule" ? "旧版模拟记录，未区分在线与离线" : "运行期间已发生的模拟活动"}）`));
   else if (history.requestedPast) lines.push("[生活记录] 所问时段没有逐项保存的活动；不要编造具体经历。");
   lines.push(
     "使用规则：这份日程是你的背景设定，不是让你播报的内容。默认规则就一条：**用户没问你在干嘛、当前话题和你的生活也不相关时，不要提你的日程**。"
     + "例外只有两个：一：当你主动给用户发消息时，最多自然地提到一条你的日程；二：当用户主动问起你的生活与日程、或当前话题和你的生活与日程强相关时，才展开说。"
     + "提到你的日程时**不要说你在「虚拟世界」**，直接说你的行为就可以。"
     + "可以在你的虚拟世界设定内自然展开细节，但不得声称发生在现实世界或用户所在的城市；"
-    + "用户问你在干嘛时，以「你现在正在做」为准；已经过去且记入生活连续性记录的日程，是你在角色世界里做过的事，可以自然地用完成口吻说；还没到的时段用「打算」的口吻。角色世界的活动不需要现实工具回执，但不要声称因此操作过现实设备或外部服务；晚上23点后到早上7点前没有日程，那是你休息或自由安排的时间。"
+    + "用户问你在干嘛时，以「你现在正在做」为准；日程安排只表示计划，不能仅因时间已过就声称完成。只有运行期间已发生的模拟记录可以用完成口吻；离线推演与未区分在线离线的旧记录应保留不确定性，不补造细节。还没到的时段用「打算」的口吻。角色世界的活动不需要现实工具回执，但不要声称因此操作过现实设备或外部服务；晚上23点后到早上7点前没有日程，那是你休息或自由安排的时间。"
     + "但这只是你自己的安排，与用户**无关**——不要因为时间晚就催用户休息、替对话收尾或说「晚安」「做好梦」这类告别话，除非用户自己明确说要去休息。",
   );
   return lines.join("\n");
 }
 
 export function createLifeContext(storage: PluginStorage, now: () => number = Date.now) {
-  const stored = storage.get<unknown>(SETTINGS_KEY);
-  let settings: LifeContextSettings = stored === undefined
-    ? { version: 1, enabled: true, importantDates: [] }
-    : validateSettings(stored);
-  const savedContinuity = storage.get<unknown>(CONTINUITY_KEY);
-  let continuityPersisted = savedContinuity !== undefined;
-  let continuity = savedContinuity === undefined
-    ? { version: 1 as const, cursorAt: new Date(scheduleDate(new Date(now())).setHours(4, 0, 0, 0)).getTime(), events: [] as LifeEvent[] }
-    : validateContinuity(savedContinuity);
-  let timer: ReturnType<typeof setInterval> | undefined;
-  function advance(): LifeEvent[] {
-    const at = now();
-    const next = advanceContinuity(continuity, at);
-    if (!continuityPersisted || next.events.length !== continuity.events.length
-      || at < continuity.cursorAt || at - continuity.cursorAt >= CURSOR_CHECKPOINT_MS) {
-      storage.set(CONTINUITY_KEY, next);
-      continuity = next;
-      continuityPersisted = true;
-    }
-    return continuity.events;
+  const initializedAt = now();
+  if (!validTimestamp(initializedAt)) throw new Error("生活时钟无效");
+  const stored = storage.get<unknown>(STATE_KEY);
+  let persisted = stored !== undefined;
+  let state: LifeState;
+  if (stored !== undefined) {
+    state = validateState(stored);
+  } else {
+    const oldSettings = storage.get<unknown>(SETTINGS_KEY);
+    const oldContinuity = storage.get<unknown>(CONTINUITY_KEY);
+    const continuity = oldContinuity === undefined
+      ? { cursorAt: Math.max(0, new Date(scheduleDate(new Date(initializedAt)).setHours(4, 0, 0, 0)).getTime()), events: [] }
+      : validateLegacyContinuity(oldContinuity);
+    state = { version: 2, revision: 0,
+      settings: oldSettings === undefined ? { version: 1, enabled: true, importantDates: [] } : validateSettings(oldSettings),
+      ...continuity, recordAfterAt: 0 };
   }
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopped = false;
+  let runtimeStartedAt: number | undefined;
+
+  function save(next: LifeState): void {
+    if (stopped) throw new Error("生活系统已停止，拒绝写入");
+    const current = storage.get<unknown>(STATE_KEY);
+    if (current === undefined ? persisted : !persisted || validateState(current).revision !== state.revision) {
+      throw new Error("生活状态已由其他实例更新，请重新加载");
+    }
+    const committed = validateState({ ...next, revision: state.revision + 1 });
+    storage.set(STATE_KEY, committed);
+    state = committed;
+    persisted = true;
+  }
+
+  function advance(): LifeEvent[] {
+    if (stopped || !state.settings.enabled) return state.events;
+    const at = now();
+    if (!validTimestamp(at)) throw new Error("生活时钟无效");
+    const next = advanceContinuity(state, at, runtimeStartedAt ?? at);
+    if (!persisted || next.events.length !== state.events.length || at - state.cursorAt >= CURSOR_CHECKPOINT_MS) save(next);
+    runtimeStartedAt ??= at;
+    return state.events;
+  }
+
+  const view = () => ({ ...structuredClone(state.settings), importantDatesText: formatImportantDates(state.settings.importantDates),
+    continuity: structuredClone({ version: state.version, revision: state.revision, cursorAt: state.cursorAt, events: state.events }) });
   return {
     start() {
-      if (timer) return;
-      if (settings.enabled) advance();
-      timer = setInterval(() => { if (settings.enabled) advance(); }, CURSOR_CHECKPOINT_MS);
+      if (timer || stopped) return;
+      advance();
+      timer = setInterval(() => {
+        try { advance(); }
+        catch (error) {
+          if (timer) clearInterval(timer);
+          timer = undefined;
+          stopped = true;
+          console.warn("[Life] 生活推进失败，已停止写入:", error instanceof Error ? error.message : String(error));
+        }
+      }, CURSOR_CHECKPOINT_MS);
       timer.unref?.();
     },
-    stop() { if (timer) clearInterval(timer); timer = undefined; },
-    view: () => ({ ...structuredClone(settings), importantDatesText: formatImportantDates(settings.importantDates), continuity: structuredClone(continuity) }),
+    stop() { stopped = true; if (timer) clearInterval(timer); timer = undefined; },
+    view,
     configure(enabled: unknown, importantDatesText: unknown) {
+      if (stopped) throw new Error("生活系统已停止，拒绝写入");
       if (typeof enabled !== "boolean") throw new Error("生活日程设置无效");
-      const next: LifeContextSettings = { version: 1, enabled, importantDates: parseImportantDates(importantDatesText) };
-      storage.set(SETTINGS_KEY, next);
-      if (enabled !== settings.enabled) {
-        const reset = { ...continuity, cursorAt: now() };
-        storage.set(CONTINUITY_KEY, reset);
-        continuity = reset;
-        continuityPersisted = true;
+      const settings: LifeContextSettings = { version: 1, enabled, importantDates: parseImportantDates(importantDatesText) };
+      const at = now();
+      if (!validTimestamp(at)) throw new Error("生活时钟无效");
+      const changedEnabled = enabled !== state.settings.enabled;
+      if (!persisted || changedEnabled || formatImportantDates(settings.importantDates) !== formatImportantDates(state.settings.importantDates)) {
+        const advanced = changedEnabled && state.settings.enabled ? advanceContinuity(state, at, runtimeStartedAt ?? at) : state;
+        const cursorAt = changedEnabled ? Math.max(advanced.cursorAt, at) : advanced.cursorAt;
+        save({ ...advanced, settings, cursorAt, recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt });
       }
-      settings = next;
-      return this.view();
+      if (enabled) runtimeStartedAt ??= at;
+      return view();
     },
-    build: (query = "") => settings.enabled ? buildContext(new Date(now()), settings.importantDates, advance(), query) : "",
+    revokeEvent(id: string) {
+      if (stopped) throw new Error("生活系统已停止，拒绝写入");
+      const event = state.events.find((item) => item.id === id);
+      if (!event) throw new Error("生活记录不存在");
+      if (event.status !== "revoked") save({ ...state, events: state.events.map((item) => item.id === id
+        ? { ...item, status: "revoked", revision: state.revision + 1 } : item) });
+      return view();
+    },
+    build: (query = "") => state.settings.enabled ? buildContext(new Date(now()), state.settings.importantDates, advance(), query) : "",
     status: (): LifeStatus | null => {
-      if (!settings.enabled) return null;
+      if (!state.settings.enabled) return null;
       advance();
       const current = new Date(now());
       return formatLifeStatus(currentActivity(buildDaySlots(localDateKey(current)), current));
