@@ -1,4 +1,5 @@
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
+import { advanceDynamics, createDynamics, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
 
 const SETTINGS_KEY = "life-context-settings";
 const CONTINUITY_KEY = "life-continuity";
@@ -27,7 +28,7 @@ const MORNING_POOL = [
   "哼记忆里的旧调子", "发呆", "整理一下自己的思绪",
 ] as const;
 const AFTERNOON_POOL = [
-  "翻翻和用户之前的聊天记录", "听歌", "散步", "逛街", "探店", "读书", "学习", "做园艺",
+  "整理自己的书页", "听歌", "散步", "逛街", "探店", "读书", "学习", "做园艺",
   "发呆", "给自己安排一场小小的白日梦", "睡午觉",
 ] as const;
 const EVENING_POOL = [
@@ -67,6 +68,8 @@ interface LifeState {
   cursorAt: number;
   recordAfterAt: number;
   events: LifeEvent[];
+  self: LifeDynamics;
+  pendingSegments: ActivitySegment[];
 }
 
 function validTimestamp(value: unknown): value is number {
@@ -120,23 +123,43 @@ function validateState(value: unknown): LifeState {
     || !validTimestamp(state.cursorAt) || !validTimestamp(state.recordAfterAt) || state.recordAfterAt > state.cursorAt) {
     throw new Error("生活状态损坏，拒绝覆盖");
   }
-  return { ...structuredClone(state), settings: validateSettings(state.settings),
+  const legacyDynamics = state.self === undefined && state.pendingSegments === undefined;
+  const self = legacyDynamics ? createDynamics(state.cursorAt) : validateDynamics(state.self, state.cursorAt);
+  const pendingSegments = legacyDynamics ? [] : state.pendingSegments;
+  if (!Array.isArray(pendingSegments) || pendingSegments.length > 512
+    || pendingSegments.some((segment, index) => !segment || !validTimestamp(segment.startAt) || !validTimestamp(segment.endAt)
+      || segment.startAt >= segment.endAt || segment.endAt > self.updatedAt
+      || (segment.activity !== null && (typeof segment.activity !== "string" || !segment.activity.trim() || segment.activity.length > 200))
+      || (index > 0 && segment.startAt < pendingSegments[index - 1].endAt))) {
+    throw new Error("生活活动记录损坏，拒绝覆盖");
+  }
+  return { ...structuredClone(state), self, pendingSegments: structuredClone(pendingSegments), settings: validateSettings(state.settings),
     events: validateEvents(state.events, false, state.cursorAt, state.revision) };
 }
 
 function advanceContinuity(state: LifeState, at: number, runtimeStartedAt: number): LifeState {
-  if (at <= state.cursorAt) return state;
+  if (at < state.cursorAt) return state;
+  // 开启边界落在量子中间时跳过不足一格的片段，避免把停用时间计为恢复或消耗。
+  const alignedStart = Math.ceil(state.recordAfterAt / LIFE_STEP_MS) * LIFE_STEP_MS;
+  const self = state.self.updatedAt < alignedStart && at >= alignedStart
+    ? { ...state.self, updatedAt: alignedStart, activitySince: alignedStart } : state.self;
   const elapsed = at - state.cursorAt;
-  if (elapsed > DETAILED_CATCH_UP_MS) {
+  const dynamics = elapsed > DETAILED_CATCH_UP_MS
+    ? { state: resetDynamics(self, at, scheduledActivity), segments: [], coarse: true }
+    : at < alignedStart ? { state: self, segments: [], coarse: false }
+      : advanceDynamics(self, at, scheduledActivity);
+  if (elapsed > DETAILED_CATCH_UP_MS || dynamics.coarse) {
     const event: LifeEvent = {
       id: `gap:${state.cursorAt}:${at}`, date: localDateKey(new Date(at)),
       text: "这段时间按原有生活节奏度过，未逐项保存活动",
       startAt: state.cursorAt, endAt: at, worldLayer: "simulated_world", status: "inferred",
       source: "offline_inference", revision: state.revision + 1,
     };
-    return { ...state, cursorAt: at, recordAfterAt: at, events: [...state.events, event] };
+    return { ...state, cursorAt: at, recordAfterAt: at, events: [...state.events, event], self: dynamics.state, pendingSegments: [] };
   }
+  const segments = [...state.pendingSegments, ...dynamics.segments];
   const events = [...state.events], seen = new Set(events.map((event) => event.id));
+  let consumedThrough = state.recordAfterAt;
   const start = new Date(state.cursorAt);
   const end = new Date(at);
   for (let day = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
@@ -144,20 +167,24 @@ function advanceContinuity(state: LifeState, at: number, runtimeStartedAt: numbe
     const date = localDateKey(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12));
     for (const slot of buildDaySlots(date)) {
       const slotStartAt = new Date(day.getFullYear(), day.getMonth(), day.getDate(), slot.startHour).getTime();
-      const startAt = Math.max(state.recordAfterAt, slotStartAt);
+      let startAt = Math.max(state.recordAfterAt, slotStartAt);
       const endAt = new Date(day.getFullYear(), day.getMonth(), day.getDate(), slot.endHour).getTime();
       const id = `${date}:${slot.label}`;
       if (startAt >= endAt || endAt <= state.cursorAt || endAt > at || seen.has(id)) continue;
+      consumedThrough = Math.max(consumedThrough, endAt);
+      const actual = segments.filter((segment) => segment.endAt > startAt && segment.startAt < endAt);
+      if (actual.length === 0) continue;
+      startAt = Math.max(startAt, actual[0].startAt);
       const inferred = startAt < runtimeStartedAt;
-      const itemDuration = (endAt - slotStartAt) / slot.items.length;
-      const items = slot.items.filter((_item, index) => slotStartAt + (index + 1) * itemDuration > startAt);
+      const items = [...new Set(actual.map((segment) => segment.activity ?? "休息"))];
       events.push({ id, date, text: `${slot.label}${startAt > slotStartAt ? "（部分时段）" : ""}：${items.join("、")}`,
         startAt, endAt, worldLayer: "simulated_world", status: inferred ? "inferred" : "materialized",
         source: inferred ? "offline_inference" : "runtime_schedule", revision: state.revision + 1 });
       seen.add(id);
     }
   }
-  return { ...state, cursorAt: at, events };
+  return { ...state, cursorAt: at, events, self: dynamics.state,
+    pendingSegments: segments.filter((segment) => segment.endAt > consumedThrough) };
 }
 
 function fnv1a(input: string): number {
@@ -220,11 +247,16 @@ function currentActivity(slots: readonly DaySlot[], now: Date): string | null {
   return null;
 }
 
-function formatLifeStatus(activity: string | null): LifeStatus {
+function scheduledActivity(at: number): string | null {
+  const date = new Date(at);
+  return currentActivity(buildDaySlots(localDateKey(date)), date);
+}
+
+function formatLifeStatus(activity: string | null, resting: boolean): LifeStatus {
   if (activity == null) return { text: "休息中", resting: true };
   return {
     text: activity.startsWith("在") ? `正${activity}` : `正在${activity}`,
-    resting: false,
+    resting,
   };
 }
 
@@ -292,7 +324,7 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
   return { selected: [], requestedPast: false };
 }
 
-function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], query: string): string {
+function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, query: string): string {
   const date = scheduleDate(now);
   const dateKey = localDateKey(now);
   const slots = buildDaySlots(dateKey);
@@ -301,8 +333,9 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], qu
     `今天（${date.getMonth() + 1}月${date.getDate()}日）你在你的虚拟世界里的日程：`,
     ...slots.map((slot) => `${slot.label}：${slot.items.join("、")}`),
   ];
-  const doing = currentActivity(slots, now);
+  const doing = self.activity;
   if (doing) lines.push(`你现在正在做：${doing}`);
+  else lines.push("你现在的生活状态：休息中。");
   const monthDay = dateKey.slice(5);
   const specials = dates.filter((item) => item.date === dateKey || item.date === monthDay).map((item) => item.label);
   if (specials.length > 0) lines.push(`今天对你们来说是特别的日子：${specials.join("；")}。`);
@@ -317,6 +350,7 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], qu
     + "提到你的日程时**不要说你在「虚拟世界」**，直接说你的行为就可以。"
     + "可以在你的虚拟世界设定内自然展开细节，但不得声称发生在现实世界或用户所在的城市；"
     + "用户问你在干嘛时，以「你现在正在做」为准；日程安排只表示计划，不能仅因时间已过就声称完成。只有运行期间已发生的模拟记录可以用完成口吻；离线推演与未区分在线离线的旧记录应保留不确定性，不补造细节。还没到的时段用「打算」的口吻。角色世界的活动不需要现实工具回执，但不要声称因此操作过现实设备或外部服务；晚上23点后到早上7点前没有日程，那是你休息或自由安排的时间。"
+    + "生活状态会影响你自己的安排；休息、睡眠或精力偏低都不影响及时回应用户，也不降低回答的准确性。"
     + "但这只是你自己的安排，与用户**无关**——不要因为时间晚就催用户休息、替对话收尾或说「晚安」「做好梦」这类告别话，除非用户自己明确说要去休息。",
   );
   return lines.join("\n");
@@ -338,7 +372,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       : validateLegacyContinuity(oldContinuity);
     state = { version: 2, revision: 0,
       settings: oldSettings === undefined ? { version: 1, enabled: true, importantDates: [] } : validateSettings(oldSettings),
-      ...continuity, recordAfterAt: 0 };
+      ...continuity, recordAfterAt: 0, self: createDynamics(continuity.cursorAt), pendingSegments: [] };
   }
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
@@ -361,13 +395,16 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     const at = now();
     if (!validTimestamp(at)) throw new Error("生活时钟无效");
     const next = advanceContinuity(state, at, runtimeStartedAt ?? at);
-    if (!persisted || next.events.length !== state.events.length || at - state.cursorAt >= CURSOR_CHECKPOINT_MS) save(next);
+    if (!persisted || next.events.length !== state.events.length || at - state.cursorAt >= CURSOR_CHECKPOINT_MS
+      || next.self.updatedAt !== state.self.updatedAt || next.self.activity !== state.self.activity
+      || next.self.recovering !== state.self.recovering) save(next);
     runtimeStartedAt ??= at;
     return state.events;
   }
 
   const view = () => ({ ...structuredClone(state.settings), importantDatesText: formatImportantDates(state.settings.importantDates),
-    continuity: structuredClone({ version: state.version, revision: state.revision, cursorAt: state.cursorAt, events: state.events }) });
+    continuity: structuredClone({ version: state.version, revision: state.revision, cursorAt: state.cursorAt, events: state.events }),
+    self: structuredClone(state.self) });
   return {
     start() {
       if (timer || stopped) return;
@@ -395,7 +432,11 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       if (!persisted || changedEnabled || formatImportantDates(settings.importantDates) !== formatImportantDates(state.settings.importantDates)) {
         const advanced = changedEnabled && state.settings.enabled ? advanceContinuity(state, at, runtimeStartedAt ?? at) : state;
         const cursorAt = changedEnabled ? Math.max(advanced.cursorAt, at) : advanced.cursorAt;
-        save({ ...advanced, settings, cursorAt, recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt });
+        const resetAt = Math.floor(cursorAt / LIFE_STEP_MS) * LIFE_STEP_MS;
+        const reset = { ...advanced.self, updatedAt: resetAt, activitySince: resetAt, activity: null, resting: true };
+        const self = changedEnabled ? enabled ? advanceDynamics(reset, cursorAt, scheduledActivity).state : reset : advanced.self;
+        save({ ...advanced, settings, cursorAt, self, pendingSegments: changedEnabled ? [] : advanced.pendingSegments,
+          recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt });
       }
       if (enabled) runtimeStartedAt ??= at;
       return view();
@@ -408,12 +449,15 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
         ? { ...item, status: "revoked", revision: state.revision + 1 } : item) });
       return view();
     },
-    build: (query = "") => state.settings.enabled ? buildContext(new Date(now()), state.settings.importantDates, advance(), query) : "",
+    build: (query = "") => {
+      if (!state.settings.enabled) return "";
+      advance();
+      return buildContext(new Date(now()), state.settings.importantDates, state.events, state.self, query);
+    },
     status: (): LifeStatus | null => {
       if (!state.settings.enabled) return null;
       advance();
-      const current = new Date(now());
-      return formatLifeStatus(currentActivity(buildDaySlots(localDateKey(current)), current));
+      return formatLifeStatus(state.self.activity, state.self.resting);
     },
   };
 }
