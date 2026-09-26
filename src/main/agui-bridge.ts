@@ -154,7 +154,7 @@ export type OnRunFinishedFn = (
 ) => Promise<void | RunFinishedEffects> | void | RunFinishedEffects;
 
 /** 调用方注入：拿聊天窗口（广播副作用用，可空）。 */
-export type GetChatWindowFn = () => { webContents: WebContents; isDestroyed(): boolean } | null;
+export type GetChatWindowFn = (sender: WebContents) => { webContents: WebContents; isDestroyed(): boolean } | null;
 
 export interface AguiConversationLifecycle {
   onUserMessage(): void;
@@ -399,7 +399,7 @@ export function registerAgUiIpc(
         : baseEvent;
       const targets: WebContents[] = [];
       if (!sender.isDestroyed()) targets.push(sender);
-      const chatWin = getChatWindowFn();
+      const chatWin = getChatWindowFn(sender);
       if (chatWin && !chatWin.isDestroyed() && chatWin.webContents !== sender) {
         targets.push(chatWin.webContents);
       }

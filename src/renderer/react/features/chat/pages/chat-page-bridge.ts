@@ -50,6 +50,7 @@ export interface ChatStoreApi {
 
 export interface SidebarApi {
   openSettings: (section?: string) => void;
+  openTasks: () => void;
 }
 
 export interface CompanionLifeStatus {

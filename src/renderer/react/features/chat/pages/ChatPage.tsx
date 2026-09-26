@@ -103,6 +103,7 @@ export {
 };
 
 export function ChatPage() {
+  const windowKind = new URLSearchParams(window.location.search).get("windowKind");
   const { t } = useTranslation();
   const preferredAddress = useUserCallPreference();
   const [collapsedByMode, setCollapsedByMode] = useState<Record<ConversationMode, boolean>>({
@@ -116,7 +117,18 @@ export function ChatPage() {
   const [reviewInspector, setReviewInspector] = useState<{ runId: string; fileIndex: number } | null>(null);
   /** 右侧面板当前激活的 tab（diff / plan），由打开动作自动切换 */
   const [inspectorTab, setInspectorTab] = useState<"diff" | "plan">("plan");
-  const [mode, setMode] = useState<ConversationMode>(getInitialMode);
+  const [mode, setMode] = useState<ConversationMode>(() => {
+    if (windowKind === "chat") return "chat";
+    if (windowKind === "workspace") {
+      try {
+        const saved = localStorage.getItem("cyrene:workspace:last-mode");
+        return saved === "code" || saved === "learn" ? saved : "work";
+      } catch {
+        return "work";
+      }
+    }
+    return getInitialMode();
+  });
   const [companionLifeStatus, setCompanionLifeStatus] = useState<{
     text: string;
     resting: boolean;
@@ -353,14 +365,15 @@ export function ChatPage() {
   activeSessionIdsRef.current = activeSessionIds;
   activeScopeRef.current = scopeKey;
 
-  // 缓存用户最后停留的模式，下次打开窗口时恢复
+  // 陪伴 Chat 与工作窗口各自保留模式，互不覆盖。
   useEffect(() => {
     try {
-      localStorage.setItem(LAST_MODE_STORAGE_KEY, mode);
+      if (windowKind === "workspace") localStorage.setItem("cyrene:workspace:last-mode", mode);
+      else if (windowKind !== "chat") localStorage.setItem(LAST_MODE_STORAGE_KEY, mode);
     } catch {
       // 忽略写入失败
     }
-  }, [mode]);
+  }, [mode, windowKind]);
 
   useEffect(() => () => {
     for (const off of activeAguiOffsRef.current) off();
@@ -487,7 +500,9 @@ export function ChatPage() {
     });
     void api?.getGeneralSettings?.().then((settings) => {
       if (!active) return;
-      setMode(settings.defaultChatMode === "work" ? "work" : "chat");
+      if (windowKind !== "chat" && windowKind !== "workspace") {
+        setMode(settings.defaultChatMode === "work" ? "work" : "chat");
+      }
       const value = settings.segmentedOutputMode;
       setSegmentedOutputMode(value === "all" || value === "chat" ? value : "off");
       if (!feedbackChanged) setCompanionFeedbackLearningEnabled(settings.companionFeedbackLearningEnabled === true);
@@ -501,7 +516,7 @@ export function ChatPage() {
       active = false;
       offFeedbackChanged?.();
     };
-  }, []);
+  }, [windowKind]);
 
   useEffect(() => {
     if (mode !== "chat") {
@@ -735,9 +750,13 @@ export function ChatPage() {
         const store = chatStore();
         if (!store) return null;
         const result = await store.get(id);
+        const targetMode = normalizeSessionMode(result?.mode);
+        if (windowKind === "chat" && targetMode !== "chat") return null;
+        if (windowKind === "workspace" && targetMode === "chat") return null;
         return (result ?? null) as { mode?: string } | null;
       },
       selectSession: async (id, targetMode) => {
+        if (targetMode !== activeModeRef.current) setMode(targetMode as ConversationMode);
         await selectSession(id, targetMode as ConversationMode);
       },
     });
@@ -1397,8 +1416,9 @@ export function ChatPage() {
   const collapsed = collapsedByMode[mode];
 
   return (
-    <div className={`cy-page ${collapsed ? "is-collapsed" : ""} ${mode === "chat" ? "is-chat-mode" : ""}`}>
+    <div className={`cy-page ${collapsed ? "is-collapsed" : ""} ${mode === "chat" ? "is-chat-mode" : ""} ${windowKind === "workspace" ? "is-workspace-window" : ""}`}>
       <ChatPageNavigation
+        windowKind={windowKind === "chat" || windowKind === "workspace" ? windowKind : undefined}
         collapsed={collapsed}
         activePanel={activePanel}
         mode={mode}
@@ -1413,7 +1433,10 @@ export function ChatPage() {
         activeSessionId={activeSessionId}
         onToggleCollapsed={() => setCollapsedByMode((current) => ({ ...current, [mode]: !current[mode] }))}
         onModeChange={(nextMode) => {
-          if (isConversationMode(nextMode)) setMode(nextMode);
+          if (!isConversationMode(nextMode)) return;
+          if (windowKind === "chat" && nextMode !== "chat") return;
+          if (windowKind === "workspace" && nextMode === "chat") return;
+          setMode(nextMode);
         }}
         onNewTask={() => void createNewTask()}
         onTogglePanel={(panel: ChatPagePanel) => {
@@ -1435,6 +1458,9 @@ export function ChatPage() {
         onMaximize={() => window.chat?.toggleMaximize()}
         onCloseWindow={() => window.chat?.close()}
         onOpenSettings={() => sidebarApi()?.openSettings("appearance")}
+        onOpenTasks={() => sidebarApi()?.openTasks()}
+        onSearchSessions={async () => (await chatStore()?.list() ?? []).filter((session) => session.mode !== "chat")}
+        onSelectSearchSession={(session) => { void openSessionById(session.id); }}
       />
       <main
         className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}

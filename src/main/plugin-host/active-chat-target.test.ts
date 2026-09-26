@@ -142,6 +142,24 @@ describe("createActiveChatTargetRegistry", () => {
     expect(onInvalidated).toHaveBeenCalledTimes(1);
   });
 
+  it("Chat 与工作窗口并存时按焦点切换目标，关闭一个不清除另一个", () => {
+    const registry = createActiveChatTargetRegistry();
+    const chat = fakeWebContents(7);
+    const workspace = fakeWebContents(8);
+    const onInvalidated = vi.fn();
+    registry.onInvalidated(onInvalidated);
+
+    registry.setActive({ sender: chat, sessionId: "chat-1", mode: "chat", rendererTargetId: "chat-renderer" });
+    registry.setActive({ sender: workspace, sessionId: "work-1", mode: "work", rendererTargetId: "work-renderer" });
+    expect(registry.getActive()?.sessionId).toBe("work-1");
+
+    registry.focusSender(chat);
+    expect(registry.getActive()?.sessionId).toBe("chat-1");
+    workspace.emit("destroyed");
+    expect(onInvalidated).toHaveBeenCalledWith("target-destroyed", expect.objectContaining({ sessionId: "work-1" }));
+    expect(registry.getActive()?.sessionId).toBe("chat-1");
+  });
+
   it("dispose 后不再接受登记且通知监听器被清空", () => {
     const registry = createActiveChatTargetRegistry();
     const wc = fakeWebContents(7);

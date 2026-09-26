@@ -583,7 +583,11 @@
     "emptyConversations": "还没有对话",
     "rename": "重命名",
     "unpin": "取消置顶",
-    "pin": "置顶"
+    "pin": "置顶",
+    "searchAction": "搜索",
+    "searchSessions": "搜索对话和项目",
+    "noSearchResults": "没有匹配的对话",
+    "scheduledTasks": "定时任务"
   },
   "ttsPlayback": {
     "playbackFailed": "语音播放失败",

@@ -37,6 +37,8 @@ export interface ActiveChatTargetRegistry {
   clearActive(sender: WebContents): void;
   /** 当前活动目标快照；无目标返回 null。 */
   getActive(): ActiveChatTarget | null;
+  /** 窗口获得焦点时选择该窗口已登记的目标。 */
+  focusSender(sender: WebContents): void;
   /**
    * 目标失效监听（webContents 销毁/导航/会话删除）。
    * affected 为失效前的目标快照；无目标时为 null。
@@ -76,9 +78,8 @@ export function createActiveChatTargetRegistry(): ActiveChatTargetRegistry {
     (reason: ActiveChatTargetInvalidReason, affected: ActiveChatTarget | null) => void
   >();
   const sessionDeletedListeners = new Set<(sessionId: string) => void>();
-  let current: ActiveChatTarget | null = null;
-  // 已挂失效监听的 webContents；切换会话复用同一页面时不重复挂载。
-  let watched: WebContents | null = null;
+  const targets = new Map<number, { sender: WebContents; target: ActiveChatTarget; onDestroyed: () => void; onNavigation: (_event: unknown, _url: string, _isInPlace: boolean, isMainFrame: boolean) => void }>();
+  let activeSenderId: number | null = null;
   let disposed = false;
 
   function notifyInvalidated(
@@ -94,61 +95,58 @@ export function createActiveChatTargetRegistry(): ActiveChatTargetRegistry {
     }
   }
 
-  function detachWatchers(): void {
-    if (!watched) return;
-    watched.removeListener("destroyed", handleDestroyed);
-    watched.removeListener("did-start-navigation", handleNavigation);
-    watched = null;
+  function current(): ActiveChatTarget | null {
+    return activeSenderId === null ? null : targets.get(activeSenderId)?.target ?? null;
   }
 
-  function handleDestroyed(): void {
-    const affected = current;
-    current = null;
-    watched = null;
-    notifyInvalidated("target-destroyed", affected);
-  }
-
-  function handleNavigation(
-    _event: unknown,
-    _url: string,
-    _isInPlace: boolean,
-    isMainFrame: boolean,
-  ): void {
-    // 只看主框架导航：同文档锚点跳转不算页面重载，不使渲染桥失效
-    if (!isMainFrame) return;
-    // 页面导航/重新加载：旧渲染桥立即失效（preload 会生成新的 rendererTargetId）
-    const affected = current;
-    current = null;
-    notifyInvalidated("navigation", affected);
+  function removeTarget(senderId: number, reason?: ActiveChatTargetInvalidReason): void {
+    const entry = targets.get(senderId);
+    if (!entry) return;
+    entry.sender.removeListener("destroyed", entry.onDestroyed);
+    entry.sender.removeListener("did-start-navigation", entry.onNavigation);
+    targets.delete(senderId);
+    if (activeSenderId === senderId) activeSenderId = [...targets.keys()].at(-1) ?? null;
+    if (reason) notifyInvalidated(reason, entry.target);
   }
 
   return {
     setActive({ sender, sessionId, mode, rendererTargetId }) {
       if (disposed) return;
       if (sender.isDestroyed()) return;
-      // 首次登记（或页面重新加载后）挂失效监听；同页面切换会话复用已有监听。
-      if (watched !== sender) {
-        detachWatchers();
-        watched = sender;
-        sender.once("destroyed", handleDestroyed);
-        // 用 on 而非 once：同文档/子框架导航不失效，不能消耗掉监听器
-        sender.on("did-start-navigation", handleNavigation);
+      // 同模式的新页面替换旧页面；不同模式的独立窗口各自保留失效监听。
+      for (const [id, entry] of targets) {
+        if (id !== sender.id && entry.target.mode === mode) removeTarget(id);
       }
-      current = {
+      const target = {
         sessionId,
         mode,
         rendererTargetId,
         webContentsId: sender.id,
       };
+      const previous = targets.get(sender.id);
+      if (previous) {
+        previous.target = target;
+      } else {
+        const onDestroyed = () => removeTarget(sender.id, "target-destroyed");
+        const onNavigation = (_event: unknown, _url: string, _isInPlace: boolean, isMainFrame: boolean) => {
+          if (isMainFrame) removeTarget(sender.id, "navigation");
+        };
+        sender.once("destroyed", onDestroyed);
+        sender.on("did-start-navigation", onNavigation);
+        targets.set(sender.id, { sender, target, onDestroyed, onNavigation });
+      }
+      activeSenderId = sender.id;
     },
     clearActive(sender) {
       if (disposed) return;
-      if (current && current.webContentsId === sender.id) {
-        current = null;
-      }
+      removeTarget(sender.id);
     },
     getActive() {
-      return current ? { ...current } : null;
+      const target = current();
+      return target ? { ...target } : null;
+    },
+    focusSender(sender) {
+      if (!disposed && targets.has(sender.id)) activeSenderId = sender.id;
     },
     onInvalidated(listener) {
       listeners.add(listener);
@@ -166,10 +164,8 @@ export function createActiveChatTargetRegistry(): ActiveChatTargetRegistry {
           console.warn("[active-chat-target] 会话删除监听器抛错", error);
         }
       }
-      if (current && current.sessionId === sessionId) {
-        const affected = current;
-        current = null;
-        notifyInvalidated("session-deleted", affected);
+      for (const [id, entry] of targets) {
+        if (entry.target.sessionId === sessionId) removeTarget(id, "session-deleted");
       }
     },
     onSessionDeleted(listener) {
@@ -181,8 +177,8 @@ export function createActiveChatTargetRegistry(): ActiveChatTargetRegistry {
     dispose() {
       if (disposed) return;
       disposed = true;
-      detachWatchers();
-      current = null;
+      for (const id of [...targets.keys()]) removeTarget(id);
+      activeSenderId = null;
       listeners.clear();
       sessionDeletedListeners.clear();
     },

@@ -4,6 +4,7 @@ import { createPetWindow, PET_WINDOW_BASE_HEIGHT, PET_WINDOW_BASE_WIDTH, type Pe
 import {
   createCallWindow,
   createReactChatWindowShell,
+  createReactWorkspaceWindowShell,
   createSettingsWindow,
   createSidebarWindow,
   createStickerManagerWindow,
@@ -11,11 +12,13 @@ import {
   loadReactChatWindowPage,
   type ReactChatWindowHandle,
   showReactChatWindow,
+  showReactWorkspaceWindow,
 } from "./create-aux-windows";
 import { CHAT_READY_TIMEOUT_MS, loadWindowForStartup } from "./startup-window-load";
 import { createMusicPlayerWindow } from "./create-music-player-window";
 import { broadcastToAllWindows } from "./broadcast";
 import { PetWindowMoveController } from "../pet-window-movement";
+import { getSession } from "../chats/chats-store";
 
 export interface WindowManagerOptions {
   getCurrentAppIconPath: () => string;
@@ -30,6 +33,7 @@ export interface WindowManager {
   createReactChatWindowShell(): ReactChatWindowHandle;
   /** 打开聊天窗口：必要时创建壳并加载页面，然后显示并分发会话。 */
   openReactChatWindow(sessionId?: string): Promise<BrowserWindow>;
+  openReactWorkspaceWindow(sessionId?: string): Promise<BrowserWindow>;
   createSidebarWindow(): void;
   createSettingsWindow(section?: string): void;
   createTasksWindow(): void;
@@ -67,6 +71,8 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
   let petWindow: BrowserWindow | null = null;
   let chatShell: ReactChatWindowHandle | null = null;
   let chatLoadPromise: Promise<void> | null = null;
+  let workspaceShell: ReactChatWindowHandle | null = null;
+  let workspaceLoadPromise: Promise<void> | null = null;
   const readyHandlers: Array<(win: BrowserWindow) => void> = [];
   const closedHandlers: Array<() => void> = [];
   const movedHandlers: Array<(position: { x: number; y: number }) => void> = [];
@@ -160,10 +166,42 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
     },
 
     async openReactChatWindow(sessionId?: string): Promise<BrowserWindow> {
+      const mode = sessionId ? getSession(sessionId)?.mode : undefined;
+      if (mode === "work" || mode === "code" || mode === "learn") {
+        return this.openReactWorkspaceWindow(sessionId);
+      }
       const handle = this.createReactChatWindowShell();
       await handle.load(sessionId);
       handle.show(sessionId);
       return handle.window;
+    },
+
+    async openReactWorkspaceWindow(sessionId?: string): Promise<BrowserWindow> {
+      if (!workspaceShell || workspaceShell.window.isDestroyed()) {
+        const window = createReactWorkspaceWindowShell();
+        workspaceLoadPromise = null;
+        workspaceShell = {
+          window,
+          load(initialSessionId?: string): Promise<void> {
+            if (!workspaceLoadPromise || window.isDestroyed()) {
+              workspaceLoadPromise = loadWindowForStartup({
+                window,
+                load: () => loadReactChatWindowPage(window, initialSessionId, "workspace"),
+                timeoutMs: CHAT_READY_TIMEOUT_MS,
+              }).catch((error) => {
+                workspaceLoadPromise = null;
+                console.error("[WindowManager] workspace page load failed:", error);
+                throw error;
+              });
+            }
+            return workspaceLoadPromise;
+          },
+          show: showReactWorkspaceWindow,
+        };
+      }
+      await workspaceShell.load(sessionId);
+      workspaceShell.show(sessionId);
+      return workspaceShell.window;
     },
 
     createSidebarWindow,

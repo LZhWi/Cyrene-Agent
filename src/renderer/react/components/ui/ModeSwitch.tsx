@@ -2,6 +2,7 @@ interface ModeSwitchProps {
   value: string;
   onChange: (mode: string) => void;
   variant?: "upstream" | "cyrene-chat";
+  availableModes?: readonly string[];
 }
 
 const WorkIcon = (
@@ -50,10 +51,10 @@ const chatLabels: Record<string, string> = {
   learn: "学习",
 };
 
-export function ModeSwitch({ value, onChange, variant = "upstream" }: ModeSwitchProps) {
+export function ModeSwitch({ value, onChange, variant = "upstream", availableModes }: ModeSwitchProps) {
   return (
     <div className="cy-segmented">
-      {modes.map((mode) => (
+      {modes.filter((mode) => !availableModes || availableModes.includes(mode.key)).map((mode) => (
         <button
           key={mode.key}
           className={`cy-segment ${mode.key === value ? "is-active" : ""}`}

@@ -67,6 +67,7 @@ const pinBtn = document.getElementById("pin-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const modelSwitchBtn = document.getElementById("model-switch-btn") as HTMLButtonElement;
 const openChatBtn = document.getElementById("open-chat-btn") as HTMLButtonElement;
+const openWorkspaceBtn = document.getElementById("open-workspace-btn") as HTMLButtonElement;
 const callBtn = document.getElementById("call-btn") as HTMLButtonElement;
 const onlineStatusLabel = document.getElementById("online-status-label") as HTMLElement;
 const statusEmojiEl = document.getElementById("status-emoji") as HTMLElement;
@@ -182,29 +183,32 @@ callBtn.addEventListener("click", () => {
   window.sidebar?.openCall();
 });
 
-// "打开聊天"：拿到最近一条会话 id，让 main 打开聊天窗口并加载它；
-// 没有任何会话时先建一个再打开，保证点按钮总能进到一个具体会话。
-openChatBtn.addEventListener("click", async () => {
+async function openSessionWindow(kind: "chat" | "workspace") {
   const chatStore = (window as unknown as {
     chatStore?: {
-      list: () => Promise<Array<{ id: string }>>;
-      create: (payload?: { identityId?: string | null }) => Promise<{ id: string } | null>;
+      list: (options?: { mode?: "chat" }) => Promise<Array<{ id: string; mode: string; updatedAt: number }>>;
+      create: (payload: { identityId?: string | null; mode: "chat" | "work" }) => Promise<{ id: string } | null>;
       openInReactChatWindow: (sessionId: string) => Promise<unknown>;
     };
   }).chatStore;
   if (!chatStore) return;
   try {
-    const list = await chatStore.list();
-    let latestId = list.length > 0 ? list[0].id : "";
-    if (!latestId) {
-      const created = await chatStore.create({ identityId: null });
-      latestId = created?.id ?? "";
+    const list = await chatStore.list(kind === "chat" ? { mode: "chat" } : undefined);
+    const sessions = kind === "chat" ? list : list.filter((session) => ["work", "code", "learn"].includes(session.mode));
+    const latestId = sessions.sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id;
+    let sessionId = latestId ?? "";
+    if (!sessionId) {
+      const created = await chatStore.create({ identityId: null, mode: kind === "chat" ? "chat" : "work" });
+      sessionId = created?.id ?? "";
     }
-    if (latestId) await chatStore.openInReactChatWindow(latestId);
+    if (sessionId) await chatStore.openInReactChatWindow(sessionId);
   } catch (err) {
-    console.warn("[sidebar] 打开聊天失败:", err);
+    console.warn(`[sidebar] 打开${kind === "chat" ? "聊天" : "工作/学习"}失败:`, err);
   }
-});
+}
+
+openChatBtn.addEventListener("click", () => void openSessionWindow("chat"));
+openWorkspaceBtn.addEventListener("click", () => void openSessionWindow("workspace"));
 
 void initModelConfig();
 void initRuntimeState();

@@ -8,11 +8,13 @@
 import { initWindowI18n } from "../../i18n-runtime";
 import zhCN from "./zh-CN.json";
 import en from "./en.json";
+import chatZhCN from "../../react/i18n/zh-CN.json";
+import chatEn from "../../react/i18n/en.json";
 
 initWindowI18n({
   resources: {
-    en: { translation: en },
-    "zh-CN": { translation: zhCN },
+    en: { translation: { ...chatEn, ...en } },
+    "zh-CN": { translation: { ...chatZhCN, ...zhCN } },
   },
   fallbackLng: "zh-CN",
   lng: "zh-CN",

@@ -424,6 +424,72 @@ html, body {
   padding: 8px 128px 20px;
 }
 
+/* Work/Code/Learn 借用上游侧栏的抽屉布局，不影响独立的陪伴 Chat。 */
+.cy-page.is-workspace-window {
+  padding-left: 262px;
+  background: var(--rb-surface-page, var(--cy-bg-page));
+  transition: none;
+}
+
+.cy-page.is-workspace-window.is-collapsed {
+  padding-left: 10px;
+}
+
+.cy-page.is-workspace-window .cy-page-sidebar {
+  position: absolute;
+  top: 50px;
+  bottom: 10px;
+  left: 10px;
+  width: 252px;
+  background: transparent;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+.cy-page.is-workspace-window.is-collapsed .cy-page-sidebar {
+  width: 252px;
+  transform: translateX(-100%);
+}
+
+.cy-workspace-side-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--cy-text-primary, #4c3762);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cy-workspace-side-action:hover { background: var(--cy-bg-hover); }
+.cy-workspace-side-action kbd { margin-left: auto; opacity: .55; font-size: 11px; }
+.cy-workspace-search-results { max-height: 400px; overflow-y: auto; margin-top: 12px; }
+.cy-workspace-search-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.cy-workspace-search-result:hover { background: var(--cy-bg-hover); }
+.cy-workspace-search-result small { opacity: .6; }
+
+@media (max-width: 900px) {
+  .cy-page.is-workspace-window { padding-left: 182px; }
+  .cy-page.is-workspace-window .cy-page-sidebar { width: 172px; }
+  .cy-page.is-workspace-window.is-collapsed { padding-left: 10px; }
+  .cy-page.is-workspace-window.is-collapsed .cy-page-sidebar { width: 172px; }
+}
+
 .cy-compressing-context {
   position: absolute;
   right: 24px;

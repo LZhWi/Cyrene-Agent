@@ -25,7 +25,7 @@ import { retrieveQueuedDocumentChunks } from "../rag/document-index-worker";
 import { validateCaptionImagePath, buildImageCaptionPrompt } from "../chat/image-caption";
 import { decideImageSendStrategy } from "../chat/image-send-strategy";
 import type { WindowManager } from "../windows/window-manager";
-import { reactChatSession, reactChatWindow } from "../windows/window-state";
+import { reactChatSession, reactChatWindow, reactWorkspaceSession, reactWorkspaceWindow } from "../windows/window-state";
 import {
   activeChatTargetRegistry,
   parseActiveTargetPayload,
@@ -232,22 +232,27 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     });
   });
 
-  // 状态栏专用入口：打开/复用 reactChatWindow
+  // 状态栏入口：按会话模式打开各自的窗口，不能把 Work 会话送入陪伴 Chat。
   // 注意：必须用 deps.windowManager 实时读取 getter，不能在注册时解构。
   // registerChatUiIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
   // 解构会捕获 null 并导致后续 ?. 永远短路，按钮点了打不开窗口。
   ipc.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) return false;
-    void deps.windowManager?.openReactChatWindow(sessionId);
+    const session = getSession(sessionId);
+    if (!session) return false;
+    if (session.mode === "chat") void deps.windowManager?.openReactChatWindow(sessionId);
+    else if (session.mode === "work" || session.mode === "code" || session.mode === "learn") void deps.windowManager?.openReactWorkspaceWindow(sessionId);
+    else return false;
     return true;
   });
 
-  // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听
+  // 两个 React 窗口各有 ready/pending 队列，避免首次打开时串会话。
   ipc.on(IPC.CHATS_REACT_READY, (event) => {
-    const win = reactChatWindow;
+    const isChat = event.sender === reactChatWindow?.webContents;
+    const win = isChat ? reactChatWindow : reactWorkspaceWindow;
     if (!win || win.isDestroyed()) return;
     if (event.sender !== win.webContents) return;
-    const pending = reactChatSession.markReady();
+    const pending = (isChat ? reactChatSession : reactWorkspaceSession).markReady();
     if (pending) {
       win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, pending);
     }
@@ -256,7 +261,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   // 聊天窗口启动/切换会话时上报当前活跃目标（会话 + 模式 + 渲染目标标识）；
   // 只有聊天窗口的 webContents 可以登记，其他窗口的上报被忽略；main 广播给所有窗口
   ipc.handle(IPC.CHATS_SET_ACTIVE_SESSION, (event, payload: unknown) => {
-    const chatWindow = reactChatWindow;
+    const chatWindow = event.sender === reactChatWindow?.webContents ? reactChatWindow : reactWorkspaceWindow;
     if (!chatWindow || chatWindow.isDestroyed() || event.sender !== chatWindow.webContents) {
       return false;
     }
@@ -266,6 +271,10 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     } else {
       const parsed = parseActiveTargetPayload(payload);
       if (parsed) {
+        const session = getSession(parsed.sessionId);
+        if (!session || session.mode !== parsed.mode || (chatWindow === reactChatWindow) !== (parsed.mode === "chat")) {
+          return false;
+        }
         activeChatTargetRegistry.setActive({ sender: event.sender, ...parsed });
         activeSessionId = parsed.sessionId;
       }

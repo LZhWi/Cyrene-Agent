@@ -583,7 +583,11 @@
     "emptyConversations": "No chats yet",
     "rename": "Rename",
     "unpin": "Unpin",
-    "pin": "Pin"
+    "pin": "Pin",
+    "searchAction": "Search",
+    "searchSessions": "Search chats and projects",
+    "noSearchResults": "No matching chats",
+    "scheduledTasks": "Scheduled tasks"
   },
   "ttsPlayback": {
     "playbackFailed": "Speech playback failed",

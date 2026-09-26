@@ -28,6 +28,7 @@ import {
   getCurrentAppIconPath,
   markStartupPhaseReady,
   reactChatWindow,
+  reactWorkspaceWindow,
   setGetCurrentAppIconPath,
   sidebarWindow,
   settingsWindow,
@@ -157,7 +158,7 @@ function configureSessionPermissions(): void {
   const isTrustedClipboardWriter = (webContents: WebContents | null, urlString: string): boolean => (
     Boolean(webContents)
     && isTrustedRenderer(urlString)
-    && webContents === reactChatWindow?.webContents
+    && (webContents === reactChatWindow?.webContents || webContents === reactWorkspaceWindow?.webContents)
   );
 
   session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
@@ -190,7 +191,7 @@ function configureSessionPermissions(): void {
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [reactChatWindow, reactWorkspaceWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }
@@ -405,7 +406,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         const initialSettings = loadGeneralSettings();
         const screenshot = initializeScreenshotService({
           initialHotkey: initialSettings.screenshotHotkey ?? "Alt+Shift+S",
-          getReactChatWindow: () => reactChatWindow,
+          getReactChatWindow: () => reactWorkspaceWindow?.isFocused() ? reactWorkspaceWindow : reactChatWindow,
           capturePetWindow: () => shell.windowManager.capturePetWindow(),
           ipc: shell.ipc,
         });
@@ -543,7 +544,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
 
       createScheduler: (runtime) => createSchedulerSubsystem({
         agentRuntime: runtime,
-        getReactChatWindow: () => reactChatWindow,
+        getReactChatWindow: () => reactWorkspaceWindow?.isFocused() ? reactWorkspaceWindow : reactChatWindow,
         ipc: shell.ipc,
         publishLifecycle: lifecyclePublisher,
         // 插件任务只有在所属插件运行中才允许触发；用户任务不受影响。
@@ -619,7 +620,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         registerAgUiIpc(
           (input) => runtime.buildOptions(input),
           (result, latestUserText, context) => runtime.onRunFinished(result, latestUserText, context),
-          () => reactChatWindow,
+          (sender) => sender === reactWorkspaceWindow?.webContents ? null : reactChatWindow,
           services.proactive.proactiveConversationLifecycle,
           ipc,
           pendingTurnLifecycle,
@@ -685,7 +686,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         // 提醒中心组合根：窗口控制器 + 生命周期权威服务 + 事件总线订阅
         const toastWindowController = createToastWindowController({
           createWindow: createToastWindowShell,
-          getChatWindow: () => reactChatWindow,
+          getChatWindow: () => reactWorkspaceWindow?.isFocused() ? reactWorkspaceWindow : reactChatWindow,
           getDisplayMatching: (bounds) => screen.getDisplayMatching(bounds),
           getCursorScreenPoint: () => screen.getCursorScreenPoint(),
         });
@@ -700,7 +701,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
             // 焦点抑制三条件：事件带会话 + 聊天窗口聚焦 + 激活会话一致。
             // 调度任务结果落在任务历史（无会话落点），恒不抑制。
             if (!event.sessionId) return false;
-            const chat = reactChatWindow;
+            const chat = reactWorkspaceWindow?.isFocused() ? reactWorkspaceWindow : reactChatWindow;
             if (!chat || chat.isDestroyed() || !chat.isFocused()) return false;
             return getActiveChatSessionId() === event.sessionId;
           },

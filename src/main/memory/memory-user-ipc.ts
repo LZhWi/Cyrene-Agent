@@ -25,6 +25,7 @@ import type { SkillMode } from "../skills/types";
 import type { WindowManager } from "../windows/window-manager";
 import {
   reactChatWindow,
+  reactWorkspaceWindow,
   sidebarWindow,
   tasksWindow,
   settingsWindow,
@@ -46,7 +47,7 @@ export interface MemoryUserToolIpcDependencies {
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [reactChatWindow, reactWorkspaceWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }

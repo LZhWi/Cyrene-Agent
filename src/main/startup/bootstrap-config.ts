@@ -18,7 +18,7 @@ import { setAsrConfig } from "../asr/asr-config";
 import { setCallSettings } from "../call/call-manager";
 import { buildCallSystemPrompt } from "../call/call-prompt-builder";
 import type { SceneIndex } from "../scene-embedder";
-import { reactChatWindow } from "../windows/window-state";
+import { reactChatWindow, reactWorkspaceWindow } from "../windows/window-state";
 
 export interface BootstrapConfigContext {
   loadGeneralSettings: () => GeneralSettings;
@@ -27,6 +27,9 @@ export interface BootstrapConfigContext {
 }
 
 function getReactChatWindow(): BrowserWindow | null {
+  if (reactWorkspaceWindow && !reactWorkspaceWindow.isDestroyed() && reactWorkspaceWindow.isFocused()) {
+    return reactWorkspaceWindow;
+  }
   return reactChatWindow && !reactChatWindow.isDestroyed() ? reactChatWindow : null;
 }
 

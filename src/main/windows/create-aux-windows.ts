@@ -4,14 +4,18 @@ import { IPC } from "../../shared/ipc-channels";
 import { isDev } from "../env";
 import { computeLayout } from "../window-layout";
 import { stopCall, setCallWindow } from "../call/call-manager";
+import { activeChatTargetRegistry } from "../plugin-host/active-chat-target";
 import { attachExternalLinkHandler } from "./external-link";
 import {
   callWindow,
   getCurrentAppIconPath,
   reactChatSession,
   reactChatWindow,
+  reactWorkspaceSession,
+  reactWorkspaceWindow,
   setCallWindowLocal,
   setReactChatWindow,
+  setReactWorkspaceWindow,
   setSettingsWindow,
   setSidebarWindow,
   setStickerManagerWindow,
@@ -38,14 +42,14 @@ export interface ReactChatWindowHandle {
  * 只构造 BrowserWindow 对象并登记全局状态，禁止调用 loadURL/loadFile ——
  * 页面加载由 loadReactChatWindowPage 在核心 IPC 就绪后执行。
  */
-export function createReactChatWindowShell(): BrowserWindow {
-  // 已有窗口 → 复用（壳不重复创建）
-  if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-    return reactChatWindow;
-  }
+type ReactWindowKind = "chat" | "workspace";
 
-  // 新建窗口：dispatcher 重置；pending 仅服务于"未 ready 期间又收到请求"
-  reactChatSession.reset();
+function createReactWindowShell(kind: ReactWindowKind): BrowserWindow {
+  const existing = kind === "chat" ? reactChatWindow : reactWorkspaceWindow;
+  if (existing && !existing.isDestroyed()) return existing;
+
+  const dispatcher = kind === "chat" ? reactChatSession : reactWorkspaceSession;
+  dispatcher.reset();
 
   const layout = computeLayout();
   const window = new BrowserWindow({
@@ -55,7 +59,7 @@ export function createReactChatWindowShell(): BrowserWindow {
     height: 760,
     minWidth: 960,
     minHeight: 540,
-    title: "Cyrene · 聊天",
+    title: kind === "chat" ? "Cyrene · 聊天" : "Cyrene · 工作/学习",
     icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
@@ -70,54 +74,75 @@ export function createReactChatWindowShell(): BrowserWindow {
       sandbox: false,
     },
   });
-  setReactChatWindow(window);
+  if (kind === "chat") setReactChatWindow(window);
+  else setReactWorkspaceWindow(window);
 
   // 聊天窗口内出现外链（如插件收录仓库）时转交系统浏览器打开，不再派生新窗口
   attachExternalLinkHandler(window);
 
   window.webContents.on("did-start-loading", () => {
-    reactChatSession.markLoading();
+    dispatcher.markLoading();
   });
+
+  window.on("focus", () => activeChatTargetRegistry.focusSender(window.webContents));
 
   window.on("closed", () => {
     // 闭包引用 + 仅当当前全局仍指向自己时才清理，避免旧窗口 closed 误清新窗口
-    if (reactChatWindow === window) {
-      setReactChatWindow(null);
-      reactChatSession.reset();
+    if (kind === "chat" ? reactChatWindow === window : reactWorkspaceWindow === window) {
+      if (kind === "chat") setReactChatWindow(null);
+      else setReactWorkspaceWindow(null);
+      dispatcher.reset();
     }
   });
   return window;
+}
+
+export function createReactChatWindowShell(): BrowserWindow {
+  return createReactWindowShell("chat");
+}
+
+export function createReactWorkspaceWindowShell(): BrowserWindow {
+  return createReactWindowShell("workspace");
 }
 
 /**
  * 加载聊天渲染页面。search 字段必须含前导 "?"（Electron url.format() 要求）。
  * 失败原样向上抛（由 startup-window-load 统一判定致命性），不再吞掉。
  */
-export function loadReactChatWindowPage(window: BrowserWindow, sessionId?: string): Promise<void> {
-  const search = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : undefined;
+export function loadReactChatWindowPage(window: BrowserWindow, sessionId?: string, kind: ReactWindowKind = "chat"): Promise<void> {
+  const search = new URLSearchParams({ windowKind: kind });
+  if (sessionId) search.set("sessionId", sessionId);
   const indexPath = path.join(app.getAppPath(), "dist", "renderer", "react", "index.html");
 
   if (isDev) {
-    return window.loadURL(`http://localhost:5173/react/${search ?? ""}`);
+    return window.loadURL(`http://localhost:5173/react/?${search}`);
   }
-  return window.loadFile(indexPath, search ? { search } : undefined);
+  return window.loadFile(indexPath, { search: `?${search}` });
 }
 
 /**
  * 显示聊天窗口（不加载页面）；带 sessionId 时走会话分发。
  */
 export function showReactChatWindow(sessionId?: string): void {
-  const win = reactChatWindow;
+  showReactWindow("chat", sessionId);
+}
+
+export function showReactWorkspaceWindow(sessionId?: string): void {
+  showReactWindow("workspace", sessionId);
+}
+
+function showReactWindow(kind: ReactWindowKind, sessionId?: string): void {
+  const win = kind === "chat" ? reactChatWindow : reactWorkspaceWindow;
   if (!win || win.isDestroyed()) return;
   win.show();
   win.focus();
-  if (sessionId) dispatchOrQueueReactSession(sessionId);
+  if (sessionId) dispatchOrQueueReactSession(sessionId, kind);
 }
 
-export function dispatchOrQueueReactSession(sessionId: string): void {
-  const win = reactChatWindow;
+export function dispatchOrQueueReactSession(sessionId: string, kind: ReactWindowKind = "chat"): void {
+  const win = kind === "chat" ? reactChatWindow : reactWorkspaceWindow;
   if (!win?.webContents) return;
-  const immediate = reactChatSession.queueOrTake(sessionId);
+  const immediate = (kind === "chat" ? reactChatSession : reactWorkspaceSession).queueOrTake(sessionId);
   if (immediate) {
     win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, immediate);
   }

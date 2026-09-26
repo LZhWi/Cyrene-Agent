@@ -3,7 +3,7 @@ import { IPC } from "../../shared/ipc-channels";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
-  sessions: new Map<string, { id: string; modelProfileId?: string }>(),
+  sessions: new Map<string, { id: string; mode?: "chat" | "work" | "code" | "learn"; modelProfileId?: string }>(),
   settings: {
     provider: "MiniMax（稀宇科技）",
     model: "MiniMax-M3",
@@ -82,6 +82,25 @@ describe("chat reasoning IPC", () => {
 
     expect(await handler({}, [{ path: "C:/temp/clipboard-image", mime: "image/png" }]))
       .toMatchObject([{ kind: "image", mime: "image/png" }]);
+  });
+
+  it("routes companion and work sessions to separate windows", async () => {
+    mocks.sessions.set("chat-1", { id: "chat-1", mode: "chat" });
+    mocks.sessions.set("code-1", { id: "code-1", mode: "code" });
+    const openReactChatWindow = vi.fn(async () => null);
+    const openReactWorkspaceWindow = vi.fn(async () => null);
+    const { registerChatUiIpc } = await import("./chat-ui-ipc");
+    registerChatUiIpc({
+      live2dWindowLifecycle: { getDiagnostics: () => ({}) },
+      windowManager: { openReactChatWindow, openReactWorkspaceWindow } as any,
+    });
+    const open = mocks.handlers.get(IPC.CHATS_OPEN_IN_REACT_WINDOW)!;
+
+    expect(open({}, "chat-1")).toBe(true);
+    expect(openReactChatWindow).toHaveBeenCalledWith("chat-1");
+    expect(open({}, "code-1")).toBe(true);
+    expect(openReactWorkspaceWindow).toHaveBeenCalledWith("code-1");
+    expect(open({}, "missing")).toBe(false);
   });
 
   it("reads reasoning capability from the model profile bound to the current session", async () => {

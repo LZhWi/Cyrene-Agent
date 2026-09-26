@@ -14,6 +14,7 @@ import {
  * 配套的 setter 函数，避免 TS2632 编译错误与循环依赖。
  */
 export let reactChatWindow: BrowserWindow | null = null;
+export let reactWorkspaceWindow: BrowserWindow | null = null;
 export let sidebarWindow: BrowserWindow | null = null;
 export let tasksWindow: BrowserWindow | null = null;
 export let settingsWindow: BrowserWindow | null = null;
@@ -24,6 +25,10 @@ export let toastWindow: BrowserWindow | null = null;
 
 export function setReactChatWindow(win: BrowserWindow | null): void {
   reactChatWindow = win;
+}
+
+export function setReactWorkspaceWindow(win: BrowserWindow | null): void {
+  reactWorkspaceWindow = win;
 }
 
 export function setToastWindow(win: BrowserWindow | null): void {
@@ -91,6 +96,8 @@ export function showWindowWhenStartupReady(win: BrowserWindow): void {
  * 与 CHATS_REACT_READY 的 IPC handler 共享。
  */
 export const reactChatSession: ReactChatSessionDispatcher =
+  createReactChatSessionDispatcher();
+export const reactWorkspaceSession: ReactChatSessionDispatcher =
   createReactChatSessionDispatcher();
 
 /**

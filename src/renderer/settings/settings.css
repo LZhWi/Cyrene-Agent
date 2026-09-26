@@ -277,6 +277,9 @@ body {
   display: none;
 }
 
+.settings-react-panel { min-height: 620px; padding: 0; overflow: hidden; }
+.settings-react-panel > div { min-height: 620px; }
+
 .panel-heading {
   display: flex;
   gap: 14px;

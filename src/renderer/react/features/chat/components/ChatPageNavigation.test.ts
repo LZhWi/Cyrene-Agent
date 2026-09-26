@@ -6,7 +6,7 @@ vi.mock("../../../components/ui/SidebarToggle", () => ({
   SidebarToggle: ({ collapsed }: { collapsed: boolean }) => createElement("span", null, `sidebar-toggle:${collapsed}`),
 }));
 vi.mock("../../../components/ui/ModeSwitch", () => ({
-  ModeSwitch: () => createElement("span", null, "mode-switch"),
+  ModeSwitch: ({ availableModes }: { availableModes?: readonly string[] }) => createElement("span", null, `mode-switch:${availableModes?.join(",") ?? "all"}`),
 }));
 vi.mock("../../../components/ui/ToolModeButton", () => ({
   ToolModeButton: ({ active }: { active: boolean }) => createElement("span", null, `tool-button:${active}`),
@@ -38,6 +38,33 @@ vi.mock("./ConversationSidebar", () => ({
 import { ChatPageNavigation } from "./ChatPageNavigation";
 
 describe("ChatPageNavigation", () => {
+  it("shows only Chat in the companion window and only tool modes in the workspace window", () => {
+    const props = {
+      collapsed: false,
+      activePanel: null,
+      sessions: [],
+      onToggleCollapsed: () => undefined,
+      onModeChange: () => undefined,
+      onNewTask: () => undefined,
+      onTogglePanel: () => undefined,
+      onSelectSession: () => undefined,
+      onOpenProject: () => undefined,
+      onRenameSession: () => undefined,
+      onDeleteSession: () => undefined,
+      onTogglePinSession: () => undefined,
+      onMinimize: () => undefined,
+      onMaximize: () => undefined,
+      onCloseWindow: () => undefined,
+      onOpenSettings: () => undefined,
+    } as const;
+    expect(renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, mode: "chat", windowKind: "chat" })))
+      .toContain("mode-switch:chat");
+    const workspace = renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, mode: "work", windowKind: "workspace" }));
+    expect(workspace).toContain("mode-switch:work,code,learn");
+    expect(workspace).not.toContain("tool-button");
+    expect(workspace).not.toContain("plugin-button");
+  });
+
   it("renders a dedicated titlebar drag region", () => {
     const html = renderToStaticMarkup(createElement(ChatPageNavigation, {
       collapsed: false,

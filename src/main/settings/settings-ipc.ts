@@ -11,6 +11,7 @@ import { ensureCustomStylePrompt } from "../style-prompt";
 import type { WindowManager } from "../windows/window-manager";
 import {
   reactChatWindow,
+  reactWorkspaceWindow,
   sidebarWindow,
   tasksWindow,
   settingsWindow,
@@ -77,7 +78,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   // 解构会捕获 null 并导致后续 ?. 永远短路（设置里的打开侧边栏/日程等会失效）。
 
   function broadcastToAuxWindows(channel: string, payload: unknown): void {
-    for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+    for (const win of [reactChatWindow, reactWorkspaceWindow, sidebarWindow, tasksWindow, settingsWindow]) {
       if (win && !win.isDestroyed()) {
         win.webContents.send(channel, payload);
       }
