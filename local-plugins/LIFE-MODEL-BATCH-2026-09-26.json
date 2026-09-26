@@ -1,0 +1,132 @@
+{
+  "oneRequest": true,
+  "syntheticOnly": true,
+  "configUnchanged": true,
+  "usage": {
+    "input": 1603,
+    "output": 3265
+  },
+  "latencyMs": 60153,
+  "checks": [
+    {
+      "id": "daily",
+      "passed": true,
+      "behaviorPassed": true,
+      "manualTextReviewRequired": false,
+      "output": {
+        "kind": "daily",
+        "date": "2026-09-26",
+        "sourceRevision": 10,
+        "windows": [
+          {
+            "id": "morning",
+            "startAt": 1790386200000,
+            "endAt": 1790395200000,
+            "activities": [
+              "读书",
+              "听歌"
+            ]
+          },
+          {
+            "id": "afternoon",
+            "startAt": 1790395200000,
+            "endAt": 1790416800000,
+            "activities": [
+              "学习",
+              "散步"
+            ]
+          },
+          {
+            "id": "evening",
+            "startAt": 1790416800000,
+            "endAt": 1790434800000,
+            "activities": [
+              "休息片刻",
+              "做园艺"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "tired-refine",
+      "passed": true,
+      "behaviorPassed": true,
+      "manualTextReviewRequired": false,
+      "output": {
+        "kind": "refine",
+        "date": "2026-09-26",
+        "sourceRevision": 11,
+        "windows": [
+          {
+            "id": "near",
+            "startAt": 1790404200000,
+            "endAt": 1790406000000,
+            "activities": [
+              "休息片刻"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "goal-daily",
+      "passed": true,
+      "behaviorPassed": true,
+      "manualTextReviewRequired": false,
+      "output": {
+        "kind": "daily",
+        "date": "2026-09-26",
+        "sourceRevision": 12,
+        "windows": [
+          {
+            "id": "morning",
+            "startAt": 1790386200000,
+            "endAt": 1790395200000,
+            "activities": [
+              "读书",
+              "听歌"
+            ]
+          },
+          {
+            "id": "afternoon",
+            "startAt": 1790395200000,
+            "endAt": 1790416800000,
+            "activities": [
+              "读书",
+              "做园艺"
+            ]
+          },
+          {
+            "id": "evening",
+            "startAt": 1790416800000,
+            "endAt": 1790434800000,
+            "activities": [
+              "休息片刻",
+              "散步"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "event-share",
+      "passed": true,
+      "behaviorPassed": true,
+      "manualTextReviewRequired": true,
+      "output": {
+        "kind": "send",
+        "text": "今天下午读了一会儿书，感觉很充实呢～"
+      }
+    }
+  ],
+  "frozenSourceSha256": "2d7320ff2e55bf0de3fca8601bf5032b0b9df6ef4b6b061e0ce5ca33f24e30c5",
+  "parserSourceSha256": "2d7320ff2e55bf0de3fca8601bf5032b0b9df6ef4b6b061e0ce5ca33f24e30c5",
+  "limitation": "批量协议及固定行为检查；主动文案仍须人工复核，不等同于各请求单独运行或生产部署验收。",
+  "model": "kimi-k2.6",
+  "manualTextReview": {
+    "passed": true,
+    "caseId": "event-share",
+    "note": "文案复述下午读书，主观感受作为角色表达；未补充书名、情节、人物、地点或真实工具操作。"
+  }
+}

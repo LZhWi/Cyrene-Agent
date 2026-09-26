@@ -76,6 +76,7 @@ describe("陪伴插件生活日程", () => {
     let at = new Date(2026, 6, 27, 6).getTime();
     const life = createLifeContext(store, () => at);
     expect(life.build()).not.toContain("[角色世界生活记录]");
+    for (at += 15 * 60_000; at <= new Date(2026, 6, 27, 13).getTime(); at += 15 * 60_000) life.build();
     at = new Date(2026, 6, 27, 13).getTime();
     const prompt = life.build();
     expect(prompt).not.toContain("[角色世界生活记录]");

@@ -2,6 +2,7 @@ import type { PluginLlmMessage, PluginStorage } from "@playa0v0/cyrene-plugin-sd
 import { advanceDynamics, createDynamics, LIFE_REST_ACTIVITY, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
 import { buildLifePlanningMessages, parseLifePlan, type LifePlan, type LifePlanningInput } from "./life-planning";
 import { rebuildLifeDiary, reconcileLifeJournal, saveLifeGoal, setLifeGoalStatus, validateJournal, type LifeJournal } from "./life-journal";
+import { completeLifeShare, getLifeShareCandidate, isLifeShareEligible, reserveLifeShare, validateSharing, type LifeShareReceipt, type LifeShareSource, type LifeSharingState } from "./life-sharing";
 
 const SETTINGS_KEY = "life-context-settings";
 const CONTINUITY_KEY = "life-continuity";
@@ -75,6 +76,7 @@ interface LifeState {
   pendingSegments: ActivitySegment[];
   planning: LifePlanningState;
   journal: LifeJournal;
+  sharing: LifeSharingState;
 }
 
 type PlanningKind = LifePlanningInput["kind"];
@@ -249,7 +251,8 @@ function validateState(value: unknown): LifeState {
   }
   return { ...structuredClone(state), self, pendingSegments: structuredClone(pendingSegments), settings: validateSettings(state.settings),
     planning: validatePlanning(state.planning, state.revision),
-    journal: validateJournal(state.journal, events, state.cursorAt, state.revision), events };
+    journal: validateJournal(state.journal, events, state.cursorAt, state.revision),
+    sharing: validateSharing(state.sharing, events, state.cursorAt), events };
 }
 
 function reconcileJournal(state: LifeState): LifeState {
@@ -523,12 +526,24 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     state = { version: 2, revision: 0,
       settings: oldSettings === undefined ? { version: 1, enabled: true, importantDates: [] } : validateSettings(oldSettings),
       ...continuity, recordAfterAt: 0, self: createDynamics(continuity.cursorAt), pendingSegments: [], planning: emptyPlanning(),
-      journal: validateJournal(undefined, continuity.events, continuity.cursorAt, 0) };
+      journal: validateJournal(undefined, continuity.events, continuity.cursorAt, 0), sharing: { records: [] } };
   }
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
   let runtimeStartedAt: number | undefined;
+  let lastObservedAt: number | undefined;
   let currentPlanning: { controller: AbortController; id: string; kind: PlanningKind } | undefined;
+
+  function runtimeBoundary(at: number): number {
+    return runtimeStartedAt === undefined || lastObservedAt === undefined || at - lastObservedAt > 2 * CURSOR_CHECKPOINT_MS
+      ? at : runtimeStartedAt;
+  }
+
+  function observeRuntime(at: number): void {
+    if (at < state.cursorAt || lastObservedAt !== undefined && at < lastObservedAt) return;
+    runtimeStartedAt = runtimeBoundary(at);
+    lastObservedAt = at;
+  }
 
   function save(next: LifeState): void {
     if (stopped) throw new Error("生活系统已停止，拒绝写入");
@@ -546,24 +561,36 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     if (stopped || !state.settings.enabled) return state.events;
     const at = now();
     if (!validTimestamp(at)) throw new Error("生活时钟无效");
-    const next = reconcileJournal(advanceContinuity(state, at, runtimeStartedAt ?? at));
+    if (at < state.cursorAt) return state.events;
+    const next = reconcileJournal(advanceContinuity(state, at, runtimeBoundary(at)));
     if (!persisted || next.events.length !== state.events.length || at - state.cursorAt >= CURSOR_CHECKPOINT_MS
       || next.self.updatedAt !== state.self.updatedAt || next.self.activity !== state.self.activity
       || next.self.recovering !== state.self.recovering || JSON.stringify(next.journal) !== JSON.stringify(state.journal)) save(next);
-    runtimeStartedAt ??= at;
+    observeRuntime(at);
     return state.events;
   }
 
   const view = () => ({ ...structuredClone(state.settings), importantDatesText: formatImportantDates(state.settings.importantDates),
     continuity: structuredClone({ version: state.version, revision: state.revision, cursorAt: state.cursorAt, events: state.events }),
     self: structuredClone(state.self), planning: { ...structuredClone(state.planning), busy: Boolean(currentPlanning) },
-    journal: structuredClone(state.journal), activities: activityCatalog() });
+    journal: structuredClone(state.journal), activities: activityCatalog(), sharing: structuredClone(state.sharing) });
+
+  function canShare(): boolean {
+    const at = now();
+    if (stopped || !state.settings.enabled || !validTimestamp(at) || at < state.cursorAt) return false;
+    advance();
+    return !state.self.resting;
+  }
+
+  function isShareEligible(source: LifeShareSource): boolean {
+    return canShare() && isLifeShareEligible(source, state.events, state.sharing, now());
+  }
 
   function journalChangeState(): LifeState {
     if (stopped) throw new Error("生活系统已停止，拒绝写入");
     const at = now();
     if (!validTimestamp(at) || at < state.cursorAt) throw new Error("生活时钟无效或已倒退，暂不修改日记与目标");
-    return reconcileJournal(state.settings.enabled ? advanceContinuity(state, at, runtimeStartedAt ?? at) : { ...state, cursorAt: at });
+    return reconcileJournal(state.settings.enabled ? advanceContinuity(state, at, runtimeBoundary(at)) : { ...state, cursorAt: at });
   }
 
   function result(kind: PlanningKind, status: PlanningStatus, message: string): PlanningResult {
@@ -674,6 +701,24 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     },
     stop,
     view,
+    getShareCandidate(): LifeShareSource | null {
+      return canShare() ? getLifeShareCandidate(state.events, state.sharing, now()) : null;
+    },
+    isShareEligible,
+    reserveShare(source: LifeShareSource): boolean {
+      const at = now();
+      if (stopped || !state.settings.enabled || !validTimestamp(at) || at < state.cursorAt) return false;
+      const next = reconcileJournal(advanceContinuity(state, at, runtimeBoundary(at)));
+      if (next.self.resting || !isLifeShareEligible(source, next.events, next.sharing, at)) return false;
+      save({ ...next, sharing: reserveLifeShare(next.sharing, source, at) });
+      observeRuntime(at);
+      return true;
+    },
+    completeShare(source: LifeShareSource, receipt: LifeShareReceipt): void {
+      if (stopped) return;
+      const sharing = completeLifeShare(state.sharing, source, receipt);
+      if (sharing !== state.sharing) save({ ...state, sharing });
+    },
     configure(enabled: unknown, importantDatesText: unknown) {
       if (stopped) throw new Error("生活系统已停止，拒绝写入");
       if (typeof enabled !== "boolean") throw new Error("生活日程设置无效");
@@ -686,15 +731,16 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       const changedEnabled = enabled !== state.settings.enabled;
       if (!enabled) currentPlanning?.controller.abort();
       if (!persisted || changedEnabled || formatImportantDates(settings.importantDates) !== formatImportantDates(state.settings.importantDates)) {
-        const advanced = changedEnabled && state.settings.enabled ? advanceContinuity(state, at, runtimeStartedAt ?? at) : state;
+        const advanced = changedEnabled && state.settings.enabled ? advanceContinuity(state, at, runtimeBoundary(at)) : state;
         const cursorAt = changedEnabled ? Math.max(advanced.cursorAt, at) : advanced.cursorAt;
         const resetAt = Math.floor(cursorAt / LIFE_STEP_MS) * LIFE_STEP_MS;
         const reset = { ...advanced.self, updatedAt: resetAt, activitySince: resetAt, activity: null, resting: true };
         const self = changedEnabled ? enabled ? advanceDynamics(reset, cursorAt, (activityAt) => plannedActivity(advanced, activityAt)).state : reset : advanced.self;
         save(reconcileJournal({ ...advanced, settings, cursorAt, self, pendingSegments: changedEnabled ? [] : advanced.pendingSegments,
           recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt }));
+        if (changedEnabled) { runtimeStartedAt = undefined; lastObservedAt = undefined; }
       }
-      if (enabled) runtimeStartedAt ??= at;
+      if (changedEnabled && enabled) observeRuntime(at);
       return view();
     },
     configurePlanning(enabled: boolean) {
@@ -716,21 +762,21 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       const next = journalChangeState();
       const goals = saveLifeGoal(next.journal.goals, input, next.cursorAt, state.revision + 1, activityCatalog());
       save(reconcileJournal({ ...next, journal: { ...next.journal, goals } }));
-      if (state.settings.enabled) runtimeStartedAt ??= state.cursorAt;
+      if (state.settings.enabled) observeRuntime(state.cursorAt);
       return view();
     },
     setGoalStatus(id: string, status: "active" | "paused" | "completed" | "cancelled") {
       const next = journalChangeState();
       const goals = setLifeGoalStatus(next.journal.goals, id, status, next.cursorAt, state.revision + 1);
       save(reconcileJournal({ ...next, journal: { ...next.journal, goals } }));
-      if (state.settings.enabled) runtimeStartedAt ??= state.cursorAt;
+      if (state.settings.enabled) observeRuntime(state.cursorAt);
       return view();
     },
     rebuildDiary(date: string) {
       const next = journalChangeState();
       const journal = rebuildLifeDiary(next.journal, date, next.events, next.cursorAt, state.revision + 1);
       save({ ...next, journal });
-      if (state.settings.enabled) runtimeStartedAt ??= state.cursorAt;
+      if (state.settings.enabled) observeRuntime(state.cursorAt);
       return view();
     },
     setImportantDateReminder(date: string, label: string, remind: boolean) {

@@ -107,19 +107,19 @@ describe("生活账本 v2：时钟与来源", () => {
     let at = time(27, 6);
     const first = createLifeContext(f.storage, () => at);
     first.build();
+    for (at += 15 * 60_000; at <= time(27, 13); at += 15 * 60_000) first.build();
     at = time(27, 13);
-    first.build();
     expect(first.view().continuity.events[0]).toMatchObject({ status: "materialized", source: "runtime_schedule" });
     first.stop();
     at = time(27, 19);
     const second = createLifeContext(f.storage, () => at);
     second.build();
     expect(second.view().continuity.events[1]).toMatchObject({ id: "2026-07-27:下午", status: "inferred", source: "offline_inference" });
+    for (at += 15 * 60_000; at <= time(27, 23); at += 15 * 60_000) second.build();
     at = time(27, 23);
-    second.build();
     expect(second.view().continuity.events[2]).toMatchObject({ id: "2026-07-27:晚上", status: "inferred" });
+    for (at += 15 * 60_000; at <= time(28, 13); at += 15 * 60_000) second.build();
     at = time(28, 13);
-    second.build();
     expect(second.view().continuity.events[3]).toMatchObject({ id: "2026-07-28:上午", status: "materialized", source: "runtime_schedule" });
     const snapshot = second.view();
     second.build(); second.status();
@@ -151,7 +151,8 @@ describe("生活账本 v2：时钟与来源", () => {
     at = time(29, 11); life.configure(true, "");
     const planned = life.build().split("\n").find((line) => line.startsWith("上午："))!.slice(3).split("、");
     expect(planned).toHaveLength(2);
-    at = time(29, 13); life.build();
+    for (at += 15 * 60_000; at <= time(29, 13); at += 15 * 60_000) life.build();
+    at = time(29, 13);
     expect(life.view().continuity.events).toEqual([expect.objectContaining({
       id: "2026-07-29:上午", startAt: time(29, 11), endAt: time(29, 12), status: "materialized",
       text: `上午（部分时段）：${planned[1]}`,
@@ -171,7 +172,8 @@ describe("生活账本 v2：时钟与来源", () => {
     let at = time(27, 7);
     const life = createLifeContext(f.storage, () => at);
     life.build();
-    at = time(27, 11, 45); life.build();
+    for (at += 15 * 60_000; at <= time(27, 11, 45); at += 15 * 60_000) life.build();
+    at = time(27, 11, 45);
     const writes = f.set.mock.calls.length;
     at = time(27, 12, 1); life.configure(false, "");
     expect(f.set).toHaveBeenCalledTimes(writes + 1);
@@ -187,7 +189,8 @@ describe("生活账本 v2：时钟与来源", () => {
     at = time(20, 9);
     const resumed = createLifeContext(f.storage, () => at);
     resumed.build();
-    at = time(20, 12); resumed.build();
+    for (at += 15 * 60_000; at <= time(20, 12); at += 15 * 60_000) resumed.build();
+    at = time(20, 12);
     const events = resumed.view().continuity.events;
     expect(events).toHaveLength(2);
     expect(events[1].startAt).toBe(events[0].endAt);

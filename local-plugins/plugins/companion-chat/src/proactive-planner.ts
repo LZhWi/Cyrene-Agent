@@ -1,7 +1,7 @@
 import type { UserPresenceSnapshot } from "./proactive";
 
 export type ProactiveScene = "morning" | "topic_followup" | "evening_checkin" | "late_night"
-  | "idle_daze" | "work_break" | "back_from_away" | "rainy_day" | "cold_drop" | "sunny_day";
+  | "idle_daze" | "work_break" | "back_from_away" | "rainy_day" | "cold_drop" | "sunny_day" | "life_share";
 
 export interface ProactiveWeatherSnapshot {
   expiresAt: string;
@@ -33,7 +33,7 @@ export interface ProactivePlannerState {
 
 const SCENES: ProactiveScene[] = [
   "morning", "topic_followup", "evening_checkin", "late_night", "idle_daze", "work_break", "back_from_away",
-  "rainy_day", "cold_drop", "sunny_day",
+  "rainy_day", "cold_drop", "sunny_day", "life_share",
 ];
 const COOLDOWN_MS: Record<ProactiveScene, number> = {
   morning: 10 * 60 * 60 * 1000,
@@ -46,6 +46,7 @@ const COOLDOWN_MS: Record<ProactiveScene, number> = {
   rainy_day: 4 * 60 * 60 * 1000,
   cold_drop: 4 * 60 * 60 * 1000,
   sunny_day: 4 * 60 * 60 * 1000,
+  life_share: 2 * 60 * 60 * 1000,
 };
 export const sceneCooldownMs = (scene: ProactiveScene): number => COOLDOWN_MS[scene];
 export const DESIRE_THRESHOLD = 40;
@@ -105,7 +106,7 @@ function timeWindow(minute: number, start: number, center: number, end: number, 
 }
 
 function score(scene: ProactiveScene, state: ProactivePlannerState, presence: UserPresenceSnapshot,
-  weather: ProactiveWeatherSnapshot | null | undefined, at: number, lastActivityAt: number): number {
+  weather: ProactiveWeatherSnapshot | null | undefined, at: number, lastActivityAt: number, lifeShareAvailable: boolean): number {
   const last = state.lastFiredAt[scene];
   if (last !== undefined && at - last < COOLDOWN_MS[scene]) return 0;
   if ((scene === "morning" || scene === "evening_checkin" || scene === "late_night") && state.todayFired[scene]) return 0;
@@ -152,6 +153,9 @@ function score(scene: ProactiveScene, state: ProactivePlannerState, presence: Us
     case "sunny_day":
       if (weather?.category === "clear" && weather.temperatureC >= 18 && weather.temperatureC <= 26) base = 70;
       break;
+    case "life_share":
+      if (lifeShareAvailable && hour >= 8 && hour < 23) base = 60;
+      break;
   }
   return base * state.affinity[scene];
 }
@@ -166,6 +170,7 @@ export function sampleAndPlan(input: {
   quietMs: number;
   baseDesireRate?: number;
   weather?: ProactiveWeatherSnapshot | null;
+  lifeShareAvailable?: boolean;
   allowAttempt: boolean;
   random?: () => number;
 }): ProactiveCandidate | null {
@@ -205,7 +210,7 @@ export function sampleAndPlan(input: {
   if (state.globalDesire < DESIRE_THRESHOLD || random() * 100 >= state.globalDesire) return null;
   const candidates = SCENES
     .filter((scene) => scene !== "back_from_away")
-    .map((scene) => ({ scene, score: score(scene, state, presence, weather, at, input.lastActivityAt) }))
+    .map((scene) => ({ scene, score: score(scene, state, presence, weather, at, input.lastActivityAt, input.lifeShareAvailable === true) }))
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score);
   if (candidates.length === 0) {

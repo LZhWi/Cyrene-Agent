@@ -135,13 +135,35 @@ function renderLife() {
   if (!$("life-plans").childElementCount) $("life-plans").textContent = "今日尚无模型计划，继续使用本地日程。";
   $("life-events").replaceChildren();
   for (const event of [...(lifeSettings.continuity?.events ?? [])].sort((a, b) => b.endAt - a.endAt).slice(0, 6)) {
-    const row = document.createElement("p");
+    const row = document.createElement("div"); row.className = "life-record";
+    const description = document.createElement("p");
     const source = event.status === "revoked" ? "已撤销" : event.status === "inferred" ? "离线推演"
       : event.source === "legacy_schedule" ? "旧版模拟记录" : "已发生的模拟活动";
-    row.textContent = `${event.date} · ${source} · ${event.text}`;
+    description.textContent = `${event.date} · ${source} · ${event.text}`;
+    row.append(description);
+    if (event.status !== "revoked") {
+      const revoke = document.createElement("button"); revoke.type = "button";
+      revoke.textContent = "撤销记录"; revoke.dataset.eventId = event.id; revoke.disabled = lifeJournalPending;
+      revoke.onclick = () => updateLifeJournal("life-event-revoke", { id: event.id }, "记录已撤销，相关日记与目标引用已更新。");
+      row.append(revoke);
+    }
     $("life-events").append(row);
   }
   if (!$("life-events").childElementCount) $("life-events").textContent = "还没有生活记录。";
+  $("life-sharing").replaceChildren();
+  for (const record of [...(lifeSettings.sharing?.records ?? [])].sort((a, b) => b.reservedAt - a.reservedAt).slice(0, 10)) {
+    const row = document.createElement("div"); row.className = "life-record";
+    const description = document.createElement("p");
+    description.textContent = `${record.status === "delivered" ? "已分享" : "结果待确认，不自动重发"} · 事件 ${record.eventId} r${record.eventRevision}\n${record.text}`;
+    row.append(description);
+    if (record.receipt) {
+      const receipt = document.createElement("small");
+      receipt.textContent = `会话 ${record.receipt.conversationId} · 消息 ${record.receipt.messageId}`;
+      row.append(receipt);
+    }
+    $("life-sharing").append(row);
+  }
+  if (!$("life-sharing").childElementCount) $("life-sharing").textContent = "还没有生活分享记录。";
   renderLifeJournal();
 }
 function renderLifeJournal() {
@@ -223,7 +245,7 @@ function resetLifeGoal() {
 }
 async function updateLifeJournal(action, data, successMessage) {
   if (lifeJournalPending) return false;
-  lifeJournalPending = true; renderLifeJournal();
+  lifeJournalPending = true; renderLife();
   let saved = false, message;
   try { lifeSettings = await invoke(action, data); saved = true; message = successMessage; }
   catch (e) { message = e.message; }

@@ -319,6 +319,12 @@ const plugin: CyrenePlugin = {
       generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 2048, timeoutMs: 90_000 }),
       systemPrompt: () => persona.buildProactive(),
       lifeContext: (query) => life.build(query, { proactive: true }),
+      lifeSharing: {
+        candidate: () => life.getShareCandidate(),
+        eligible: (source) => life.isShareEligible(source),
+        reserve: (source) => life.reserveShare(source),
+        complete: (source, receipt) => life.completeShare(source, receipt),
+      },
       screenContext: () => screenMonitor.latestContext(),
       presence: () => {
         if (!userPresence) throw new Error("当前宿主不支持用户在场状态");
@@ -430,6 +436,11 @@ const plugin: CyrenePlugin = {
           return result;
         }
         case "life-state": return life.view();
+        case "life-event-revoke": {
+          const result = life.revokeEvent(data?.id);
+          proactive.cancel();
+          return result;
+        }
         case "life-planning-settings": {
           if (typeof data?.enabled !== "boolean") throw new Error("生活规划设置无效");
           return life.configurePlanning(data.enabled);

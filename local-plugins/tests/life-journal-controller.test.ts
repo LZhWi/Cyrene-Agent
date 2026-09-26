@@ -21,13 +21,20 @@ function firstMorningActivity(life: ReturnType<typeof createLifeContext>): strin
   return life.build().split("\n").find((line) => line.startsWith("上午："))!.slice(3).split("、")[0];
 }
 
+function heartbeat(life: ReturnType<typeof createLifeContext>, until: number, setAt: (at: number) => void): void {
+  for (let at = life.view().continuity.cursorAt; at < until;) {
+    at = Math.min(until, at + 15 * 60_000);
+    setAt(at); life.build();
+  }
+}
+
 describe("角色日记与目标接线", () => {
   it("跨日才生成来源日记，重复查询和重启不重写或重复创建", () => {
     const f = fixture();
     let at = time(1, 6);
     const life = createLifeContext(f.storage, () => at);
     life.build();
-    at = time(1, 23, 30); life.build();
+    heartbeat(life, time(1, 23, 30), (next) => { at = next; });
     expect(life.view().journal.diaries).toEqual([]);
     at = time(2, 8); life.build();
     const diary = life.view().journal.diaries[0];
@@ -67,6 +74,7 @@ describe("角色日记与目标接线", () => {
     const activity = firstMorningActivity(life);
     life.saveGoal({ title: "继续自己的小练习", activity });
     const id = life.view().journal.goals[0].id;
+    heartbeat(life, time(1, 11, 45), (next) => { at = next; });
     at = time(1, 12, 1);
     life.setGoalStatus(id, "paused");
     expect(life.view().journal.goals[0]).toMatchObject({ status: "paused", eventRefs: [expect.objectContaining({ id: "2026-09-01:上午" })] });
@@ -85,6 +93,7 @@ describe("角色日记与目标接线", () => {
     let at = time(1, 6);
     const life = createLifeContext(f.storage, () => at);
     life.saveGoal({ title: "早间小练习", activity: firstMorningActivity(life) });
+    heartbeat(life, time(1, 23, 30), (next) => { at = next; });
     at = time(2, 8); life.build();
     const event = life.view().continuity.events.find((event) => event.id === "2026-09-01:上午")!;
     expect(life.view().journal.goals[0].eventRefs.some((ref) => ref.id === event.id)).toBe(true);

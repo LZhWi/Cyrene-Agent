@@ -1,5 +1,6 @@
 import type { PluginLlmMessage, PluginStorage, PluginWeatherContextSnapshot } from "@playa0v0/cyrene-plugin-sdk";
 import { buildProactiveMessages, NIGHT_ACTIVE_IDLE_LIMIT_SECONDS, parseProactiveDecision, type ProactiveHistoryTurn } from "./proactive-prompt";
+import type { LifeShareReceipt, LifeShareSource } from "./life-sharing";
 export { NIGHT_ACTIVE_IDLE_LIMIT_SECONDS } from "./proactive-prompt";
 import {
   FOLLOWUP_MIN_SCORE,
@@ -62,6 +63,12 @@ export interface ProactiveControllerDeps {
   commitContext?: (runId: string) => Promise<void>;
   discardContext?: (runId: string) => Promise<void>;
   lifeContext?: (query: string) => string;
+  lifeSharing?: {
+    candidate(): LifeShareSource | null;
+    eligible(source: LifeShareSource): boolean;
+    reserve(source: LifeShareSource): boolean;
+    complete(source: LifeShareSource, receipt: LifeShareReceipt): void;
+  };
   toneRules?: () => string;
   generate(messages: PluginLlmMessage[], signal: AbortSignal): Promise<string>;
   systemPrompt(): string;
@@ -199,11 +206,13 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
     const startedAt = now();
     const initialPresence = force ? undefined : await deps.presence?.();
     let candidate: ProactiveCandidate | null = null;
+    let lifeShare: LifeShareSource | undefined;
     let weather: PluginWeatherContextSnapshot | null | undefined;
     if (!force && initialPresence && !current) {
       const allowed = canStart(startedAt, initialPresence);
       const localHour = initialPresence.localHour ?? new Date(startedAt).getHours();
       weather = isWeatherSceneHour(localHour) ? await deps.weather?.() : null;
+      const availableLifeShare = deps.lifeSharing?.candidate();
       candidate = (deps.planCandidate ?? sampleAndPlan)({
         state: state.planner!,
         presence: initialPresence,
@@ -213,9 +222,14 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
         quietMs: PROACTIVE_QUIET_MS,
         baseDesireRate: DESIRE_RATE[state.pace ?? "normal"],
         weather,
+        lifeShareAvailable: Boolean(availableLifeShare),
         allowAttempt: true,
         random: deps.random,
       });
+      if (candidate?.scene === "life_share") {
+        if (!availableLifeShare || !deps.lifeSharing?.eligible(availableLifeShare)) candidate = null;
+        else lifeShare = structuredClone(availableLifeShare);
+      }
       if (candidate && state.feedbackLearningEnabled && state.unansweredCount > 0) settleIgnoreFeedback(state.planner!);
       if (!allowed || !candidate || !candidateAllows(candidate, startedAt)) {
         console.log("[Proactive] 本轮跳过:", JSON.stringify({
@@ -255,13 +269,14 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
         deps.retrieve(query, signal, contextRunId),
         deps.profileContext?.(query, [...recent.ordinaryHistory].reverse().find((turn) => turn.role === "model")?.content ?? "", signal, contextRunId) ?? Promise.resolve(""),
       ]);
-      if (signal.aborted || generationEpoch !== state.epoch) return { kind: "stale" as const };
+      if (signal.aborted || generationEpoch !== state.epoch || (lifeShare && !deps.lifeSharing?.eligible(lifeShare))) return { kind: "stale" as const };
       const screen = deps.screenContext?.().trim() ?? "";
       const rawDecision = await deps.generate(buildProactiveMessages({
         basePersona: deps.systemPrompt(),
         userProfile: profile,
         relevantMemory: memory,
-        lifeContext: deps.lifeContext?.(query),
+        lifeContext: lifeShare ? undefined : deps.lifeContext?.(query),
+        lifeShare,
         screenActivity: screen,
         ordinaryHistory: recent.ordinaryHistory,
         proactiveHistory: recent.proactiveHistory,
@@ -293,6 +308,12 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
         console.log("[Proactive] 模型决策: duplicate");
         return { kind: "duplicate" as const };
       }
+      if (!force && deps.canStartDelivery && !(await deps.canStartDelivery())) return { kind: "stale" as const };
+      const deliveryPresence = force ? undefined : await deps.presence?.();
+      if (signal.aborted || generationEpoch !== state.epoch
+        || (!force && (!deliveryPresence || !policyAllows(now(), deliveryPresence) || !candidateAllows(candidate!, now())))) return { kind: "stale" as const };
+      // 同步预占紧邻唯一投递入口；失败或停机留下预占，由生活账本阻止自动重发。
+      if (lifeShare && (!deps.lifeSharing?.eligible(lifeShare) || !deps.lifeSharing.reserve(lifeShare))) return { kind: "stale" as const };
       const delivered = await deps.deliver(decision.text, {
         allowIgnoreFeedback: state.feedbackLearningEnabled === true && candidate !== null,
       });
@@ -316,6 +337,10 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
         lastDeliveredConversationId: delivered.conversationId,
         deliveredHistory: [...(state.deliveredHistory ?? []), { text: actualText, at: committedAt }].slice(-16),
       });
+      if (lifeShare) {
+        try { deps.lifeSharing!.complete(lifeShare, delivered); }
+        catch (error) { console.warn("[Proactive] 已投递生活消息的来源记账失败:", error instanceof Error ? error.message : String(error)); }
+      }
       try { await deps.commitContext?.(contextRunId); }
       catch (error) { console.warn("[Proactive] 已投递消息的上下文记账失败:", error); }
       console.log("[Proactive] 已发送:", JSON.stringify({

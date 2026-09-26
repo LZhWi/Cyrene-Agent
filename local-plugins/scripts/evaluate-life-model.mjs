@@ -40,7 +40,7 @@ const cases = [
   ...[["daily", daily], ["tired-refine", tired], ["goal-daily", goal]].map(([id, input]) => ({ id, input, messages: buildLifePlanningMessages(input) })),
   { id: "event-share", messages: buildProactiveMessages({ basePersona: "你是一位自然、温和的虚构角色。",
     ordinaryHistory: [], proactiveHistory: [], sceneId: "life_share", localNow: new Date(time(16)), idleSec: 30, unansweredCount: 0,
-    lifeContext: "[你的生活]\n[本次生活分享来源]\n事件 synthetic-event-1：今天下午在自己的世界读书。这是运行期间完成的模拟活动；没有书名或具体情节证据。最多分享这一条，也可以保持安静。不得声称操作真实设备，不得虚构用户事实。" }) },
+    lifeShare: { eventId: "synthetic-event-1", eventRevision: 4, text: "下午：读书", startAt: time(13), endAt: time(15), expiresAt: time(15) + 24 * 60 * 60_000 } }) },
 ];
 const messages = [{ role: "system", content: "这是一次合成案例批量评测。分别执行每个案例 messages 中的任务，互不混用数据。只返回一个JSON对象：{\"cases\":[{\"id\":\"原case id\",\"output\":该案例要求的JSON对象}]}。恰好返回全部案例，不解释，不使用Markdown。" },
   { role: "user", content: JSON.stringify(cases.map(({ id, messages }) => ({ id, messages }))) }];
@@ -62,7 +62,7 @@ if (mode === "--run") {
   const profile = config.modelProfiles?.find((item) => item.id === config.defaultModelProfileId);
   if (![profile?.provider, profile?.baseUrl, profile?.model, profile?.apiKey].every((item) => typeof item === "string" && item.trim())) throw new Error("默认主模型配置不完整");
   const cfg = { provider: profile.provider, baseUrl: profile.baseUrl, model: profile.model, apiKey: profile.apiKey,
-    explicitTransport: profile.explicitTransport, reasoning: profile.reasoning ?? config.reasoning };
+    explicitTransport: profile.explicitTransport, reasoning: profile.reasoning };
   const require = createRequire(import.meta.url);
   const { getAdapterForConfig } = require(path.join(project, "dist/main/main/orchestrator/vendors/index.js"));
   const adapter = getAdapterForConfig(cfg);
