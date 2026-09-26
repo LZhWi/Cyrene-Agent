@@ -1,5 +1,6 @@
-import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
-import { advanceDynamics, createDynamics, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
+import type { PluginLlmMessage, PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
+import { advanceDynamics, createDynamics, LIFE_REST_ACTIVITY, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
+import { buildLifePlanningMessages, parseLifePlan, type LifePlan, type LifePlanningInput } from "./life-planning";
 
 const SETTINGS_KEY = "life-context-settings";
 const CONTINUITY_KEY = "life-continuity";
@@ -70,6 +71,115 @@ interface LifeState {
   events: LifeEvent[];
   self: LifeDynamics;
   pendingSegments: ActivitySegment[];
+  planning: LifePlanningState;
+}
+
+type PlanningKind = LifePlanningInput["kind"];
+type PlanningStatus = "applied" | "skipped" | "stale" | "invalid" | "failed" | "cancelled";
+interface PlanningResult { kind: PlanningKind; status: PlanningStatus; message: string; at: number }
+interface PlanningAttempt {
+  id: string;
+  date: string;
+  kind: PlanningKind;
+  sourceRevision: number;
+  requestedAt: number;
+  timezoneOffsetMinutes: number;
+  phase: "morning" | "afternoon" | "evening";
+  status: Exclude<PlanningStatus, "skipped"> | "reserved";
+}
+interface LifePlanningState {
+  enabled: boolean;
+  budgetDate: string | null;
+  attempts: PlanningAttempt[];
+  plans: LifePlan[];
+  lastResult: PlanningResult | null;
+}
+interface LifeContextOptions {
+  generate(messages: PluginLlmMessage[], signal: AbortSignal): Promise<string>;
+  stopSignal?: AbortSignal;
+}
+
+const activityCatalog = () => [...new Set([...MORNING_POOL, ...AFTERNOON_POOL, ...EVENING_POOL, LIFE_REST_ACTIVITY])];
+const emptyPlanning = (): LifePlanningState => ({ enabled: false, budgetDate: null, attempts: [], plans: [], lastResult: null });
+
+function validatePlanning(value: unknown, revision: number): LifePlanningState {
+  if (value === undefined) return emptyPlanning();
+  const state = value as LifePlanningState;
+  const invalid = () => new Error("生活规划状态损坏，拒绝覆盖");
+  if (!state || typeof state.enabled !== "boolean" || (state.budgetDate !== null && !validDate(state.budgetDate))
+    || !Array.isArray(state.attempts) || state.attempts.length > 42 || !Array.isArray(state.plans) || state.plans.length > 42) throw invalid();
+  const ids = new Set<string>(), budgets = new Map<string, number>();
+  for (const attempt of state.attempts) {
+    if (!attempt || typeof attempt.id !== "string" || !attempt.id || ids.has(attempt.id) || !validDate(attempt.date)
+      || !["daily", "refine"].includes(attempt.kind) || !validTimestamp(attempt.requestedAt)
+      || !Number.isInteger(attempt.timezoneOffsetMinutes) || Math.abs(attempt.timezoneOffsetMinutes) > 14 * 60
+      || attempt.date !== planningDate(attempt.requestedAt, attempt.timezoneOffsetMinutes)
+      || !Number.isSafeInteger(attempt.sourceRevision) || attempt.sourceRevision < 1 || attempt.sourceRevision > revision
+      || !["morning", "afternoon", "evening"].includes(attempt.phase)
+      || !["reserved", "applied", "stale", "invalid", "failed", "cancelled"].includes(attempt.status)
+      || state.budgetDate === null || attempt.date > state.budgetDate) throw invalid();
+    ids.add(attempt.id);
+    const key = `${attempt.date}:${attempt.kind}`, count = (budgets.get(key) ?? 0) + 1;
+    if (count > (attempt.kind === "daily" ? 1 : 2)) throw invalid();
+    budgets.set(key, count);
+  }
+  const planRevisions = new Set<number>();
+  for (const plan of state.plans) {
+    const attempt = state.attempts.find((item) => item.sourceRevision === plan?.sourceRevision && item.date === plan?.date
+      && item.kind === plan?.kind && item.status === "applied");
+    if (!plan || !validDate(plan.date) || !["daily", "refine"].includes(plan.kind)
+      || !Array.isArray(plan.windows) || plan.windows.length < 1 || plan.windows.length > (plan.kind === "daily" ? 3 : 1)
+      || !attempt || planRevisions.has(plan.sourceRevision)) throw invalid();
+    planRevisions.add(plan.sourceRevision);
+    const expected = planningWindows(attempt.kind, attempt.requestedAt, attempt.timezoneOffsetMinutes);
+    if (expected.length !== plan.windows.length) throw invalid();
+    const windowIds = new Set<string>();
+    for (const [index, window] of plan.windows.entries()) {
+      if (!window || typeof window.id !== "string" || !window.id || windowIds.has(window.id)
+        || !validTimestamp(window.startAt) || !validTimestamp(window.endAt) || window.startAt >= window.endAt
+        || window.id !== expected[index].id || window.startAt !== expected[index].startAt || window.endAt !== expected[index].endAt
+        || !Array.isArray(window.activities) || window.activities.length < 1 || window.activities.length > (plan.kind === "daily" ? 2 : 1)
+        || new Set(window.activities).size !== window.activities.length
+        || window.activities.some((activity) => !activityCatalog().includes(activity))) throw invalid();
+      windowIds.add(window.id);
+    }
+  }
+  if (state.lastResult !== null && (!state.lastResult || !["daily", "refine"].includes(state.lastResult.kind)
+    || !["applied", "skipped", "stale", "invalid", "failed", "cancelled"].includes(state.lastResult.status)
+    || typeof state.lastResult.message !== "string" || !validTimestamp(state.lastResult.at))) throw invalid();
+  return structuredClone(state);
+}
+
+function planningDate(at: number, offsetMinutes: number): string {
+  const wall = new Date(at - offsetMinutes * 60_000);
+  if (wall.getUTCHours() < 4) wall.setUTCDate(wall.getUTCDate() - 1);
+  return `${wall.getUTCFullYear()}-${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}`;
+}
+
+function planningWindows(kind: PlanningKind, at: number, offsetMinutes = new Date(at).getTimezoneOffset()): LifePlanningInput["windows"] {
+  const wall = new Date(at - offsetMinutes * 60_000);
+  const midnight = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() - (wall.getUTCHours() < 4 ? 1 : 0))
+    + offsetMinutes * 60_000;
+  const earliest = Math.ceil((at + 2 * 60_000) / LIFE_STEP_MS) * LIFE_STEP_MS;
+  const windows = SLOT_DEFS.map((slot) => ({ id: slot.key,
+    startAt: Math.max(earliest, midnight + slot.startHour * 60 * 60_000),
+    endAt: midnight + slot.endHour * 60 * 60_000,
+  })).filter((window) => window.endAt - window.startAt >= (kind === "daily" ? 4 : 2) * LIFE_STEP_MS);
+  if (kind === "daily") return windows;
+  const window = windows[0];
+  return window ? [{ ...window, id: `${window.id}:${window.startAt}`, endAt: Math.min(window.endAt, window.startAt + 2 * LIFE_STEP_MS) }] : [];
+}
+
+function plannedActivity(state: LifeState, at: number): string | null {
+  const plans = state.planning.plans.filter((plan) => state.planning.attempts.some((attempt) => attempt.sourceRevision === plan.sourceRevision
+    && attempt.timezoneOffsetMinutes === new Date(at).getTimezoneOffset())).sort((left, right) =>
+    Number(right.kind === "refine") - Number(left.kind === "refine") || right.sourceRevision - left.sourceRevision);
+  for (const plan of plans) {
+    const window = plan.windows.find((item) => item.startAt <= at && item.endAt > at);
+    if (window) return window.activities[Math.min(window.activities.length - 1,
+      Math.floor((at - window.startAt) / ((window.endAt - window.startAt) / window.activities.length)))];
+  }
+  return scheduledActivity(at);
 }
 
 function validTimestamp(value: unknown): value is number {
@@ -134,6 +244,7 @@ function validateState(value: unknown): LifeState {
     throw new Error("生活活动记录损坏，拒绝覆盖");
   }
   return { ...structuredClone(state), self, pendingSegments: structuredClone(pendingSegments), settings: validateSettings(state.settings),
+    planning: validatePlanning(state.planning, state.revision),
     events: validateEvents(state.events, false, state.cursorAt, state.revision) };
 }
 
@@ -144,10 +255,11 @@ function advanceContinuity(state: LifeState, at: number, runtimeStartedAt: numbe
   const self = state.self.updatedAt < alignedStart && at >= alignedStart
     ? { ...state.self, updatedAt: alignedStart, activitySince: alignedStart } : state.self;
   const elapsed = at - state.cursorAt;
+  const schedule = (activityAt: number) => plannedActivity(state, activityAt);
   const dynamics = elapsed > DETAILED_CATCH_UP_MS
-    ? { state: resetDynamics(self, at, scheduledActivity), segments: [], coarse: true }
+    ? { state: resetDynamics(self, at, schedule), segments: [], coarse: true }
     : at < alignedStart ? { state: self, segments: [], coarse: false }
-      : advanceDynamics(self, at, scheduledActivity);
+      : advanceDynamics(self, at, schedule);
   if (elapsed > DETAILED_CATCH_UP_MS || dynamics.coarse) {
     const event: LifeEvent = {
       id: `gap:${state.cursorAt}:${at}`, date: localDateKey(new Date(at)),
@@ -324,7 +436,7 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
   return { selected: [], requestedPast: false };
 }
 
-function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, query: string): string {
+function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, planning: LifePlanningState, query: string): string {
   const date = scheduleDate(now);
   const dateKey = localDateKey(now);
   const slots = buildDaySlots(dateKey);
@@ -336,6 +448,15 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
   const doing = self.activity;
   if (doing) lines.push(`你现在正在做：${doing}`);
   else lines.push("你现在的生活状态：休息中。");
+  const adjustments = planning.plans.filter((plan) => planning.attempts.some((attempt) => attempt.sourceRevision === plan.sourceRevision
+    && attempt.timezoneOffsetMinutes === now.getTimezoneOffset())).sort((left, right) => Number(left.kind === "refine") - Number(right.kind === "refine")
+    || left.sourceRevision - right.sourceRevision).filter((plan) => plan.date === dateKey)
+    .flatMap((plan) => plan.windows.filter((window) => window.endAt > now.getTime()));
+  if (adjustments.length) lines.push("后续计划调整（覆盖同一时段的原安排，后列调整优先；仍未发生）：",
+    ...adjustments.map((window) => {
+      const start = new Date(window.startAt), end = new Date(window.endAt);
+      return `${pad(start.getHours())}:${pad(start.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}：${window.activities.join("、")}`;
+    }));
   const monthDay = dateKey.slice(5);
   const specials = dates.filter((item) => item.date === dateKey || item.date === monthDay).map((item) => item.label);
   if (specials.length > 0) lines.push(`今天对你们来说是特别的日子：${specials.join("；")}。`);
@@ -356,7 +477,7 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
   return lines.join("\n");
 }
 
-export function createLifeContext(storage: PluginStorage, now: () => number = Date.now) {
+export function createLifeContext(storage: PluginStorage, now: () => number = Date.now, options?: LifeContextOptions) {
   const initializedAt = now();
   if (!validTimestamp(initializedAt)) throw new Error("生活时钟无效");
   const stored = storage.get<unknown>(STATE_KEY);
@@ -372,11 +493,12 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       : validateLegacyContinuity(oldContinuity);
     state = { version: 2, revision: 0,
       settings: oldSettings === undefined ? { version: 1, enabled: true, importantDates: [] } : validateSettings(oldSettings),
-      ...continuity, recordAfterAt: 0, self: createDynamics(continuity.cursorAt), pendingSegments: [] };
+      ...continuity, recordAfterAt: 0, self: createDynamics(continuity.cursorAt), pendingSegments: [], planning: emptyPlanning() };
   }
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
   let runtimeStartedAt: number | undefined;
+  let currentPlanning: { controller: AbortController; id: string; kind: PlanningKind } | undefined;
 
   function save(next: LifeState): void {
     if (stopped) throw new Error("生活系统已停止，拒绝写入");
@@ -404,23 +526,113 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
 
   const view = () => ({ ...structuredClone(state.settings), importantDatesText: formatImportantDates(state.settings.importantDates),
     continuity: structuredClone({ version: state.version, revision: state.revision, cursorAt: state.cursorAt, events: state.events }),
-    self: structuredClone(state.self) });
+    self: structuredClone(state.self), planning: { ...structuredClone(state.planning), busy: Boolean(currentPlanning) } });
+
+  function result(kind: PlanningKind, status: PlanningStatus, message: string): PlanningResult {
+    const at = now();
+    return { kind, status, message, at: validTimestamp(at) ? at : state.cursorAt };
+  }
+
+  function finishPlanning(id: string, outcome: PlanningResult, plan?: LifePlan): PlanningResult {
+    if (stopped || options?.stopSignal?.aborted) return outcome;
+    const attempt = state.planning.attempts.find((item) => item.id === id);
+    if (!attempt || attempt.status !== "reserved") return outcome;
+    save({ ...state, planning: { ...state.planning, lastResult: outcome,
+      attempts: state.planning.attempts.map((item) => item.id === id ? { ...item, status: outcome.status as PlanningAttempt["status"] } : item),
+      plans: plan ? [...state.planning.plans, plan] : state.planning.plans } });
+    return outcome;
+  }
+
+  async function plan(kind: PlanningKind): Promise<PlanningResult> {
+    if (kind !== "daily" && kind !== "refine") throw new Error("生活规划类型无效");
+    if (stopped || options?.stopSignal?.aborted || !state.settings.enabled) return result(kind, "skipped", "生活系统已关闭或停止");
+    if (!options?.generate) return result(kind, "skipped", "当前没有可用的生活规划模型");
+    if (currentPlanning) return result(kind, "skipped", "已有生活规划正在生成");
+    const at = now();
+    if (!validTimestamp(at)) throw new Error("生活时钟无效");
+    if (at < state.cursorAt) return result(kind, "skipped", "系统时间倒退，暂不生成生活规划");
+    advance();
+    const date = localDateKey(new Date(at));
+    if (state.planning.budgetDate !== null && date < state.planning.budgetDate) return result(kind, "skipped", "该日期的生活规划预算已封存");
+    const used = state.planning.attempts.filter((attempt) => attempt.date === date && attempt.kind === kind).length;
+    if (used >= (kind === "daily" ? 1 : 2)) return result(kind, "skipped", "今天的生活规划调用额度已用完");
+    const timezoneOffsetMinutes = new Date(at).getTimezoneOffset();
+    const windows = planningWindows(kind, at, timezoneOffsetMinutes);
+    if (!windows.length) return result(kind, "skipped", "今天没有足够长的未来活动时段");
+    const day = scheduleDate(new Date(at));
+    const cutoff = localDateKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() - 13, 12));
+    const hour = new Date(at).getHours();
+    const attempt: PlanningAttempt = { id: `${date}:${kind}:${used + 1}`, date, kind, sourceRevision: state.revision + 1,
+      requestedAt: at, timezoneOffsetMinutes, phase: hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening", status: "reserved" };
+    // 先消耗尝试额度；失败、取消及进程中断都不能通过重启重获预算。
+    save({ ...state, planning: { ...state.planning, budgetDate: date,
+      attempts: [...state.planning.attempts.filter((item) => item.date >= cutoff), attempt],
+      plans: state.planning.plans.filter((item) => item.date >= cutoff) } });
+    const input: LifePlanningInput = { kind, date, revision: state.revision, windows, activities: activityCatalog(),
+      self: { energy: state.self.energy, focus: state.self.focus, restNeed: state.self.restNeed,
+        activity: state.self.activity, habits: { ...state.self.habits } } };
+    const controller = new AbortController();
+    currentPlanning = { controller, id: attempt.id, kind };
+    const signal = options.stopSignal ? AbortSignal.any([controller.signal, options.stopSignal]) : controller.signal;
+    try {
+      const raw = await options.generate(buildLifePlanningMessages(input), signal);
+      if (stopped || signal.aborted || !state.settings.enabled) return finishPlanning(attempt.id, result(kind, "cancelled", "生活规划已取消"));
+      const completedAt = now();
+      if (!validTimestamp(completedAt) || completedAt < at || completedAt < state.cursorAt
+        || state.revision !== input.revision || localDateKey(new Date(completedAt)) !== date || completedAt >= windows[0].startAt) {
+        return finishPlanning(attempt.id, result(kind, "stale", "生活状态或时段已变化，保留原有计划"));
+      }
+      let parsed: LifePlan;
+      try { parsed = parseLifePlan(raw, input); }
+      catch { return finishPlanning(attempt.id, result(kind, "invalid", "模型规划未通过校验，保留原有计划")); }
+      return finishPlanning(attempt.id, result(kind, "applied", "生活规划已应用于未来时段"), parsed);
+    } catch {
+      return finishPlanning(attempt.id, result(kind, signal.aborted || stopped ? "cancelled" : "failed",
+        signal.aborted || stopped ? "生活规划已取消" : "模型请求失败，保留原有计划"));
+    } finally {
+      if (currentPlanning?.controller === controller) currentPlanning = undefined;
+    }
+  }
+
+  async function planAutomatically(): Promise<void> {
+    if (stopped || currentPlanning || !state.settings.enabled || !state.planning.enabled) return;
+    const at = now(), date = localDateKey(new Date(at));
+    const attempts = state.planning.attempts.filter((attempt) => attempt.date === date);
+    const daily = attempts.find((attempt) => attempt.kind === "daily");
+    if (!daily) { await plan("daily"); return; }
+    const hour = new Date(at).getHours();
+    const phase = hour >= 12 && hour < 18 ? "afternoon" : hour >= 18 && hour < 23 ? "evening" : undefined;
+    if (!phase) return;
+    const day = new Date(at);
+    const phaseStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), phase === "afternoon" ? 12 : 18).getTime();
+    if (daily.requestedAt < phaseStart && !attempts.some((attempt) => attempt.kind === "refine" && attempt.phase === phase)) await plan("refine");
+  }
+
+  function stop(): void {
+    stopped = true;
+    currentPlanning?.controller.abort();
+    if (timer) clearInterval(timer);
+    timer = undefined;
+    options?.stopSignal?.removeEventListener("abort", stop);
+  }
+  if (options?.stopSignal?.aborted) stopped = true;
+  else options?.stopSignal?.addEventListener("abort", stop, { once: true });
+
   return {
     start() {
       if (timer || stopped) return;
       advance();
+      void planAutomatically().catch(() => {});
       timer = setInterval(() => {
-        try { advance(); }
+        try { advance(); void planAutomatically().catch(() => {}); }
         catch (error) {
-          if (timer) clearInterval(timer);
-          timer = undefined;
-          stopped = true;
+          stop();
           console.warn("[Life] 生活推进失败，已停止写入:", error instanceof Error ? error.message : String(error));
         }
       }, CURSOR_CHECKPOINT_MS);
       timer.unref?.();
     },
-    stop() { stopped = true; if (timer) clearInterval(timer); timer = undefined; },
+    stop,
     view,
     configure(enabled: unknown, importantDatesText: unknown) {
       if (stopped) throw new Error("生活系统已停止，拒绝写入");
@@ -429,16 +641,32 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       const at = now();
       if (!validTimestamp(at)) throw new Error("生活时钟无效");
       const changedEnabled = enabled !== state.settings.enabled;
+      if (!enabled) currentPlanning?.controller.abort();
       if (!persisted || changedEnabled || formatImportantDates(settings.importantDates) !== formatImportantDates(state.settings.importantDates)) {
         const advanced = changedEnabled && state.settings.enabled ? advanceContinuity(state, at, runtimeStartedAt ?? at) : state;
         const cursorAt = changedEnabled ? Math.max(advanced.cursorAt, at) : advanced.cursorAt;
         const resetAt = Math.floor(cursorAt / LIFE_STEP_MS) * LIFE_STEP_MS;
         const reset = { ...advanced.self, updatedAt: resetAt, activitySince: resetAt, activity: null, resting: true };
-        const self = changedEnabled ? enabled ? advanceDynamics(reset, cursorAt, scheduledActivity).state : reset : advanced.self;
+        const self = changedEnabled ? enabled ? advanceDynamics(reset, cursorAt, (activityAt) => plannedActivity(advanced, activityAt)).state : reset : advanced.self;
         save({ ...advanced, settings, cursorAt, self, pendingSegments: changedEnabled ? [] : advanced.pendingSegments,
           recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt });
       }
       if (enabled) runtimeStartedAt ??= at;
+      return view();
+    },
+    configurePlanning(enabled: boolean) {
+      if (stopped) throw new Error("生活系统已停止，拒绝写入");
+      if (typeof enabled !== "boolean") throw new Error("生活规划设置无效");
+      if (enabled !== state.planning.enabled) {
+        currentPlanning?.controller.abort();
+        save({ ...state, planning: { ...state.planning, enabled } });
+      }
+      return view();
+    },
+    plan,
+    cancelPlanning() {
+      currentPlanning?.controller.abort();
+      if (currentPlanning && !stopped) finishPlanning(currentPlanning.id, result(currentPlanning.kind, "cancelled", "生活规划已取消"));
       return view();
     },
     revokeEvent(id: string) {
@@ -452,7 +680,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     build: (query = "") => {
       if (!state.settings.enabled) return "";
       advance();
-      return buildContext(new Date(now()), state.settings.importantDates, state.events, state.self, query);
+      return buildContext(new Date(now()), state.settings.importantDates, state.events, state.self, state.planning, query);
     },
     status: (): LifeStatus | null => {
       if (!state.settings.enabled) return null;

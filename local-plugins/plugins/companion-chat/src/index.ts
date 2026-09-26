@@ -23,7 +23,10 @@ const plugin: CyrenePlugin = {
     if (ctx.id !== CHAT_ID) throw new Error("插件 ID 不匹配");
     const storage = strictStorage(ctx);
     const models = createModelService({ ...ctx, storage });
-    const life = createLifeContext(storage);
+    const life = createLifeContext(storage, Date.now, {
+      generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 2048, timeoutMs: 90_000 }),
+      stopSignal: ctx.signal,
+    });
     ctx.registerIpc("life-status", () => life.status());
     const persona = createPersonaService();
     const worldbook = createWorldbook(storage);
@@ -409,7 +412,7 @@ const plugin: CyrenePlugin = {
     registerUi(ctx, async (action, data) => {
       switch (action) {
         case "state": return { chat: chat.view(), model: await models.view(), memoryEnabled, proactive: proactive.view(), screenMonitor: screenMonitor.view(), life: life.view(), worldbook: worldbook.view() };
-        case "save-model": if (chat.view().busy || maintenance || proactive.view().busy) throw new Error("请等待当前模型请求结束"); return models.save(data);
+        case "save-model": if (chat.view().busy || maintenance || proactive.view().busy || life.view().planning.busy) throw new Error("请等待当前模型请求结束"); return models.save(data);
         case "save-memory-link": {
           if (chat.view().busy || maintenance || proactive.view().busy || typeof data?.enabled !== "boolean") throw new Error("记忆联动设置无效或当前正忙");
           storage.set("memory-link", { enabled: data.enabled }); memoryEnabled = data.enabled; return { enabled: memoryEnabled };
@@ -423,6 +426,17 @@ const plugin: CyrenePlugin = {
           if (chat.view().busy || maintenance || proactive.view().busy) throw new Error("请等待当前模型请求结束");
           return life.configure(data?.enabled, data?.importantDatesText);
         }
+        case "life-state": return life.view();
+        case "life-planning-settings": {
+          if (typeof data?.enabled !== "boolean") throw new Error("生活规划设置无效");
+          return life.configurePlanning(data.enabled);
+        }
+        case "life-plan": {
+          if (data?.kind !== "daily" && data?.kind !== "refine") throw new Error("生活规划类型无效");
+          if (chat.view().busy || maintenance || proactive.view().busy) throw new Error("请等待当前模型请求结束");
+          return life.plan(data.kind);
+        }
+        case "life-plan-cancel": return life.cancelPlanning();
         case "new": return chat.createSession();
         case "send": {
           if (maintenance) throw new Error("请先等待或取消记忆提取");
