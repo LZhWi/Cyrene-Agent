@@ -1,6 +1,7 @@
 import type { PluginLlmMessage, PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import { advanceDynamics, createDynamics, LIFE_REST_ACTIVITY, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
 import { buildLifePlanningMessages, parseLifePlan, type LifePlan, type LifePlanningInput } from "./life-planning";
+import { rebuildLifeDiary, reconcileLifeJournal, saveLifeGoal, setLifeGoalStatus, validateJournal, type LifeJournal } from "./life-journal";
 
 const SETTINGS_KEY = "life-context-settings";
 const CONTINUITY_KEY = "life-continuity";
@@ -11,6 +12,7 @@ const CURSOR_CHECKPOINT_MS = 15 * 60 * 1000;
 export interface ImportantDate {
   date: string;
   label: string;
+  remind?: boolean;
 }
 
 interface LifeContextSettings {
@@ -72,6 +74,7 @@ interface LifeState {
   self: LifeDynamics;
   pendingSegments: ActivitySegment[];
   planning: LifePlanningState;
+  journal: LifeJournal;
 }
 
 type PlanningKind = LifePlanningInput["kind"];
@@ -233,6 +236,7 @@ function validateState(value: unknown): LifeState {
     || !validTimestamp(state.cursorAt) || !validTimestamp(state.recordAfterAt) || state.recordAfterAt > state.cursorAt) {
     throw new Error("生活状态损坏，拒绝覆盖");
   }
+  const events = validateEvents(state.events, false, state.cursorAt, state.revision);
   const legacyDynamics = state.self === undefined && state.pendingSegments === undefined;
   const self = legacyDynamics ? createDynamics(state.cursorAt) : validateDynamics(state.self, state.cursorAt);
   const pendingSegments = legacyDynamics ? [] : state.pendingSegments;
@@ -245,7 +249,12 @@ function validateState(value: unknown): LifeState {
   }
   return { ...structuredClone(state), self, pendingSegments: structuredClone(pendingSegments), settings: validateSettings(state.settings),
     planning: validatePlanning(state.planning, state.revision),
-    events: validateEvents(state.events, false, state.cursorAt, state.revision) };
+    journal: validateJournal(state.journal, events, state.cursorAt, state.revision), events };
+}
+
+function reconcileJournal(state: LifeState): LifeState {
+  return { ...state, journal: reconcileLifeJournal(state.journal, state.events, state.cursorAt, state.revision + 1,
+    localDateKey(new Date(state.cursorAt))) };
 }
 
 function advanceContinuity(state: LifeState, at: number, runtimeStartedAt: number): LifeState {
@@ -376,7 +385,8 @@ function validateImportantDate(value: unknown): value is ImportantDate {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
   return validDate(item.date, true)
-    && typeof item.label === "string" && item.label.trim().length > 0 && item.label.length <= 200;
+    && typeof item.label === "string" && item.label.trim().length > 0 && item.label.length <= 200
+    && (item.remind === undefined || typeof item.remind === "boolean");
 }
 
 function validateSettings(value: unknown): LifeContextSettings {
@@ -436,7 +446,8 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
   return { selected: [], requestedPast: false };
 }
 
-function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, planning: LifePlanningState, query: string): string {
+function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, planning: LifePlanningState,
+  journal: LifeJournal, query: string, proactive = false): string {
   const date = scheduleDate(now);
   const dateKey = localDateKey(now);
   const slots = buildDaySlots(dateKey);
@@ -458,13 +469,31 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
       return `${pad(start.getHours())}:${pad(start.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}：${window.activities.join("、")}`;
     }));
   const monthDay = dateKey.slice(5);
-  const specials = dates.filter((item) => item.date === dateKey || item.date === monthDay).map((item) => item.label);
+  const specials = dates.filter((item) => (!proactive || item.remind !== false) && (item.date === dateKey || item.date === monthDay)).map((item) => item.label);
   if (specials.length > 0) lines.push(`今天对你们来说是特别的日子：${specials.join("；")}。`);
   const history = selectLifeEvents(events, now, query);
   if (history.selected.length) lines.push("[角色世界生活记录]",
     ...history.selected.map((event) => `${event.date} ${event.text}（${event.status === "inferred"
       ? "离线推演，不能当作确定经历" : event.source === "legacy_schedule" ? "旧版模拟记录，未区分在线与离线" : "运行期间已发生的模拟活动"}）`));
   else if (history.requestedPast) lines.push("[生活记录] 所问时段没有逐项保存的活动；不要编造具体经历。");
+  if (/日记/.test(query)) {
+    const requested = /\d{4}-\d{2}-\d{2}/.exec(query)?.[0]
+      ?? (/昨天|前天/.test(query) ? localDateKey(new Date(date.getFullYear(), date.getMonth(), date.getDate() - (/前天/.test(query) ? 2 : 1), 12))
+        : /今天|今日/.test(query) ? dateKey : undefined);
+    const diaries = journal.diaries.filter((diary) => diary.status === "active" && diary.updatedAt <= now.getTime() && (!requested || diary.date === requested))
+      .sort((left, right) => right.date.localeCompare(left.date)).slice(0, 2);
+    if (diaries.length) lines.push("[角色日记]", ...diaries.map((diary) => `${diary.date}：${diary.summary.slice(0, 700)}`));
+    else lines.push("[角色日记] 所问时段没有有效日记，不补造经历。");
+  }
+  if (/目标|打算|进展/.test(query)) {
+    const rank = { active: 0, paused: 1, completed: 2, cancelled: 3 };
+    const status = { active: "进行中", paused: "已暂停", completed: "已完成", cancelled: "已取消" };
+    const goals = journal.goals.filter((goal) => goal.status !== "cancelled" && (!proactive || goal.remind))
+      .sort((left, right) => rank[left.status] - rank[right.status] || right.updatedAt - left.updatedAt).slice(0, 3);
+    if (goals.length) lines.push("[角色目标]", ...goals.map((goal) => `${goal.title}：${goal.activity}（${status[goal.status]}，${goal.eventRefs.length}条相关模拟活动记录）`));
+    else lines.push("[角色目标] 当前没有设置的目标，不自行补造。");
+  }
+  if (/日记|目标|打算|进展/.test(query)) lines.push("日记和目标属于角色生活，不能作为用户事实或真实外部行动的证据；活动记录不会自动证明目标已完成。");
   lines.push(
     "使用规则：这份日程是你的背景设定，不是让你播报的内容。默认规则就一条：**用户没问你在干嘛、当前话题和你的生活也不相关时，不要提你的日程**。"
     + "例外只有两个：一：当你主动给用户发消息时，最多自然地提到一条你的日程；二：当用户主动问起你的生活与日程、或当前话题和你的生活与日程强相关时，才展开说。"
@@ -493,7 +522,8 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       : validateLegacyContinuity(oldContinuity);
     state = { version: 2, revision: 0,
       settings: oldSettings === undefined ? { version: 1, enabled: true, importantDates: [] } : validateSettings(oldSettings),
-      ...continuity, recordAfterAt: 0, self: createDynamics(continuity.cursorAt), pendingSegments: [], planning: emptyPlanning() };
+      ...continuity, recordAfterAt: 0, self: createDynamics(continuity.cursorAt), pendingSegments: [], planning: emptyPlanning(),
+      journal: validateJournal(undefined, continuity.events, continuity.cursorAt, 0) };
   }
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
@@ -516,17 +546,25 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     if (stopped || !state.settings.enabled) return state.events;
     const at = now();
     if (!validTimestamp(at)) throw new Error("生活时钟无效");
-    const next = advanceContinuity(state, at, runtimeStartedAt ?? at);
+    const next = reconcileJournal(advanceContinuity(state, at, runtimeStartedAt ?? at));
     if (!persisted || next.events.length !== state.events.length || at - state.cursorAt >= CURSOR_CHECKPOINT_MS
       || next.self.updatedAt !== state.self.updatedAt || next.self.activity !== state.self.activity
-      || next.self.recovering !== state.self.recovering) save(next);
+      || next.self.recovering !== state.self.recovering || JSON.stringify(next.journal) !== JSON.stringify(state.journal)) save(next);
     runtimeStartedAt ??= at;
     return state.events;
   }
 
   const view = () => ({ ...structuredClone(state.settings), importantDatesText: formatImportantDates(state.settings.importantDates),
     continuity: structuredClone({ version: state.version, revision: state.revision, cursorAt: state.cursorAt, events: state.events }),
-    self: structuredClone(state.self), planning: { ...structuredClone(state.planning), busy: Boolean(currentPlanning) } });
+    self: structuredClone(state.self), planning: { ...structuredClone(state.planning), busy: Boolean(currentPlanning) },
+    journal: structuredClone(state.journal), activities: activityCatalog() });
+
+  function journalChangeState(): LifeState {
+    if (stopped) throw new Error("生活系统已停止，拒绝写入");
+    const at = now();
+    if (!validTimestamp(at) || at < state.cursorAt) throw new Error("生活时钟无效或已倒退，暂不修改日记与目标");
+    return reconcileJournal(state.settings.enabled ? advanceContinuity(state, at, runtimeStartedAt ?? at) : { ...state, cursorAt: at });
+  }
 
   function result(kind: PlanningKind, status: PlanningStatus, message: string): PlanningResult {
     const at = now();
@@ -570,7 +608,9 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       plans: state.planning.plans.filter((item) => item.date >= cutoff) } });
     const input: LifePlanningInput = { kind, date, revision: state.revision, windows, activities: activityCatalog(),
       self: { energy: state.self.energy, focus: state.self.focus, restNeed: state.self.restNeed,
-        activity: state.self.activity, habits: { ...state.self.habits } } };
+        activity: state.self.activity, habits: { ...state.self.habits } },
+      goals: state.journal.goals.filter((goal) => goal.status === "active").slice(0, 3)
+        .map(({ id, title, activity }) => ({ id, title, activity })) };
     const controller = new AbortController();
     currentPlanning = { controller, id: attempt.id, kind };
     const signal = options.stopSignal ? AbortSignal.any([controller.signal, options.stopSignal]) : controller.signal;
@@ -637,7 +677,10 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     configure(enabled: unknown, importantDatesText: unknown) {
       if (stopped) throw new Error("生活系统已停止，拒绝写入");
       if (typeof enabled !== "boolean") throw new Error("生活日程设置无效");
-      const settings: LifeContextSettings = { version: 1, enabled, importantDates: parseImportantDates(importantDatesText) };
+      const settings: LifeContextSettings = { version: 1, enabled, importantDates: parseImportantDates(importantDatesText).map((item) => {
+        const previous = state.settings.importantDates.find((saved) => saved.date === item.date && saved.label === item.label);
+        return previous?.remind === undefined ? item : { ...item, remind: previous.remind };
+      }) };
       const at = now();
       if (!validTimestamp(at)) throw new Error("生活时钟无效");
       const changedEnabled = enabled !== state.settings.enabled;
@@ -648,8 +691,8 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
         const resetAt = Math.floor(cursorAt / LIFE_STEP_MS) * LIFE_STEP_MS;
         const reset = { ...advanced.self, updatedAt: resetAt, activitySince: resetAt, activity: null, resting: true };
         const self = changedEnabled ? enabled ? advanceDynamics(reset, cursorAt, (activityAt) => plannedActivity(advanced, activityAt)).state : reset : advanced.self;
-        save({ ...advanced, settings, cursorAt, self, pendingSegments: changedEnabled ? [] : advanced.pendingSegments,
-          recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt });
+        save(reconcileJournal({ ...advanced, settings, cursorAt, self, pendingSegments: changedEnabled ? [] : advanced.pendingSegments,
+          recordAfterAt: changedEnabled ? cursorAt : advanced.recordAfterAt }));
       }
       if (enabled) runtimeStartedAt ??= at;
       return view();
@@ -669,18 +712,48 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       if (currentPlanning && !stopped) finishPlanning(currentPlanning.id, result(currentPlanning.kind, "cancelled", "生活规划已取消"));
       return view();
     },
+    saveGoal(input: unknown) {
+      const next = journalChangeState();
+      const goals = saveLifeGoal(next.journal.goals, input, next.cursorAt, state.revision + 1, activityCatalog());
+      save(reconcileJournal({ ...next, journal: { ...next.journal, goals } }));
+      if (state.settings.enabled) runtimeStartedAt ??= state.cursorAt;
+      return view();
+    },
+    setGoalStatus(id: string, status: "active" | "paused" | "completed" | "cancelled") {
+      const next = journalChangeState();
+      const goals = setLifeGoalStatus(next.journal.goals, id, status, next.cursorAt, state.revision + 1);
+      save(reconcileJournal({ ...next, journal: { ...next.journal, goals } }));
+      if (state.settings.enabled) runtimeStartedAt ??= state.cursorAt;
+      return view();
+    },
+    rebuildDiary(date: string) {
+      const next = journalChangeState();
+      const journal = rebuildLifeDiary(next.journal, date, next.events, next.cursorAt, state.revision + 1);
+      save({ ...next, journal });
+      if (state.settings.enabled) runtimeStartedAt ??= state.cursorAt;
+      return view();
+    },
+    setImportantDateReminder(date: string, label: string, remind: boolean) {
+      if (stopped) throw new Error("生活系统已停止，拒绝写入");
+      if (typeof remind !== "boolean" || typeof date !== "string" || typeof label !== "string") throw new Error("重要日期提醒设置无效");
+      const item = state.settings.importantDates.find((item) => item.date === date && item.label === label);
+      if (!item) throw new Error("重要日期不存在");
+      if ((item.remind !== false) !== remind) save({ ...state, settings: { ...state.settings,
+        importantDates: state.settings.importantDates.map((item) => item.date === date && item.label === label ? { ...item, remind } : item) } });
+      return view();
+    },
     revokeEvent(id: string) {
       if (stopped) throw new Error("生活系统已停止，拒绝写入");
       const event = state.events.find((item) => item.id === id);
       if (!event) throw new Error("生活记录不存在");
-      if (event.status !== "revoked") save({ ...state, events: state.events.map((item) => item.id === id
-        ? { ...item, status: "revoked", revision: state.revision + 1 } : item) });
+      if (event.status !== "revoked") save(reconcileJournal({ ...state, events: state.events.map((item) => item.id === id
+        ? { ...item, status: "revoked", revision: state.revision + 1 } : item) }));
       return view();
     },
-    build: (query = "") => {
+    build: (query = "", contextOptions: { proactive?: boolean } = {}) => {
       if (!state.settings.enabled) return "";
       advance();
-      return buildContext(new Date(now()), state.settings.importantDates, state.events, state.self, state.planning, query);
+      return buildContext(new Date(now()), state.settings.importantDates, state.events, state.self, state.planning, state.journal, query, contextOptions.proactive);
     },
     status: (): LifeStatus | null => {
       if (!state.settings.enabled) return null;

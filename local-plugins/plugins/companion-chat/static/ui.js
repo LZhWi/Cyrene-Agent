@@ -9,6 +9,8 @@ let lifeSettings = { enabled: true, importantDatesText: "" };
 let lifeActionPending = false;
 let lifeSettingsPending = false;
 let lifeRefreshTimer;
+let lifeJournalPending = false;
+let lifeEditingGoalId;
 async function invoke(action, data) {
   const result = await window.companion.invoke(action, data);
   if (!result.ok) throw new Error(result.error);
@@ -140,7 +142,102 @@ function renderLife() {
     $("life-events").append(row);
   }
   if (!$("life-events").childElementCount) $("life-events").textContent = "还没有生活记录。";
+  renderLifeJournal();
 }
+function renderLifeJournal() {
+  const journal = lifeSettings.journal ?? { goals: [], diaries: [] };
+  const activities = lifeSettings.activities ?? [];
+  const select = $("life-goal-activity");
+  if (JSON.stringify([...select.options].map((option) => option.value)) !== JSON.stringify(activities)) {
+    const selectedActivity = select.value;
+    select.replaceChildren();
+    for (const activity of activities) {
+      const option = document.createElement("option"); option.value = activity; option.textContent = activity; select.append(option);
+    }
+    if (activities.includes(selectedActivity)) select.value = selectedActivity;
+  }
+  for (const id of ["life-goal-title", "life-goal-activity", "life-goal-due", "life-goal-remind", "life-goal-reset", "life-diary-rebuild"]) $(id).disabled = lifeJournalPending;
+  $("life-goal-save").textContent = lifeEditingGoalId ? "保存目标修改" : "创建目标";
+  $("life-goal-save").disabled = lifeJournalPending || !activities.length || (!lifeEditingGoalId && journal.goals.filter((goal) => goal.status === "active").length >= 3);
+  $("life-goals").replaceChildren();
+  const goalStatuses = { active: "进行中", paused: "已暂停", completed: "手动确认完成", cancelled: "已取消" };
+  for (const goal of journal.goals) {
+    const row = document.createElement("section"), title = document.createElement("strong"), detail = document.createElement("p");
+    row.className = "life-record";
+    title.textContent = `${goal.title} · ${goalStatuses[goal.status] ?? goal.status}`;
+    detail.textContent = `${goal.activity}${goal.dueDate ? ` · 期限 ${goal.dueDate}` : ""} · ${goal.remind !== false ? "允许提醒" : "不提醒"} · 关联已发生片段 ${goal.eventRefs?.length ?? 0} 条（不表示目标完成）`;
+    row.append(title, detail);
+    if (goal.status === "active" || goal.status === "paused") {
+      const actions = document.createElement("div"); actions.className = "actions";
+      const addButton = (label, action, handler) => {
+        const button = document.createElement("button"); button.type = "button"; button.textContent = label;
+        button.dataset.goalId = goal.id; button.dataset.action = action; button.disabled = lifeJournalPending;
+        button.onclick = handler; actions.append(button);
+      };
+      addButton("编辑", "edit", () => {
+        lifeEditingGoalId = goal.id;
+        $("life-goal-title").value = goal.title; select.value = goal.activity;
+        $("life-goal-due").value = goal.dueDate ?? ""; $("life-goal-remind").checked = goal.remind !== false;
+        renderLifeJournal(); $("life-goal-title").focus();
+      });
+      const changeStatus = async (status) => {
+        if (await updateLifeJournal("life-goal-status", { id: goal.id, status }, "目标状态已保存。") && lifeEditingGoalId === goal.id) resetLifeGoal();
+      };
+      addButton(goal.status === "active" ? "暂停" : "恢复", "pause-resume", () => changeStatus(goal.status === "active" ? "paused" : "active"));
+      addButton("手动完成", "complete", () => changeStatus("completed"));
+      addButton("取消目标", "cancel", () => changeStatus("cancelled"));
+      row.append(actions);
+    }
+    $("life-goals").append(row);
+  }
+  if (!journal.goals.length) $("life-goals").textContent = "还没有目标。模型不会替你创建目标。";
+  $("life-diaries").replaceChildren();
+  const eventsById = new Map((lifeSettings.continuity?.events ?? []).map((event) => [event.id, event]));
+  for (const diary of [...journal.diaries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7)) {
+    const row = document.createElement("section"), title = document.createElement("strong"), source = document.createElement("p"), summary = document.createElement("p");
+    row.className = "life-record"; title.textContent = diary.date;
+    const sources = (diary.eventRefs ?? []).map((ref) => eventsById.get(ref.id));
+    const runtime = sources.filter((event) => event?.status === "materialized" && event.source === "runtime_schedule").length;
+    const inferred = sources.filter((event) => event?.status === "inferred").length;
+    const legacy = sources.filter((event) => event?.source === "legacy_schedule").length;
+    source.textContent = diary.status === "revoked" ? "已撤销：来源已失效。" : `来源 ${sources.length} 个片段：已发生模拟 ${runtime} · 离线推演 ${inferred} · 旧版记录 ${legacy}。`;
+    summary.textContent = diary.status === "revoked" ? "这篇日记不再用于生活背景。" : diary.summary;
+    row.append(title, source, summary); $("life-diaries").append(row);
+  }
+  if (!journal.diaries.length) $("life-diaries").textContent = "还没有可整理的生活日记。";
+  if (!$("life-diary-date").value) $("life-diary-date").value = lifeDate();
+  $("life-dates").replaceChildren();
+  for (const date of lifeSettings.importantDates ?? []) {
+    const label = document.createElement("label"), checkbox = document.createElement("input"), text = document.createElement("span");
+    label.className = "life-toggle"; checkbox.type = "checkbox"; checkbox.checked = date.remind !== false; checkbox.disabled = lifeJournalPending;
+    text.textContent = `${date.date} ${date.label}`;
+    checkbox.onchange = () => updateLifeJournal("life-date-reminder", { date: date.date, label: date.label, remind: checkbox.checked }, "日期提醒已保存。");
+    label.append(checkbox, text); $("life-dates").append(label);
+  }
+  if (!$("life-dates").childElementCount) $("life-dates").textContent = "尚未设置重要日期。";
+}
+function resetLifeGoal() {
+  lifeEditingGoalId = undefined;
+  $("life-goal-title").value = ""; $("life-goal-due").value = ""; $("life-goal-remind").checked = true;
+  renderLifeJournal();
+}
+async function updateLifeJournal(action, data, successMessage) {
+  if (lifeJournalPending) return false;
+  lifeJournalPending = true; renderLifeJournal();
+  let saved = false, message;
+  try { lifeSettings = await invoke(action, data); saved = true; message = successMessage; }
+  catch (e) { message = e.message; }
+  finally { lifeJournalPending = false; renderLife(); $("life-journal-status").textContent = message; }
+  return saved;
+}
+$("life-goal-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const input = { ...(lifeEditingGoalId ? { id: lifeEditingGoalId } : {}), title: $("life-goal-title").value,
+    activity: $("life-goal-activity").value, dueDate: $("life-goal-due").value || null, remind: $("life-goal-remind").checked };
+  if (await updateLifeJournal("life-goal-save", input, "目标已保存，完成状态由你手动确认。")) resetLifeGoal();
+};
+$("life-goal-reset").onclick = resetLifeGoal;
+$("life-diary-rebuild").onclick = () => updateLifeJournal("life-diary-rebuild", { date: $("life-diary-date").value }, "日记已按有效来源重建，未调用模型。");
 async function refreshLife() { lifeSettings = await invoke("life-state"); renderLife(); }
 $("life-open").onclick = async () => {
   try {

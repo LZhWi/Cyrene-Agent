@@ -318,7 +318,7 @@ const plugin: CyrenePlugin = {
       toneRules: () => persona.buildTone(),
       generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 2048, timeoutMs: 90_000 }),
       systemPrompt: () => persona.buildProactive(),
-      lifeContext: (query) => life.build(query),
+      lifeContext: (query) => life.build(query, { proactive: true }),
       screenContext: () => screenMonitor.latestContext(),
       presence: () => {
         if (!userPresence) throw new Error("当前宿主不支持用户在场状态");
@@ -368,6 +368,7 @@ const plugin: CyrenePlugin = {
       const nextImportantDatesText = preferences.companionImportantDatesText ?? "";
       if (currentLife.enabled !== nextLifeEnabled || currentLife.importantDatesText !== nextImportantDatesText) {
         life.configure(nextLifeEnabled, nextImportantDatesText);
+        proactive.cancel();
       }
     });
     const offTurnStarted = ctx.events.on<PluginTurnStartedEvent>("host:turn:started", (event) => {
@@ -424,7 +425,9 @@ const plugin: CyrenePlugin = {
         case "save-screen-monitor-settings": return screenMonitor.configure(data?.enabled);
         case "save-life-settings": {
           if (chat.view().busy || maintenance || proactive.view().busy) throw new Error("请等待当前模型请求结束");
-          return life.configure(data?.enabled, data?.importantDatesText);
+          const result = life.configure(data?.enabled, data?.importantDatesText);
+          proactive.cancel();
+          return result;
         }
         case "life-state": return life.view();
         case "life-planning-settings": {
@@ -437,6 +440,22 @@ const plugin: CyrenePlugin = {
           return life.plan(data.kind);
         }
         case "life-plan-cancel": return life.cancelPlanning();
+        case "life-goal-save": {
+          const result = life.saveGoal(data);
+          proactive.cancel();
+          return result;
+        }
+        case "life-goal-status": {
+          const result = life.setGoalStatus(data?.id, data?.status);
+          proactive.cancel();
+          return result;
+        }
+        case "life-diary-rebuild": return life.rebuildDiary(data?.date);
+        case "life-date-reminder": {
+          const result = life.setImportantDateReminder(data?.date, data?.label, data?.remind);
+          proactive.cancel();
+          return result;
+        }
         case "new": return chat.createSession();
         case "send": {
           if (maintenance) throw new Error("请先等待或取消记忆提取");
