@@ -47,7 +47,7 @@ describe("生活规划实际插件入口", () => {
       const result = await invoke("life-plan", { kind: "daily" });
       expect(result).toMatchObject({ ok: true, data: { status: "applied" } });
       expect(generateText).toHaveBeenCalledOnce();
-      expect(generateText.mock.calls[0][1]).toMatchObject({ maxTokens: 4096, timeoutMs: 90_000, reasoning: "off" });
+      expect(generateText.mock.calls[0][1]).toMatchObject({ maxTokens: 25_600, timeoutMs: 90_000, reasoning: "on" });
       const current = await invoke("life-state");
       expect(current.data.planning.plans).toHaveLength(1);
       expect(current.data.planning.enabled).toBe(false);
