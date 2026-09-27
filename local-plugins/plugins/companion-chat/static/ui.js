@@ -142,6 +142,11 @@ function renderLife() {
       : event.source === "legacy_schedule" ? "旧版模拟记录" : "已发生的模拟活动";
     description.textContent = `${event.date} · ${source} · ${event.text}`;
     row.append(description);
+    if (event.status !== "revoked" && event.modelDetail) {
+      const detail = document.createElement("p");
+      detail.textContent = `模型创作的角色世界细节：${event.modelDetail}`;
+      row.append(detail);
+    }
     if (event.status !== "revoked") {
       const revoke = document.createElement("button"); revoke.type = "button";
       revoke.textContent = "撤销记录"; revoke.dataset.eventId = event.id; revoke.disabled = lifeJournalPending;

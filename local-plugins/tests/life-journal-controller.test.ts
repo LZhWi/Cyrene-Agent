@@ -118,7 +118,9 @@ describe("角色日记与目标接线", () => {
     const generate = vi.fn(async (messages: PluginLlmMessage[]) => {
       const input = JSON.parse(messages.at(-1)!.content) as LifePlanningInput;
       return JSON.stringify({ kind: input.kind, date: input.date, revision: input.revision,
-        windows: input.windows.map((window) => ({ id: window.id, activities: [input.activities[0]] })) });
+        decision: "revise", diary: null, details: [],
+        windows: input.windows.map((window) => ({ id: window.id,
+          segments: [{ activity: "读《书页随笔》", minutes: (window.endAt - window.startAt) / 60_000 }] })) });
     });
     const life = createLifeContext(f.storage, () => time(1, 9), { generate });
     life.saveGoal({ title: "活跃书页目标", activity: "读书" });

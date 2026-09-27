@@ -63,6 +63,7 @@ export interface LifeEvent {
   status: "materialized" | "inferred" | "revoked";
   source: "legacy_schedule" | "runtime_schedule" | "offline_inference";
   revision: number;
+  modelDetail?: string;
 }
 
 interface LifeState {
@@ -222,6 +223,9 @@ function validateEvents(value: unknown, legacy: boolean, cursorAt: number, revis
       || !validDate(event.date) || typeof event.text !== "string" || !event.text.trim()
       || !validTimestamp(event.startAt) || !validTimestamp(event.endAt) || event.startAt >= event.endAt
       || event.worldLayer !== "simulated_world"
+      || (event.modelDetail !== undefined && (legacy || event.status !== "materialized" || event.source !== "runtime_schedule"
+        || typeof event.modelDetail !== "string" || !event.modelDetail.trim() || event.modelDetail.length > 300
+        || event.modelDetail.trim() !== event.modelDetail || /[\r\n\u0000-\u001f<>]/.test(event.modelDetail)))
       || (legacy ? event.status !== "materialized"
         : !["materialized", "inferred", "revoked"].includes(event.status)
           || !["legacy_schedule", "runtime_schedule", "offline_inference"].includes(event.source)
@@ -446,7 +450,7 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
     .sort((left, right) => left.endAt - right.endAt);
   if (writtenDate && writtenDate > today) return { selected: [], requestedPast: false };
   if (writtenDate === today || /今天|今日|刚才/.test(query)) {
-    const asksCompleted = /做了|做过|干了|干过|发生|完成|经历|刚才/.test(query);
+    const asksCompleted = /做了|做过|干了|干过|发生|完成|经历|刚才|遇到|碰到|读了/.test(query);
     return { selected: asksCompleted ? available.filter((event) => event.date === today) : [], requestedPast: asksCompleted };
   }
   const requestedDate = writtenDate ?? (/前天/.test(query) ? relativeDate(2) : /昨天/.test(query) ? relativeDate(1) : undefined);
@@ -460,6 +464,10 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
   }
   if (/最近|之前|这几天|以前|过去|做过什么|做了什么|干了什么/.test(query)) {
     return { selected: available.filter((event) => event.date < today || (event.id.startsWith("gap:") && event.startAt < lifeDay.getTime())).slice(-6), requestedPast: true };
+  }
+  if (/散步|遇到|碰到|读了什么|读什么书|哪本书/.test(query)) {
+    const activity = /散步/.test(query) ? /散步/ : /读|阅读|书/.test(query) ? /读|阅读|书/ : /./;
+    return { selected: available.filter((event) => activity.test(event.text)).slice(-3), requestedPast: true };
   }
   return { selected: [], requestedPast: false };
 }
@@ -505,7 +513,8 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
   const history = selectLifeEvents(events, now, query);
   if (history.selected.length) lines.push("[角色世界生活记录]",
     ...history.selected.map((event) => `${event.date} ${event.text}（${event.status === "inferred"
-      ? "离线推演，不能当作确定经历" : event.source === "legacy_schedule" ? "旧版模拟记录，未区分在线与离线" : "运行期间已发生的模拟活动"}）`));
+      ? "离线推演，不能当作确定经历" : event.source === "legacy_schedule" ? "旧版模拟记录，未区分在线与离线" : "运行期间已发生的模拟活动"}）`
+      + (event.modelDetail ? `；模型创作的角色世界细节：${event.modelDetail}` : "")));
   else if (history.requestedPast) lines.push("[生活记录] 所问时段没有逐项保存的活动；不要编造具体经历。");
   if (/日记/.test(query)) {
     const requested = /\d{4}-\d{2}-\d{2}/.exec(query)?.[0]
@@ -635,7 +644,10 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       ? reconcileJournal(advanceContinuity(state, outcome.at, runtimeBoundary(outcome.at))) : state;
     const journal = decision?.diary ? applyModelDiary(base.journal, decision.diary.date, decision.diary.summary,
       decision.diary.eventIds, base.events, base.cursorAt, state.revision + 1) : base.journal;
-    save({ ...base, journal, planning: { ...base.planning, lastResult: outcome,
+    const details = new Map(decision?.details?.map((detail) => [detail.eventId, detail.text]) ?? []);
+    const events = details.size ? base.events.map((event) => details.has(event.id) && event.status === "materialized"
+      && event.source === "runtime_schedule" && !event.modelDetail ? { ...event, modelDetail: details.get(event.id) } : event) : base.events;
+    save({ ...base, events, journal, planning: { ...base.planning, lastResult: outcome,
       attempts: base.planning.attempts.map((item) => item.id === id ? { ...item, status: outcome.status as PlanningAttempt["status"] } : item),
       plans: decision?.plan ? [...base.planning.plans, decision.plan] : base.planning.plans } });
     observeRuntime(base.cursorAt);
@@ -681,7 +693,9 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
         .map(({ id, title, activity }) => ({ id, title, activity })),
       recentDiaries: state.journal.diaries.filter((diary) => diary.status === "active").slice(-3)
         .map(({ date, summary }) => ({ date, summary })),
-      recentEvents: targetEvents.map(({ id, date, text, status }) => ({ id, date, text, status })),
+      recentEvents: targetEvents.map(({ id, date, text, status, modelDetail }) => ({ id, date, text, status, modelDetail })),
+      detailTargets: targetEvents.filter((event) => event.status === "materialized" && event.source === "runtime_schedule"
+        && !event.modelDetail).slice(-3).map(({ id, text }) => ({ id, text })),
       diaryTarget: targetEvents.length ? { date: targetDate, eventIds: targetEvents.map((event) => event.id) } : null };
     const controller = new AbortController();
     currentPlanning = { controller, id: attempt.id, kind };
@@ -837,7 +851,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       const event = state.events.find((item) => item.id === id);
       if (!event) throw new Error("生活记录不存在");
       if (event.status !== "revoked") save(reconcileJournal({ ...state, events: state.events.map((item) => item.id === id
-        ? { ...item, status: "revoked", revision: state.revision + 1 } : item) }));
+        ? { ...item, status: "revoked", revision: state.revision + 1, modelDetail: undefined } : item) }));
       return view();
     },
     build: (query = "", contextOptions: { proactive?: boolean } = {}) => {

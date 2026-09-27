@@ -13,7 +13,9 @@ const { JSDOM } = require("jsdom");
 function validReply(messages: Array<{ content: string }>): string {
   const input = JSON.parse(messages.at(-1)!.content) as LifePlanningInput;
   return JSON.stringify({ kind: input.kind, date: input.date, revision: input.revision,
-    windows: input.windows.map((window) => ({ id: window.id, activities: [input.activities[0]] })) });
+    decision: "revise", diary: null, details: [],
+    windows: input.windows.map((window) => ({ id: window.id,
+      segments: [{ activity: "读《书页随笔》", minutes: (window.endAt - window.startAt) / 60_000 }] })) });
 }
 
 async function withPlugin(generateText: PluginLlmService["generateText"], check: (invoke: (action: string, data?: unknown) => Promise<any>) => Promise<void>) {
