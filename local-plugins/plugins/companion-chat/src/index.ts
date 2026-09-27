@@ -24,7 +24,7 @@ const plugin: CyrenePlugin = {
     const storage = strictStorage(ctx);
     const models = createModelService({ ...ctx, storage });
     const life = createLifeContext(storage, Date.now, {
-      generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 2048, timeoutMs: 90_000 }),
+      generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 4096, timeoutMs: 90_000, reasoning: "off" }),
       recentMessages: async () => (await readRecentChatContext()).ordinaryHistory
         .filter((turn) => turn.role === "user" || turn.role === "model")
         .slice(-12).map((turn) => ({ role: turn.role as "user" | "model", content: turn.content.slice(0, 400) })),

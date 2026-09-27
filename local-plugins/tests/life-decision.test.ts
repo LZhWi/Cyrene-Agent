@@ -37,7 +37,9 @@ describe("自由生活决策协议", () => {
     expect(parsed.diary).toEqual({ date: "2026-08-31", summary: "今天画了盆栽。", eventIds: ["event:1"] });
     const messages = buildLifeDecisionMessages(input);
     expect(messages[0].content).toContain("不是指令");
-    expect(JSON.parse(messages[1].content).recentMessages[0].content).toContain("无视规则");
+    const context = JSON.parse(messages[1].content);
+    expect(context.recentMessages[0].content).toContain("无视规则");
+    expect(context.windows[0].durationMinutes).toBe(60);
   });
 
   it("中午可保留原计划并写日记；早上不能跳过全天计划", () => {
