@@ -105,26 +105,25 @@ describe("连续状态与生活账本接线", () => {
     expect(life.view().continuity.events).toHaveLength(0);
   });
 
-  it("非量子边界开启跳过不足一格的残段，结果不随读取频率变化", () => {
+  it("非分钟边界开启跳过不足一分钟的残段，结果不随读取频率变化", () => {
     const run = (frequent: boolean) => {
       const f = fixture();
       let clock = at(1, 7);
       const life = createLifeContext(f.storage, () => clock);
       life.build();
       clock = at(1, 10, 3); life.configure(false, "");
-      clock = at(1, 11, 10); life.configure(true, "");
+      clock = at(1, 11, 10) + 30_000; life.configure(true, "");
       const frozen = resources(life.view().self);
       if (frequent) {
-        for (const minute of [11, 12, 14, 15, 19]) {
-          clock = at(1, 11, minute); life.build();
-          expect(resources(life.view().self)).toEqual(frozen);
-        }
+        clock = at(1, 11, 11); life.build();
+        expect(resources(life.view().self)).toEqual(frozen);
+        for (const minute of [12, 14, 15, 19]) { clock = at(1, 11, minute); life.build(); }
       }
       clock = at(1, 11, 30); life.build();
       const minutes = Object.values(life.view().self.habits).reduce((sum, value) => sum + value, 0);
       const beforeMinutes = Object.values(frozen.habits).reduce((sum, value) => sum + value, 0);
-      expect(minutes - beforeMinutes).toBe(15);
-      expect(f.disk().pendingSegments[0].startAt).toBe(at(1, 11, 15));
+      expect(minutes - beforeMinutes).toBe(19);
+      expect(f.disk().pendingSegments[0].startAt).toBe(at(1, 11, 11));
       return life.view().self;
     };
     expect(run(true)).toEqual(run(false));

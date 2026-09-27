@@ -29,7 +29,7 @@ describe("生活连续状态的合成时间模拟", () => {
     expect(stillResting.activity).toBe(LIFE_REST_ACTIVITY);
     const recovered = advanceDynamics(stillResting, start + 8 * LIFE_STEP_MS, () => "学习").state;
     expect(recovered).toMatchObject({ activity: "学习", recovering: false, resting: false });
-    expect(recovered.energy).toBeGreaterThanOrEqual(60);
+    expect(recovered.energy).toBeGreaterThan(25);
   });
 
   it("短时计划变化保留三十分钟活动惯性，夜间立即停止日间活动", () => {
@@ -67,6 +67,17 @@ describe("生活连续状态的合成时间模拟", () => {
     expect(resumed.segments).toEqual([]);
     expect(resumed.state.habits).toEqual(original.habits);
     expect(resumed.state.energy).toBe(60);
+  });
+
+  it("普通活动按分钟固定抽样，增量与一次推进完全相同", () => {
+    const start = at(1, 8);
+    const whole = advanceDynamics(createDynamics(start), start + 60 * 60_000, () => "读书").state;
+    let minute = createDynamics(start);
+    for (let index = 1; index <= 60; index += 1) minute = advanceDynamics(minute, start + index * 60_000, () => "读书").state;
+    expect(minute).toEqual(whole);
+    expect(whole.energy).toBeGreaterThan(75 - 20);
+    expect(whole.energy).toBeLessThan(75);
+    expect(whole.habits["读书"]).toBe(60);
   });
 
   it.each([NaN, -1, 101])("损坏的连续指标 %s 拒绝加载", (energy) => {

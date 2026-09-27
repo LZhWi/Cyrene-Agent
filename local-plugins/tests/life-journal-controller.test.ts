@@ -142,9 +142,9 @@ describe("角色日记与目标接线", () => {
     expect(life.build("你好")).not.toContain("寻找蓝色书签");
     expect(life.build("目标进展")).toContain("寻找蓝色书签");
     expect(life.build("目标进展", { proactive: true })).not.toContain("寻找蓝色书签");
-    expect(life.build("昨日日记")).toContain("2026-09-01：");
+    expect(life.build("昨日日记")).toContain("2026-09-01（程序整理");
     expect(life.build("今天日记")).toContain("所问时段没有有效日记");
-    expect(life.build("今天日记")).not.toContain("2026-09-01：");
+    expect(life.build("今天日记")).not.toContain("2026-09-01（");
     expect(life.build("目标进展")).toContain("不能作为用户事实");
     at = time(1, 23);
     expect(life.build("2026-09-01日记")).toContain("所问时段没有有效日记");

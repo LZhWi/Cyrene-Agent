@@ -63,13 +63,17 @@ describe("生活规划调用与预算", () => {
 
   it("预占原子写失败不调用模型，成功后每日一次、细化两次封顶", async () => {
     const f = store(), generate = vi.fn(async (messages: PluginLlmMessage[]) => reply(inputOf(messages)));
-    const life = createLifeContext(f.storage, () => time(1, 9), { generate });
+    let clock = time(1, 9);
+    const life = createLifeContext(f.storage, () => clock, { generate });
     life.build(); f.failNext();
     await expect(life.plan("daily")).rejects.toThrow("模拟原子提交失败");
     expect(generate).not.toHaveBeenCalled();
     expect((await life.plan("daily")).status).toBe("applied");
     expect((await life.plan("daily")).status).toBe("skipped");
+    clock = time(1, 12);
     expect((await life.plan("refine")).status).toBe("applied");
+    expect((await life.plan("refine")).status).toBe("skipped");
+    clock = time(1, 18);
     expect((await life.plan("refine")).status).toBe("applied");
     expect((await life.plan("refine")).status).toBe("skipped");
     expect(generate).toHaveBeenCalledTimes(3);
@@ -94,9 +98,11 @@ describe("生活规划调用与预算", () => {
   it("非法输出消耗尝试额度且保留已接受的未来计划", async () => {
     const f = store();
     const generate = vi.fn(async (messages: PluginLlmMessage[]) => reply(inputOf(messages)));
-    const life = createLifeContext(f.storage, () => time(1, 9), { generate });
+    let clock = time(1, 9);
+    const life = createLifeContext(f.storage, () => clock, { generate });
     await life.plan("daily");
     const plans = life.view().planning.plans;
+    clock = time(1, 12);
     generate.mockResolvedValueOnce('{"story":"我已经读取了用户文件"}');
     expect((await life.plan("refine")).status).toBe("invalid");
     expect(life.view().planning.plans).toEqual(plans);
@@ -127,7 +133,7 @@ describe("生活规划未来生效与生命周期", () => {
     const life = createLifeContext(f.storage, () => clock, { generate });
     life.build();
     const before = life.view();
-    expect((await life.plan("daily")).status).toBe("applied");
+    expect((await life.plan("refine")).status).toBe("applied");
     const input = inputOf(generate.mock.calls[0][0]);
     expect(input.windows[0].startAt).toBe(time(1, 13, 30));
     expect(input.windows.every((window) => window.endAt - window.startAt >= 60 * 60_000)).toBe(true);
@@ -136,10 +142,11 @@ describe("生活规划未来生效与生命周期", () => {
     expect(life.build()).toContain("后续计划调整");
     clock = time(1, 14);
     life.build();
-    expect(life.status()?.text).toBe("正在读书");
+    expect(life.view().planning.plans[0].windows[0].activities).toEqual(["读书"]);
+    expect(life.status()?.resting).toBe(true);
     clock = time(1, 18);
     life.build();
-    expect(life.view().continuity.events.find((event) => event.id === "2026-09-01:下午")?.text).toContain("读书");
+    expect(life.view().continuity.events.find((event) => event.id === "2026-09-01:下午")?.text).toContain("休息片刻");
   });
 
   it.each(["passed", "rollback", "revision", "date"] as const)("生成中%s变化使结果过期", async (change) => {
@@ -176,15 +183,15 @@ describe("生活规划未来生效与生命周期", () => {
 
   it("细化至少留足30分钟，临近末尾没有窗口时不调用模型", async () => {
     const f = store(), generate = vi.fn(async (messages: PluginLlmMessage[]) => reply(inputOf(messages)));
-    let clock = time(1, 11, 40);
+    let clock = time(1, 12);
     const life = createLifeContext(f.storage, () => clock, { generate });
     await life.plan("refine");
     let input = inputOf(generate.mock.calls[0][0]);
-    expect(input.windows[0]).toMatchObject({ startAt: time(1, 12), endAt: time(1, 12, 30) });
-    clock = time(1, 17, 40);
+    expect(input.windows[0]).toMatchObject({ startAt: time(1, 12, 15), endAt: time(1, 18) });
+    clock = time(1, 18);
     await life.plan("refine");
     input = inputOf(generate.mock.calls[1][0]);
-    expect(input.windows[0]).toMatchObject({ startAt: time(1, 18), endAt: time(1, 18, 30) });
+    expect(input.windows[0]).toMatchObject({ startAt: time(1, 18, 15), endAt: time(1, 23) });
     clock = time(2, 22, 40);
     expect((await life.plan("refine")).status).toBe("skipped");
     expect(generate).toHaveBeenCalledTimes(2);
@@ -222,7 +229,7 @@ describe("生活规划自动触发", () => {
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
     expect(generate).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(5 * 60 * 60_000);
-    expect(generate.mock.calls.map(([messages]) => inputOf(messages).kind)).toEqual(["daily", "refine"]);
+    expect(generate.mock.calls.map(([messages]) => inputOf(messages).kind)).toEqual(["refine", "refine"]);
     life.stop();
   });
 

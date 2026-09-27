@@ -112,23 +112,24 @@ function renderLife() {
   const planningBusy = lifeActionPending || Boolean(planning.busy);
   const today = lifeDate();
   const attempts = (planning.attempts ?? []).filter((attempt) => attempt.date === today);
-  const daily = attempts.filter((attempt) => attempt.kind === "daily").length;
-  const refine = attempts.filter((attempt) => attempt.kind === "refine").length;
+  const hour = new Date().getHours();
+  const phase = hour >= 6 && hour < 12 ? "morning" : hour >= 12 && hour < 18 ? "afternoon" : hour >= 18 && hour < 23 ? "evening" : null;
+  const used = (name) => attempts.some((attempt) => attempt.phase === name);
   $("life-current").textContent = lifeSettings.enabled ? `当前：${self.activity ?? "休息中"}` : "生活系统已关闭，可在主程序偏好设置中开启。";
   $("life-metrics").textContent = `精力 ${self.energy ?? "—"} / 100 · 专注 ${self.focus ?? "—"} / 100 · 休息需要 ${self.restNeed ?? "—"} / 100`;
   $("life-planning-enabled").checked = Boolean(planning.enabled);
   $("life-planning-enabled").disabled = !lifeSettings.enabled || lifeSettingsPending;
-  $("life-budget").textContent = `今日已调用：日程 ${daily}/1 · 细化 ${refine}/2${planningBusy ? " · 正在生成" : ""}`;
-  $("life-plan-daily").disabled = !lifeSettings.enabled || planningBusy || lifeSettingsPending || busy || daily >= 1;
-  $("life-plan-refine").disabled = !lifeSettings.enabled || planningBusy || lifeSettingsPending || busy || refine >= 2;
+  $("life-budget").textContent = `今日更新：早 ${Number(used("morning"))}/1 · 中 ${Number(used("afternoon"))}/1 · 晚 ${Number(used("evening"))}/1${planningBusy ? " · 正在生成" : ""}`;
+  $("life-plan-daily").disabled = !lifeSettings.enabled || planningBusy || lifeSettingsPending || busy || phase !== "morning" || used("morning");
+  $("life-plan-refine").disabled = !lifeSettings.enabled || planningBusy || lifeSettingsPending || busy || !["afternoon", "evening"].includes(phase) || used(phase);
   $("life-plan-cancel").disabled = !planningBusy;
   $("life-result").textContent = planning.lastResult?.message ?? "尚未请求模型规划，当前使用本地生活日程。";
   $("life-plans").replaceChildren();
   for (const plan of (planning.plans ?? []).filter((item) => item.date === today)) {
     const row = document.createElement("p");
-    row.textContent = `${plan.kind === "refine" ? "临近细化" : "日程规划"}：${plan.windows.map((window) => {
+    row.textContent = `${plan.kind === "refine" ? "时段更新" : "全天规划"}：${plan.windows.map((window) => {
       const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      return `${time(window.startAt)}–${time(window.endAt)} ${window.activities.join("、")}`;
+      return `${time(window.startAt)}–${time(window.endAt)} ${window.activities.map((activity, index) => window.durations?.[index] ? `${activity} ${window.durations[index]} 分钟` : activity).join("、")}`;
     }).join("；")}`;
     $("life-plans").append(row);
   }
@@ -222,7 +223,7 @@ function renderLifeJournal() {
     const runtime = sources.filter((event) => event?.status === "materialized" && event.source === "runtime_schedule").length;
     const inferred = sources.filter((event) => event?.status === "inferred").length;
     const legacy = sources.filter((event) => event?.source === "legacy_schedule").length;
-    source.textContent = diary.status === "revoked" ? "已撤销：来源已失效。" : `来源 ${sources.length} 个片段：已发生模拟 ${runtime} · 离线推演 ${inferred} · 旧版记录 ${legacy}。`;
+    source.textContent = diary.status === "revoked" ? "已撤销：来源已失效。" : `${diary.source === "model" ? "模型撰写 · " : "程序整理 · "}来源 ${sources.length} 个片段：已发生模拟 ${runtime} · 离线推演 ${inferred} · 旧版记录 ${legacy}。`;
     summary.textContent = diary.status === "revoked" ? "这篇日记不再用于生活背景。" : diary.summary;
     row.append(title, source, summary); $("life-diaries").append(row);
   }

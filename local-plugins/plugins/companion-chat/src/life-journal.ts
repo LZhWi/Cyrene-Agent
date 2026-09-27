@@ -10,6 +10,7 @@ export interface LifeGoal {
 export interface LifeDiary {
   id: string; date: string; summary: string; eventRefs: LifeEventRef[]; revision: number;
   status: "active" | "revoked"; createdAt: number; updatedAt: number;
+  source?: "model";
 }
 export interface LifeJournal { goals: LifeGoal[]; diaries: LifeDiary[] }
 
@@ -58,7 +59,8 @@ export function validateJournal(value: unknown, events: LifeEvent[], maxAt: numb
       || !timestamp(diary.createdAt, maxAt) || !timestamp(diary.updatedAt, maxAt) || diary.updatedAt < diary.createdAt
       || !validRefs(diary.eventRefs) || (diary.status === "active") !== (diary.eventRefs.length > 0)
       || diary.eventRefs.some((ref) => byId.get(ref.id)!.date !== diary.date || byId.get(ref.id)!.endAt > diary.updatedAt)
-      || diary.summary !== diarySummary(diary.eventRefs.map((ref) => byId.get(ref.id)!))) throw bad();
+      || (diary.source === "model" ? diary.status !== "active" || !diary.summary.trim() || diary.summary.length > 2_000
+        : diary.source !== undefined || diary.summary !== diarySummary(diary.eventRefs.map((ref) => byId.get(ref.id)!)))) throw bad();
   }
   return structuredClone(journal);
 }
@@ -99,7 +101,7 @@ function diaryFor(previous: LifeDiary | undefined, date: string, events: LifeEve
   if (!selected.length && !previous) return undefined;
   const eventRefs = refsOf(selected);
   const summary = diarySummary(selected);
-  if (previous && sameRefs(previous.eventRefs, eventRefs) && previous.summary === summary) return previous;
+  if (previous && sameRefs(previous.eventRefs, eventRefs) && (previous.source === "model" || previous.summary === summary)) return previous;
   return { id: `diary:${date}`, date, summary, eventRefs, revision, status: selected.length ? "active" : "revoked",
     createdAt: previous?.createdAt ?? at, updatedAt: at };
 }
@@ -107,10 +109,25 @@ function diaryFor(previous: LifeDiary | undefined, date: string, events: LifeEve
 export function rebuildLifeDiary(journal: LifeJournal, date: string, events: LifeEvent[], at: number, revision: number): LifeJournal {
   if (!dateKey(date)) throw new Error("日记日期无效");
   const previous = journal.diaries.find((diary) => diary.date === date);
-  const diary = diaryFor(previous, date, events, at, revision);
+  const rebuilt = diaryFor(previous?.source === "model" ? undefined : previous, date, events, at, revision);
+  const diary = rebuilt && previous?.source === "model" ? { ...rebuilt, createdAt: previous.createdAt } : rebuilt;
   if (!diary) throw new Error("所选日期没有可引用的生活记录");
   if (diary === previous) return structuredClone(journal);
   if (!previous && journal.diaries.length >= 10_000) throw new Error("生活日记已达上限");
+  return { goals: structuredClone(journal.goals), diaries: previous
+    ? journal.diaries.map((item) => item.date === date ? diary : structuredClone(item)) : [...structuredClone(journal.diaries), diary] };
+}
+
+export function applyModelDiary(journal: LifeJournal, date: string, summary: string, eventIds: string[],
+  events: LifeEvent[], at: number, revision: number): LifeJournal {
+  const selected = events.filter((event) => event.date === date && event.status !== "revoked" && event.endAt <= at)
+    .sort((a, b) => a.endAt - b.endAt).slice(-24);
+  if (!selected.length || JSON.stringify(selected.map((event) => event.id)) !== JSON.stringify(eventIds)) {
+    throw new Error("模型日记引用已变化");
+  }
+  const previous = journal.diaries.find((diary) => diary.date === date);
+  const diary: LifeDiary = { id: `diary:${date}`, date, summary, eventRefs: refsOf(selected), revision,
+    status: "active", source: "model", createdAt: previous?.createdAt ?? at, updatedAt: at };
   return { goals: structuredClone(journal.goals), diaries: previous
     ? journal.diaries.map((item) => item.date === date ? diary : structuredClone(item)) : [...structuredClone(journal.diaries), diary] };
 }
