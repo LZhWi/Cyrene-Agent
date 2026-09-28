@@ -25,9 +25,7 @@ const plugin: CyrenePlugin = {
     const models = createModelService({ ...ctx, storage });
     const life = createLifeContext(storage, Date.now, {
       generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 25_600, timeoutMs: 90_000, reasoning: "on" }),
-      recentMessages: async () => (await readRecentChatContext()).ordinaryHistory
-        .filter((turn) => turn.role === "user" || turn.role === "model")
-        .slice(-12).map((turn) => ({ role: turn.role as "user" | "model", content: turn.content.slice(0, 400) })),
+      recentMessages: () => readLifeRecentMessages(),
       stopSignal: ctx.signal,
     });
     ctx.registerIpc("life-status", () => life.status());
@@ -87,6 +85,27 @@ const plugin: CyrenePlugin = {
       const recentTopic = recentOrdinary.slice(-4).map((turn) => turn.content).join("\n");
       return { ordinaryHistory: recentOrdinary, proactiveHistory, recentTopic };
     };
+    async function readLifeRecentMessages(conversationId?: string) {
+      if (conversationId) {
+        if (!ctx.deps.conversations) return [];
+        const messages: Array<{ role: "user" | "model"; content: string; at: number }> = [];
+        let cursor: string | undefined;
+        do {
+          const page = await ctx.deps.conversations.getMessages({ conversationId, cursor, limit: 100 });
+          messages.push(...page.items.filter((message) => message.text.trim()
+            && (message.role === "user" || message.role === "assistant")).map((message) => ({
+            role: message.role === "assistant" ? "model" as const : "user" as const,
+            content: message.text.slice(0, 400), at: Date.parse(message.at),
+          })));
+          cursor = page.nextCursor;
+        } while (cursor);
+        return messages.sort((left, right) => left.at - right.at).slice(-12)
+          .map(({ role, content }) => ({ role, content }));
+      }
+      return (await readRecentChatContext()).ordinaryHistory
+        .filter((turn) => turn.role === "user" || turn.role === "model")
+        .slice(-12).map((turn) => ({ role: turn.role as "user" | "model", content: turn.content.slice(0, 400) }));
+    }
     // 只有宿主明确选择陪伴后端时才读取；普通原生 Chat 与其他模式不会调用。
     ctx.registerStablePromptProvider?.({
       id: "chat-persona",
@@ -143,11 +162,13 @@ const plugin: CyrenePlugin = {
       priority: 100,
       modes: ["chat"],
       sources: ["conversation"],
-      provide: (input) => input.source === "conversation"
-        && (input as typeof input & { chatBackend?: "native" | "companion" }).chatBackend === "companion"
-        && !input.channel
-        ? life.build(input.userText, { conversationRunId: (input as typeof input & { runId?: string }).runId })
-        : "",
+      provide: async (input) => {
+        if (input.source !== "conversation" || input.chatBackend !== "companion" || input.channel) return "";
+        let recentMessages: Awaited<ReturnType<typeof readLifeRecentMessages>> = [];
+        try { if (input.runId && input.conversationId) recentMessages = await readLifeRecentMessages(input.conversationId); }
+        catch { /* 历史不可用时仍提供当前生活状态 */ }
+        return life.build(input.userText, { conversationRunId: input.runId, recentMessages });
+      },
     });
     const savedLink = storage.get<{ enabled: boolean }>("memory-link");
     if (savedLink !== undefined && (typeof savedLink !== "object" || typeof savedLink.enabled !== "boolean")) {

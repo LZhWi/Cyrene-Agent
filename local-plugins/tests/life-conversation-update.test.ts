@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import { createLifeContext } from "../plugins/companion-chat/src/life-context";
 
-const time = (hour: number, minute = 0) => new Date(2026, 8, 28, hour, minute).getTime();
+const time = (hour: number, minute = 0, day = 28) => new Date(2026, 8, day, hour, minute).getTime();
 
 function fixture() {
   let clock = time(9), saved: unknown;
@@ -25,10 +25,30 @@ function fixture() {
       window: { id: window.id, startAt: window.startAt, endAt: window.endAt,
         segments: [{ activity, minutes: (window.endAt - window.startAt) / 60_000 }] } });
   };
-  return { life, offer, proposal, setTime: (hour: number, minute = 0) => { clock = time(hour, minute); }, state: () => structuredClone(saved) };
+  return { life, offer, proposal, setTime: (hour: number, minute = 0, day = 28) => { clock = time(hour, minute, day); },
+    state: () => structuredClone(saved) };
 }
 
 describe("对话中调整未来生活", () => {
+  it("对话提案收到与早上规划一致的生活决策资料，并截取近期消息", () => {
+    const f = fixture();
+    f.life.saveGoal({ title: "每天读一会儿书", activity: "读书" });
+    f.setTime(9, 0, 29);
+    const messages = Array.from({ length: 14 }, (_, index) => ({ role: "user" as const,
+      content: `${index}:` + "一".repeat(450) }));
+    const prompt = f.life.build("今天做什么", { conversationRunId: "with-context", recentMessages: messages });
+    const match = /生活决策参考=([^\n]+)/.exec(prompt);
+    expect(match).toBeTruthy();
+    const context = JSON.parse(match![1]);
+    expect(context.self).toMatchObject({ energy: expect.any(Number), focus: expect.any(Number),
+      restNeed: expect.any(Number), activity: expect.any(String), habits: expect.any(Object) });
+    expect(context.goals).toEqual([{ id: expect.any(String), title: "每天读一会儿书", activity: "读书" }]);
+    expect(context.recentMessages).toHaveLength(12);
+    expect(context.recentMessages[0].content.startsWith("2:")).toBe(true);
+    expect(context.recentMessages.every((item: { content: string }) => item.content.length <= 400)).toBe(true);
+    expect(context.recentDiaries.length).toBeGreaterThan(0);
+    expect(context.recentEvents.length).toBeGreaterThan(0);
+  });
   it("成功落盘的一轮只能修改未来窗口一次，冷却后仍可再次修改", () => {
     const f = fixture();
     const first = f.proposal("run-1", "读书：《星灯游记》");

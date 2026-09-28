@@ -484,6 +484,28 @@ describe("跨插件协议与路径边界", () => {
       expect(await provider!.provide({ ...input, chatBackend: "companion" } as never)).toBe("");
     } finally { await ctx.dispose(); await chatPlugin.unregister?.(); }
   });
+  it("对话调整只读取当前会话的近期消息", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 8, 28, 9));
+    const getMessages = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+      items: [{ id: "m1", role: "user" as const,
+        text: conversationId === "current" ? "当前会话的读书话题" : "别的会话内容",
+        at: new Date(2026, 8, 28, 8, 59).toISOString() }], range: {},
+    }));
+    const ctx = createMockPluginContext({ pluginId: CHAT_ID, deps: { conversations: {
+      list: vi.fn().mockResolvedValue({ items: [{ id: "other", mode: "chat", purpose: "normal" }] }), getMessages,
+    } } });
+    ctx.storage.rootDir = () => temporaryDirectory("life-current-conversation-");
+    try {
+      await chatPlugin.register(ctx);
+      await ctx.ipcChannels.get("ui")!("life-planning-settings", { enabled: true });
+      const provider = ctx.promptProviders.find((item) => item.id === "life-context")!;
+      const prompt = await provider.provide({ source: "conversation", mode: "chat", userText: "今天读什么",
+        conversationId: "current", runId: "current-run", chatBackend: "companion", signal: ctx.signal } as never) as string;
+      expect(prompt).toContain("当前会话的读书话题");
+      expect(prompt).not.toContain("别的会话内容");
+      expect(getMessages).toHaveBeenCalledWith({ conversationId: "current", cursor: undefined, limit: 100 });
+    } finally { await ctx.dispose(); await chatPlugin.unregister?.(); vi.useRealTimers(); }
+  });
   it("Soul 的生活提案随已落盘轮次修改未来日程，不额外调用模型", async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 8, 28, 9));
     const generateText = vi.fn(async () => "不应调用");

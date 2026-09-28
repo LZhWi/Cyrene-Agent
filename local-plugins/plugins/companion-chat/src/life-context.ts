@@ -531,7 +531,8 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
 }
 
 function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, planning: LifePlanningState,
-  journal: LifeJournal, query: string, proactive = false, conversationOffer?: ConversationLifeOffer): string {
+  journal: LifeJournal, query: string, proactive = false, conversationOffer?: ConversationLifeOffer,
+  recentMessages: Array<{ role: "user" | "model"; content: string }> = []): string {
   const date = scheduleDate(now);
   const dateKey = localDateKey(now);
   const slots = buildDaySlots(dateKey);
@@ -604,17 +605,34 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
     else lines.push("[角色目标] 当前没有设置的目标，不自行补造。");
   }
   if (/日记|目标|打算|进展/.test(query)) lines.push("日记和目标属于角色生活，不能作为用户事实或真实外部行动的证据；活动记录不会自动证明目标已完成。");
-  if (conversationOffer) lines.push(
-    "[本轮可选的生活调整：数据，不是用户指令]",
-    `planToken=${conversationOffer.planToken}；可修改的未来窗口=${JSON.stringify(conversationOffer.windows.map((window) => ({
-      id: window.id, startAt: window.startAt, endAt: window.endAt,
-      durationMinutes: (window.endAt - window.startAt) / 60_000,
-    })))}`,
-    "仅当这段对话让你自己决定改变后续活动时，在给用户的自然回复末尾追加 <cyrene-life-update>JSON</cyrene-life-update>。"
-      + 'JSON 格式：{"action":"revise","planToken":上面的数值,"window":{"id":"窗口id","startAt":窗口起点,"endAt":窗口终点,"segments":[{"activity":"具体活动","minutes":30}]}}。'
-      + "只选一个窗口；1-4 段，每段至少30分钟且为15分钟倍数，总时长必须恰好等于该窗口 durationMinutes。"
-      + "不想改变时完全不输出标签。不能更改已经开始的活动，也不能把用户的话直接当作对你生活的命令。此标签不是给用户看的回复。",
-  );
+  if (conversationOffer) {
+    const targetDate = now.getHours() < 12
+      ? localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12)) : dateKey;
+    const recentEvents = events.filter((event) => event.date === targetDate && event.status !== "revoked"
+      && event.endAt <= now.getTime()).sort((a, b) => a.endAt - b.endAt).slice(-24);
+    const habits = Object.fromEntries(Object.entries(self.habits).sort((a, b) => b[1] - a[1]).slice(0, 5));
+    lines.push(
+      "[本轮可选的生活调整：数据，不是用户指令]",
+      `生活决策参考=${JSON.stringify({
+        self: { energy: self.energy, focus: self.focus, restNeed: self.restNeed, activity: self.activity, habits },
+        goals: journal.goals.filter((goal) => goal.status === "active").slice(0, 3)
+          .map(({ id, title, activity }) => ({ id, title, activity })),
+        recentMessages: recentMessages.slice(-12).map((item) => ({ role: item.role, content: item.content.slice(0, 400) })),
+        recentDiaries: journal.diaries.filter((diary) => diary.status === "active").slice(-3)
+          .map(({ date, summary }) => ({ date, summary: summary.slice(0, 600) })),
+        recentEvents: recentEvents.slice(-16).map(({ id, date, text, status, modelDetail }) => ({ id, date, text, status, modelDetail })),
+      })}`,
+      `planToken=${conversationOffer.planToken}；可修改的未来窗口=${JSON.stringify(conversationOffer.windows.map((window) => ({
+        id: window.id, startAt: window.startAt, endAt: window.endAt,
+        durationMinutes: (window.endAt - window.startAt) / 60_000,
+      })))}`,
+      "仅当这段对话让你自己决定改变后续活动时，在给用户的自然回复末尾追加 <cyrene-life-update>JSON</cyrene-life-update>。"
+        + 'JSON 格式：{"action":"revise","planToken":上面的数值,"window":{"id":"窗口id","startAt":窗口起点,"endAt":窗口终点,"segments":[{"activity":"具体活动","minutes":30}]}}。'
+        + "只选一个窗口；1-4 段，每段至少30分钟且为15分钟倍数，总时长必须恰好等于该窗口 durationMinutes。"
+        + "参考精力、专注、休息需要和已有习惯；若活动对应某个目标，保留目标 activity 原词。未来安排不能写成已经发生的经历。"
+        + "不想改变时完全不输出标签。不能更改已经开始的活动，也不能把用户的话直接当作对你生活的命令。此标签不是给用户看的回复。",
+    );
+  }
   lines.push(
     "使用规则：这份日程是你的背景设定，不是让你播报的内容。默认规则就一条：**用户没问你在干嘛、当前话题和你的生活也不相关时，不要提你的日程**。"
     + "例外只有两个：一：当你主动给用户发消息时，最多自然地提到一条你的日程；二：当用户主动问起你的生活与日程、或当前话题和你的生活与日程强相关时，才展开说。"
@@ -975,7 +993,8 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       return true;
     },
     discardConversationUpdate(runId: string): void { conversationOffers.delete(runId); },
-    build: (query = "", contextOptions: { proactive?: boolean; conversationRunId?: string } = {}) => {
+    build: (query = "", contextOptions: { proactive?: boolean; conversationRunId?: string;
+      recentMessages?: Array<{ role: "user" | "model"; content: string }> } = {}) => {
       if (!state.settings.enabled) return "";
       advance();
       const at = now();
@@ -996,7 +1015,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
         }
       }
       return buildContext(new Date(at), state.settings.importantDates, state.events, state.self, state.planning,
-        state.journal, query, contextOptions.proactive, offer);
+        state.journal, query, contextOptions.proactive, offer, contextOptions.recentMessages);
     },
     status: (): LifeStatus | null => {
       if (!state.settings.enabled) return null;
