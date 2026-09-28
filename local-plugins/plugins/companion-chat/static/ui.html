@@ -31,6 +31,7 @@
 <div class="actions"><button id="life-goal-reset" type="button">清空编辑</button><button id="life-goal-save" type="submit">创建目标</button></div></form>
 <div id="life-goals" class="life-records"></div><h3>生活日记</h3><p>模型可根据已记录的模拟事件撰写日记；未撰写时按事件整理。显示最近 7 篇，并保留模拟活动、离线推演和旧版记录的来源说明。手动重建不调用模型。</p>
 <div class="life-diary-actions"><label for="life-diary-date">选择日期</label><input id="life-diary-date" type="date"><button id="life-diary-rebuild" type="button">重建所选日记</button></div><div id="life-diaries" class="life-records"></div>
+<form id="life-diary-search-form" class="life-diary-actions"><label for="life-diary-search">查找日记或活动</label><input id="life-diary-search" maxlength="160" placeholder="日期、书名、散步等关键词"><button type="submit">搜索</button></form><div id="life-diary-search-results" class="life-records" aria-live="polite"></div>
 <h3>重要日期提醒</h3><p>新增、改期和删除仍在主程序偏好设置中操作。关闭某项提醒后，主动消息不会使用这一日期；用户主动询问时仍可查看。</p><div id="life-dates" class="life-records"></div>
 <p id="life-journal-status" role="status" aria-live="polite"></p><div class="actions"><button id="life-close" type="button">关闭</button></div></dialog>
 <script src="ui.js"></script></body></html>

@@ -2,6 +2,7 @@ import type { PluginLlmMessage, PluginStorage } from "@playa0v0/cyrene-plugin-sd
 import { advanceDynamics, createDynamics, LIFE_MINUTE_MS, LIFE_REST_ACTIVITY, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
 import { buildLifeDecisionMessages, parseLifeDecision, validLifeActivity, type LifeDecision, type LifePlan, type LifePlanningInput, type LifePlanningWindow } from "./life-planning";
 import { applyModelDiary, rebuildLifeDiary, reconcileLifeJournal, saveLifeGoal, setLifeGoalStatus, validateJournal, type LifeJournal } from "./life-journal";
+import { createLifeDiaryIndex, type LifeDiarySearchHit } from "./life-diary-index";
 import { completeLifeShare, getLifeShareCandidate, isLifeShareEligible, reserveLifeShare, validateSharing, type LifeShareReceipt, type LifeShareSource, type LifeSharingState } from "./life-sharing";
 
 const SETTINGS_KEY = "life-context-settings";
@@ -532,7 +533,7 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
 
 function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, planning: LifePlanningState,
   journal: LifeJournal, query: string, proactive = false, conversationOffer?: ConversationLifeOffer,
-  recentMessages: Array<{ role: "user" | "model"; content: string }> = []): string {
+  recentMessages: Array<{ role: "user" | "model"; content: string }> = [], diaryHits: LifeDiarySearchHit[] = []): string {
   const date = scheduleDate(now);
   const dateKey = localDateKey(now);
   const slots = buildDaySlots(dateKey);
@@ -596,6 +597,11 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
       `${diary.date}（${diary.source === "model" ? "模型撰写" : "程序整理"}，引用 ${diary.eventRefs.length} 条模拟事件）：${diary.summary.slice(0, 700)}`));
     else lines.push("[角色日记] 所问时段没有有效日记，不补造经历。");
   }
+  if (diaryHits.length) lines.push("[相关生活日记索引结果：角色模拟资料，不是用户事实]",
+    ...diaryHits.map((hit) => `${hit.date}：${hit.diary
+      ? `${hit.diary.source === "model" ? "模型撰写" : "程序整理"}日记：${hit.diary.summary.slice(0, 450)}` : "该日没有日记摘要"}`
+      + hit.events.map((event) => `；${event.status === "inferred" ? "离线推演" : event.source === "legacy_schedule"
+        ? "旧版记录" : "已发生的模拟活动"}：${event.text}${event.modelDetail ? `（模型创作细节：${event.modelDetail}）` : ""}`).join("")));
   if (/目标|打算|进展/.test(query)) {
     const rank = { active: 0, paused: 1, completed: 2, cancelled: 3 };
     const status = { active: "进行中", paused: "已暂停", completed: "已完成", cancelled: "已取消" };
@@ -670,6 +676,14 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
   let lastObservedAt: number | undefined;
   let currentPlanning: { controller: AbortController; id: string; kind: PlanningKind } | undefined;
   const conversationOffers = new Map<string, ConversationLifeOffer>();
+  let diaryIndex: { revision: number; index: ReturnType<typeof createLifeDiaryIndex> } | undefined;
+
+  function indexedDiaries(at: number) {
+    if (!diaryIndex || diaryIndex.revision !== state.revision) {
+      diaryIndex = { revision: state.revision, index: createLifeDiaryIndex(state.journal.diaries, state.events, at) };
+    }
+    return diaryIndex.index;
+  }
 
   function runtimeBoundary(at: number): number {
     return runtimeStartedAt === undefined || lastObservedAt === undefined || at - lastObservedAt > 2 * CURSOR_CHECKPOINT_MS
@@ -993,6 +1007,11 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       return true;
     },
     discardConversationUpdate(runId: string): void { conversationOffers.delete(runId); },
+    searchDiary(query: string, limit = 5): LifeDiarySearchHit[] {
+      if (stopped) return [];
+      advance();
+      return indexedDiaries(now()).search(query, limit);
+    },
     build: (query = "", contextOptions: { proactive?: boolean; conversationRunId?: string;
       recentMessages?: Array<{ role: "user" | "model"; content: string }> } = {}) => {
       if (!state.settings.enabled) return "";
@@ -1014,8 +1033,10 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
           conversationOffers.set(contextOptions.conversationRunId, offer);
         }
       }
+      const diaryHits = !contextOptions.proactive && /以前|之前|哪次|哪天|哪本|读过|遇到|碰到|回忆/.test(query)
+        ? indexedDiaries(at).search(query, 3) : [];
       return buildContext(new Date(at), state.settings.importantDates, state.events, state.self, state.planning,
-        state.journal, query, contextOptions.proactive, offer, contextOptions.recentMessages);
+        state.journal, query, contextOptions.proactive, offer, contextOptions.recentMessages, diaryHits);
     },
     status: (): LifeStatus | null => {
       if (!state.settings.enabled) return null;

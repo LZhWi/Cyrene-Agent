@@ -262,7 +262,11 @@ async function updateLifeJournal(action, data, successMessage) {
   let saved = false, message;
   try { lifeSettings = await invoke(action, data); saved = true; message = successMessage; }
   catch (e) { message = e.message; }
-  finally { lifeJournalPending = false; renderLife(); $("life-journal-status").textContent = message; }
+  finally {
+    lifeJournalPending = false; renderLife(); $("life-journal-status").textContent = message;
+    if (saved && (action === "life-diary-rebuild" || action === "life-event-revoke"))
+      $("life-diary-search-results").textContent = "日记来源已更新，请重新搜索。";
+  }
   return saved;
 }
 $("life-goal-form").onsubmit = async (event) => {
@@ -273,6 +277,31 @@ $("life-goal-form").onsubmit = async (event) => {
 };
 $("life-goal-reset").onclick = resetLifeGoal;
 $("life-diary-rebuild").onclick = () => updateLifeJournal("life-diary-rebuild", { date: $("life-diary-date").value }, "日记已按有效来源重建，未调用模型。");
+$("life-diary-search-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const results = $("life-diary-search-results"); results.textContent = "正在搜索…";
+  try {
+    const hits = await invoke("life-diary-search", { query: $("life-diary-search").value });
+    results.replaceChildren();
+    for (const hit of hits) {
+      const row = document.createElement("section"), title = document.createElement("strong");
+      row.className = "life-record"; title.textContent = hit.date; row.append(title);
+      if (hit.diary) {
+        const summary = document.createElement("p");
+        summary.textContent = `${hit.diary.source === "model" ? "模型撰写" : "程序整理"}：${hit.diary.summary}`;
+        row.append(summary);
+      }
+      for (const item of hit.events) {
+        const detail = document.createElement("p");
+        detail.textContent = `${item.status === "inferred" ? "离线推演" : item.source === "legacy_schedule"
+          ? "旧版模拟记录" : "已发生的模拟活动"}：${item.text}${item.modelDetail ? `；模型创作细节：${item.modelDetail}` : ""}`;
+        row.append(detail);
+      }
+      results.append(row);
+    }
+    if (!hits.length) results.textContent = "没有找到匹配的日记或活动。";
+  } catch (error) { results.textContent = error.message; }
+};
 async function refreshLife() { lifeSettings = await invoke("life-state"); renderLife(); }
 $("life-open").onclick = async () => {
   try {

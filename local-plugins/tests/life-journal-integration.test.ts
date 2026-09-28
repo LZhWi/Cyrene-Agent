@@ -86,6 +86,22 @@ describe("生活日记与目标实际插件入口", () => {
     });
   });
 
+  it("日记搜索通过实际插件入口按日期命中，并在事件撤销后重建索引", async () => {
+    await withPlugin(async (invoke) => {
+      await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+      const rebuilt = await invoke("life-diary-rebuild", { date: "2026-09-26" });
+      const eventId = rebuilt.data.journal.diaries[0].eventRefs.at(-1).id;
+      const before = await invoke("life-diary-search", { query: "2026-09-26" });
+      expect(before.data).toMatchObject([{ date: "2026-09-26", diary: { source: "program" } }]);
+      expect(before.data[0].events.some((event: { id: string }) => event.id === eventId)).toBe(true);
+      expect((await invoke("life-event-revoke", { id: eventId })).ok).toBe(true);
+      const after = await invoke("life-diary-search", { query: "2026-09-26" });
+      expect(after.ok).toBe(true);
+      expect(after.data.flatMap((hit: { events: Array<{ id: string }> }) => hit.events)
+        .some((event: { id: string }) => event.id === eventId)).toBe(false);
+    });
+  });
+
   it("真实主动提示词过滤不提醒的目标与日期，同时保留允许提醒的项目", async () => {
     const generateText = vi.fn().mockResolvedValue('{"decision":"silent"}'), onDelivery = vi.fn();
     await withPlugin(async (invoke) => {
@@ -131,17 +147,17 @@ describe("生活日记与目标实际插件入口", () => {
 });
 
 describe("生活日记与目标界面", () => {
-  it("实际 preload 放行四个管理动作", async () => {
+  it("实际 preload 放行生活管理与检索动作", async () => {
     let bridge: any;
     const invoke = vi.fn().mockResolvedValue({ ok: true });
     runInNewContext(readFileSync(path.resolve("plugins/companion-chat/static/preload.cjs"), "utf8"), {
       require: () => ({ contextBridge: { exposeInMainWorld: (_name: string, value: unknown) => { bridge = value; } }, ipcRenderer: { invoke } }),
     });
-    for (const action of ["life-goal-save", "life-goal-status", "life-diary-rebuild", "life-date-reminder"]) {
+    for (const action of ["life-goal-save", "life-goal-status", "life-diary-rebuild", "life-diary-search", "life-date-reminder"]) {
       await bridge.invoke(action, { synthetic: true });
       expect(invoke).toHaveBeenLastCalledWith("plugin:companion-chat:ui", action, { synthetic: true });
     }
-    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenCalledTimes(5);
   });
 
   it("安全展示目标和日记，编辑与管理动作传递明确参数且不自动创建目标", async () => {
@@ -161,6 +177,8 @@ describe("生活日记与目标界面", () => {
       if (action === "life-goal-save") Object.assign(life.journal.goals[0], data);
       if (action === "life-goal-status") life.journal.goals[0].status = data.status;
       if (action === "life-date-reminder") life.importantDates[0].remind = data.remind;
+      if (action === "life-diary-search") return { ok: true, data: [{ date: "2026-09-26",
+        diary: { source: "model", summary: "<script>unsafe()</script>" }, events: [{ text: "散步", status: "inferred" }] }] };
       return { ok: true, data: life };
     } };
     try {
@@ -188,6 +206,11 @@ describe("生活日记与目标界面", () => {
       expect(calls.at(-1)).toEqual({ action: "life-date-reminder", data: { date: "09-26", label: "<img src=x>", remind: false } });
       el("life-diary-date").value = "2026-09-26"; await el("life-diary-rebuild").onclick();
       expect(calls.at(-1)).toEqual({ action: "life-diary-rebuild", data: { date: "2026-09-26" } });
+      el("life-diary-search").value = "2026-09-26";
+      await el("life-diary-search-form").onsubmit({ preventDefault() {} });
+      expect(calls.at(-1)).toEqual({ action: "life-diary-search", data: { query: "2026-09-26" } });
+      expect(el("life-diary-search-results").textContent).toContain("离线推演");
+      expect(el("life-diary-search-results").querySelector("script")).toBeNull();
       await goalAction("cancel").onclick();
       expect(el("life-goals").textContent).toContain("已取消");
       expect(el("life-goals").children).toHaveLength(1);

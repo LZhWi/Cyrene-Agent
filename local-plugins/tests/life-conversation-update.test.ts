@@ -106,3 +106,21 @@ describe("对话中调整未来生活", () => {
     expect(f.life.applyConversationUpdate("off", JSON.stringify({ action: "revise" }))).toBe(false);
   });
 });
+
+describe("持久生活状态的日记检索", () => {
+  it("从合成生活记录建索引，撤销来源后按版本重建", () => {
+    const f = fixture();
+    f.life.build("今天做什么");
+    f.setTime(9, 0, 29);
+    f.life.build("昨天做了什么");
+    const before = f.life.searchDiary("2026-09-28");
+    expect(before).toHaveLength(1);
+    expect(before[0].diary).toBeTruthy();
+    expect(before[0].events.length).toBeGreaterThan(0);
+    const term = before[0].events[0].text.slice(0, 2);
+    expect(f.life.build(`以前${term}的经历`)).toContain("[相关生活日记索引结果");
+    const eventId = before[0].events[0].id;
+    f.life.revokeEvent(eventId);
+    expect(f.life.searchDiary("2026-09-28")[0].events.some((event) => event.id === eventId)).toBe(false);
+  });
+});

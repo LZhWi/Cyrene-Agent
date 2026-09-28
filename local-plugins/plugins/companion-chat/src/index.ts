@@ -491,6 +491,7 @@ const plugin: CyrenePlugin = {
           return result;
         }
         case "life-diary-rebuild": return life.rebuildDiary(data?.date);
+        case "life-diary-search": return life.searchDiary(data?.query, 5);
         case "life-date-reminder": {
           const result = life.setImportantDateReminder(data?.date, data?.label, data?.remind);
           proactive.cancel();
