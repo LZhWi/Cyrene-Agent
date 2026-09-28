@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   agentEvents: [] as unknown[],
   // 可定制的终态行为
   runFinishedResult: undefined as unknown,
+  companionLifeUpdate: undefined as string | undefined,
   emitDuplicateRunFinished: false,
   errorAfterRunFinished: null as string | null,
   skipDefaultRunFinished: false,
@@ -39,7 +40,7 @@ vi.mock("electron", () => ({
 vi.mock("./orchestrator/cyrene-agent", () => ({
   CyreneAgent: class {
     threadId: string;
-    lastResult?: { reply: string; toolResults: unknown[] };
+    lastResult?: { reply: string; toolResults: unknown[]; companionLifeUpdate?: string };
 
     constructor(input: { threadId: string }) {
       this.threadId = input.threadId;
@@ -52,7 +53,8 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
       const runId = (options as { runId?: string } | null | undefined)?.runId;
       const signal = (options as { signal?: AbortSignal } | null | undefined)?.signal;
       return new Observable((subscriber) => {
-        this.lastResult = { reply: "抱抱你", toolResults: [] };
+        this.lastResult = { reply: "抱抱你", toolResults: [], ...(mocks.companionLifeUpdate
+          ? { companionLifeUpdate: mocks.companionLifeUpdate } : {}) };
         subscriber.next({ type: "RUN_STARTED", runId });
         for (const event of mocks.agentEvents) subscriber.next(event);
         if (!mocks.skipDefaultRunFinished) {
@@ -113,6 +115,7 @@ describe("agui-bridge sticker event ordering", () => {
   // 避免上一个测试的副作用泄漏到下一个测试。
   beforeEach(() => {
     mocks.runFinishedResult = undefined;
+    mocks.companionLifeUpdate = undefined;
     mocks.emitDuplicateRunFinished = false;
     mocks.errorAfterRunFinished = null;
     mocks.skipDefaultRunFinished = false;
@@ -268,6 +271,33 @@ describe("agui-bridge sticker event ordering", () => {
       status: "success",
     }));
     expect(pendingTurns.pendingCount()).toBe(0);
+  });
+
+  it("陪伴生活提案只随成功落盘的最终回复交给插件", async () => {
+    vi.resetModules();
+    mocks.handlers.clear(); mocks.listeners.clear();
+    mocks.companionLifeUpdate = '{"action":"revise","planToken":3}';
+    mocks.getSession.mockReturnValue({ id: "chat-life", mode: "chat" });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const { createPendingTurnLifecycle } = await import("./plugin-host/pending-turn-lifecycle");
+    const publisher = { publishTurnStarted: vi.fn(), publishTurnFinished: vi.fn(), publishSchedulerFinished: vi.fn() };
+    const pendingTurns = createPendingTurnLifecycle({ publisher: publisher as never, now: () => 0 });
+    registerAgUiIpc(async () => ({ options: {
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
+      messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+    }, latestUserText: "想调整日程" }), async () => ({}), () => null, undefined, undefined, pendingTurns, () => "companion");
+    const handler = mocks.handlers.get(IPC.AGUI_RUN)!;
+    const persist = mocks.listeners.get(IPC.AGUI_RUN_PERSISTED)!;
+    const sender = { isDestroyed: () => false, send: () => {}, once: vi.fn(), removeListener: vi.fn() };
+    const ack = await handler({ sender }, { sessionId: "chat-life", userTurnId: "user-1", assistantTurnId: "assistant-1",
+      messages: [{ role: "user", content: "想调整日程" }] }) as { runId: string };
+    await vi.waitFor(() => expect(pendingTurns.pendingCount()).toBe(1));
+    expect(publisher.publishTurnFinished).not.toHaveBeenCalled();
+    persist({}, { runId: ack.runId, finalMessageId: "assistant-1" });
+    await vi.waitFor(() => expect(publisher.publishTurnFinished).toHaveBeenCalledTimes(1));
+    expect(publisher.publishTurnFinished).toHaveBeenCalledWith(expect.objectContaining({
+      chatBackend: "companion", companionLifeUpdate: mocks.companionLifeUpdate, finalMessageId: "assistant-1",
+    }));
   });
 
   it("routes structured Ask cards to the AG-UI run sender", async () => {

@@ -79,6 +79,20 @@ describe("createPendingTurnLifecycle", () => {
     expect(lifecycle.pendingCount()).toBe(0);
   });
 
+  it("生活提案只随成功落盘的陪伴 Chat 回复发布一次", () => {
+    const publisher = makePublisher();
+    const lifecycle = createPendingTurnLifecycle({ publisher, now: () => 0 });
+    lifecycle.beginTurn(makeInput({ mode: "chat" }));
+    lifecycle.settleTerminal("run-1", { status: "success", companionLifeUpdate: '{"action":"revise"}' });
+    expect(publisher.publishTurnFinished).not.toHaveBeenCalled();
+    lifecycle.confirmPersistence("run-1", { finalMessageId: "msg-assistant-1" });
+    expect(publisher.publishTurnFinished).toHaveBeenCalledWith(expect.objectContaining({
+      companionLifeUpdate: '{"action":"revise"}', finalMessageId: "msg-assistant-1",
+    }));
+    lifecycle.confirmPersistence("run-1", { finalMessageId: "msg-assistant-1" });
+    expect(publisher.publishTurnFinished).toHaveBeenCalledTimes(1);
+  });
+
   it("落盘确认先到：终态到达后立即发布一次", () => {
     const publisher = makePublisher();
     const lifecycle = createPendingTurnLifecycle({ publisher, now: () => 0 });

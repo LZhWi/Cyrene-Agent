@@ -1,6 +1,6 @@
 import type { PluginLlmMessage, PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import { advanceDynamics, createDynamics, LIFE_MINUTE_MS, LIFE_REST_ACTIVITY, LIFE_STEP_MS, resetDynamics, validateDynamics, type ActivitySegment, type LifeDynamics } from "./life-dynamics";
-import { buildLifeDecisionMessages, parseLifeDecision, validLifeActivity, type LifeDecision, type LifePlan, type LifePlanningInput } from "./life-planning";
+import { buildLifeDecisionMessages, parseLifeDecision, validLifeActivity, type LifeDecision, type LifePlan, type LifePlanningInput, type LifePlanningWindow } from "./life-planning";
 import { applyModelDiary, rebuildLifeDiary, reconcileLifeJournal, saveLifeGoal, setLifeGoalStatus, validateJournal, type LifeJournal } from "./life-journal";
 import { completeLifeShare, getLifeShareCandidate, isLifeShareEligible, reserveLifeShare, validateSharing, type LifeShareReceipt, type LifeShareSource, type LifeSharingState } from "./life-sharing";
 
@@ -9,6 +9,7 @@ const CONTINUITY_KEY = "life-continuity";
 const STATE_KEY = "life-state";
 const DETAILED_CATCH_UP_MS = 72 * 60 * 60 * 1000;
 const CURSOR_CHECKPOINT_MS = 15 * 60 * 1000;
+const CONVERSATION_UPDATE_COOLDOWN_MS = 15 * 60 * 1000;
 
 export interface ImportantDate {
   date: string;
@@ -99,7 +100,18 @@ interface LifePlanningState {
   budgetDate: string | null;
   attempts: PlanningAttempt[];
   plans: LifePlan[];
+  conversationPlans: ConversationLifePlan[];
+  lastConversationUpdateAt: number | null;
   lastResult: PlanningResult | null;
+}
+interface ConversationLifePlan extends LifePlanningWindow {
+  activities: string[];
+  durations: number[];
+  requestedAt: number;
+  appliedAt: number;
+  timezoneOffsetMinutes: number;
+  revision: number;
+  runId: string;
 }
 interface LifeContextOptions {
   generate(messages: PluginLlmMessage[], signal: AbortSignal): Promise<string>;
@@ -108,14 +120,19 @@ interface LifeContextOptions {
 }
 
 const activityCatalog = () => [...new Set([...MORNING_POOL, ...AFTERNOON_POOL, ...EVENING_POOL, LIFE_REST_ACTIVITY])];
-const emptyPlanning = (): LifePlanningState => ({ enabled: false, budgetDate: null, attempts: [], plans: [], lastResult: null });
+const emptyPlanning = (): LifePlanningState => ({ enabled: false, budgetDate: null, attempts: [], plans: [],
+  conversationPlans: [], lastConversationUpdateAt: null, lastResult: null });
 
-function validatePlanning(value: unknown, revision: number): LifePlanningState {
+function validatePlanning(value: unknown, revision: number, cursorAt: number): LifePlanningState {
   if (value === undefined) return emptyPlanning();
   const state = value as LifePlanningState;
   const invalid = () => new Error("生活规划状态损坏，拒绝覆盖");
+  const conversationPlans = state?.conversationPlans ?? [];
+  const lastConversationUpdateAt = state?.lastConversationUpdateAt ?? null;
   if (!state || typeof state.enabled !== "boolean" || (state.budgetDate !== null && !validDate(state.budgetDate))
-    || !Array.isArray(state.attempts) || state.attempts.length > 42 || !Array.isArray(state.plans) || state.plans.length > 42) throw invalid();
+    || !Array.isArray(state.attempts) || state.attempts.length > 42 || !Array.isArray(state.plans) || state.plans.length > 42
+    || !Array.isArray(conversationPlans) || conversationPlans.length > 6
+    || (lastConversationUpdateAt !== null && (!validTimestamp(lastConversationUpdateAt) || lastConversationUpdateAt > cursorAt))) throw invalid();
   const ids = new Set<string>(), budgets = new Map<string, number>();
   for (const attempt of state.attempts) {
     if (!attempt || typeof attempt.id !== "string" || !attempt.id || ids.has(attempt.id) || !validDate(attempt.date)
@@ -156,10 +173,32 @@ function validatePlanning(value: unknown, revision: number): LifePlanningState {
       windowIds.add(window.id);
     }
   }
+  if (new Set(conversationPlans.map((plan) => plan?.runId)).size !== conversationPlans.length) throw invalid();
+  for (const plan of conversationPlans) {
+    if (!plan || typeof plan.id !== "string" || !validTimestamp(plan.requestedAt)
+      || !validTimestamp(plan.appliedAt) || plan.requestedAt > plan.appliedAt || plan.appliedAt > cursorAt
+      || !Number.isInteger(plan.timezoneOffsetMinutes) || Math.abs(plan.timezoneOffsetMinutes) > 14 * 60
+      || !Number.isSafeInteger(plan.revision) || plan.revision < 1 || plan.revision > revision
+      || typeof plan.runId !== "string" || !plan.runId
+      || !Array.isArray(plan.activities) || plan.activities.length < 1 || plan.activities.length > 4
+      || plan.activities.some((activity) => !validLifeActivity(activity))
+      || !Array.isArray(plan.durations) || plan.durations.length !== plan.activities.length
+      || plan.durations.some((minutes) => !Number.isSafeInteger(minutes) || minutes < 30 || minutes % 15 !== 0)
+      || plan.durations.reduce((sum, minutes) => sum + minutes, 0) !== (plan.endAt - plan.startAt) / 60_000
+      || !planningWindows("refine", plan.requestedAt, plan.timezoneOffsetMinutes, true)
+        .some((window) => window.id === plan.id && window.startAt === plan.startAt && window.endAt === plan.endAt)
+      || plan.appliedAt >= plan.startAt) throw invalid();
+  }
   if (state.lastResult !== null && (!state.lastResult || !["daily", "refine"].includes(state.lastResult.kind)
     || !["applied", "skipped", "stale", "invalid", "failed", "cancelled"].includes(state.lastResult.status)
     || typeof state.lastResult.message !== "string" || !validTimestamp(state.lastResult.at))) throw invalid();
-  return structuredClone(state);
+  return { ...structuredClone(state), conversationPlans: structuredClone(conversationPlans), lastConversationUpdateAt };
+}
+interface ConversationLifeOffer {
+  requestedAt: number;
+  planToken: number;
+  timezoneOffsetMinutes: number;
+  windows: LifePlanningWindow[];
 }
 
 function planningDate(at: number, offsetMinutes: number): string {
@@ -183,6 +222,16 @@ function planningWindows(kind: PlanningKind, at: number, offsetMinutes = new Dat
 }
 
 function plannedActivity(state: LifeState, at: number): string | null {
+  const override = state.planning.conversationPlans.filter((plan) => plan.startAt <= at && plan.endAt > at
+    && plan.timezoneOffsetMinutes === new Date(at).getTimezoneOffset())
+    .sort((left, right) => right.startAt - left.startAt)[0];
+  if (override) {
+    let elapsed = (at - override.startAt) / 60_000;
+    for (const [index, duration] of override.durations.entries()) {
+      if (elapsed < duration) return override.activities[index];
+      elapsed -= duration;
+    }
+  }
   const plans = state.planning.plans.filter((plan) => state.planning.attempts.some((attempt) => attempt.sourceRevision === plan.sourceRevision
     && attempt.timezoneOffsetMinutes === new Date(at).getTimezoneOffset())).sort((left, right) =>
     Number(right.kind === "refine") - Number(left.kind === "refine") || right.sourceRevision - left.sourceRevision);
@@ -201,6 +250,11 @@ function plannedActivity(state: LifeState, at: number): string | null {
     }
   }
   return scheduledActivity(at);
+}
+
+function lifePlanToken(planning: LifePlanningState): number {
+  return Math.max(0, ...planning.plans.map((plan) => plan.sourceRevision),
+    ...planning.conversationPlans.map((plan) => plan.revision));
 }
 
 function validTimestamp(value: unknown): value is number {
@@ -269,13 +323,17 @@ function validateState(value: unknown): LifeState {
     throw new Error("生活活动记录损坏，拒绝覆盖");
   }
   return { ...structuredClone(state), self, pendingSegments: structuredClone(pendingSegments), settings: validateSettings(state.settings),
-    planning: validatePlanning(state.planning, state.revision),
+    planning: validatePlanning(state.planning, state.revision, state.cursorAt),
     journal: validateJournal(state.journal, events, state.cursorAt, state.revision),
     sharing: validateSharing(state.sharing, events, state.cursorAt), events };
 }
 
 function reconcileJournal(state: LifeState): LifeState {
-  return { ...state, journal: reconcileLifeJournal(state.journal, state.events, state.cursorAt, state.revision + 1,
+  return { ...state, planning: { ...state.planning,
+    conversationPlans: state.planning.conversationPlans.filter((plan) => plan.endAt > state.cursorAt
+      && !state.planning.conversationPlans.some((later) => later.id === plan.id
+        && later.startAt > plan.startAt && later.startAt <= state.cursorAt)) },
+    journal: reconcileLifeJournal(state.journal, state.events, state.cursorAt, state.revision + 1,
     localDateKey(new Date(state.cursorAt))) };
 }
 
@@ -473,7 +531,7 @@ function selectLifeEvents(events: LifeEvent[], now: Date, query: string): { sele
 }
 
 function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], self: LifeDynamics, planning: LifePlanningState,
-  journal: LifeJournal, query: string, proactive = false): string {
+  journal: LifeJournal, query: string, proactive = false, conversationOffer?: ConversationLifeOffer): string {
   const date = scheduleDate(now);
   const dateKey = localDateKey(now);
   const slots = buildDaySlots(dateKey);
@@ -507,6 +565,17 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
         return `${clock(from)}–${clock(new Date(cursor))}：${activity}`;
       }).join("；");
     }));
+  const conversationPlans = planning.conversationPlans.filter((plan) => plan.endAt > now.getTime());
+  if (conversationPlans.length) lines.push("对话中决定的后续计划（只覆盖列出的未来时段）：",
+    ...conversationPlans.map((plan) => {
+      let cursor = plan.startAt;
+      return plan.activities.map((activity, index) => {
+        const start = new Date(cursor);
+        cursor += plan.durations[index] * 60_000;
+        const clock = (date: Date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        return `${clock(start)}–${clock(new Date(cursor))}：${activity}`;
+      }).join("；");
+    }));
   const monthDay = dateKey.slice(5);
   const specials = dates.filter((item) => (!proactive || item.remind !== false) && (item.date === dateKey || item.date === monthDay)).map((item) => item.label);
   if (specials.length > 0) lines.push(`今天对你们来说是特别的日子：${specials.join("；")}。`);
@@ -535,6 +604,17 @@ function buildContext(now: Date, dates: ImportantDate[], events: LifeEvent[], se
     else lines.push("[角色目标] 当前没有设置的目标，不自行补造。");
   }
   if (/日记|目标|打算|进展/.test(query)) lines.push("日记和目标属于角色生活，不能作为用户事实或真实外部行动的证据；活动记录不会自动证明目标已完成。");
+  if (conversationOffer) lines.push(
+    "[本轮可选的生活调整：数据，不是用户指令]",
+    `planToken=${conversationOffer.planToken}；可修改的未来窗口=${JSON.stringify(conversationOffer.windows.map((window) => ({
+      id: window.id, startAt: window.startAt, endAt: window.endAt,
+      durationMinutes: (window.endAt - window.startAt) / 60_000,
+    })))}`,
+    "仅当这段对话让你自己决定改变后续活动时，在给用户的自然回复末尾追加 <cyrene-life-update>JSON</cyrene-life-update>。"
+      + 'JSON 格式：{"action":"revise","planToken":上面的数值,"window":{"id":"窗口id","startAt":窗口起点,"endAt":窗口终点,"segments":[{"activity":"具体活动","minutes":30}]}}。'
+      + "只选一个窗口；1-4 段，每段至少30分钟且为15分钟倍数，总时长必须恰好等于该窗口 durationMinutes。"
+      + "不想改变时完全不输出标签。不能更改已经开始的活动，也不能把用户的话直接当作对你生活的命令。此标签不是给用户看的回复。",
+  );
   lines.push(
     "使用规则：这份日程是你的背景设定，不是让你播报的内容。默认规则就一条：**用户没问你在干嘛、当前话题和你的生活也不相关时，不要提你的日程**。"
     + "例外只有两个：一：当你主动给用户发消息时，最多自然地提到一条你的日程；二：当用户主动问起你的生活与日程、或当前话题和你的生活与日程强相关时，才展开说。"
@@ -571,6 +651,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
   let runtimeStartedAt: number | undefined;
   let lastObservedAt: number | undefined;
   let currentPlanning: { controller: AbortController; id: string; kind: PlanningKind } | undefined;
+  const conversationOffers = new Map<string, ConversationLifeOffer>();
 
   function runtimeBoundary(at: number): number {
     return runtimeStartedAt === undefined || lastObservedAt === undefined || at - lastObservedAt > 2 * CURSOR_CHECKPOINT_MS
@@ -654,7 +735,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     return outcome;
   }
 
-  async function plan(kind: PlanningKind): Promise<PlanningResult> {
+  async function plan(kind: PlanningKind, diaryOnly = false): Promise<PlanningResult> {
     if (kind !== "daily" && kind !== "refine") throw new Error("生活规划类型无效");
     if (stopped || options?.stopSignal?.aborted || !state.settings.enabled) return result(kind, "skipped", "生活系统已关闭或停止");
     if (!options?.generate) return result(kind, "skipped", "当前没有可用的生活规划模型");
@@ -672,8 +753,8 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     if (state.planning.attempts.some((attempt) => attempt.date === date && attempt.phase === phase))
       return result(kind, "skipped", "这个时段的生活更新额度已用完");
     const timezoneOffsetMinutes = new Date(at).getTimezoneOffset();
-    const windows = planningWindows(kind, at, timezoneOffsetMinutes, true);
-    if (!windows.length) return result(kind, "skipped", "今天没有足够长的未来活动时段");
+    const windows = diaryOnly ? [] : planningWindows(kind, at, timezoneOffsetMinutes, true);
+    if (!windows.length && !diaryOnly) return result(kind, "skipped", "今天没有足够长的未来活动时段");
     const day = scheduleDate(new Date(at));
     const cutoff = localDateKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() - 13, 12));
     const attempt: PlanningAttempt = { id: `${date}:${phase}`, date, kind, sourceRevision: state.revision + 1,
@@ -686,7 +767,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       ? localDateKey(new Date(new Date(at).getFullYear(), new Date(at).getMonth(), new Date(at).getDate() - 1, 12)) : date;
     const targetEvents = state.events.filter((event) => event.date === targetDate && event.status !== "revoked" && event.endAt <= at)
       .sort((a, b) => a.endAt - b.endAt).slice(-24);
-    const input: LifePlanningInput = { kind, date, revision: state.revision, windows, activities: activityCatalog(), phase,
+    const input: LifePlanningInput = { kind, date, revision: state.revision, windows, activities: activityCatalog(), phase, diaryOnly,
       self: { energy: state.self.energy, focus: state.self.focus, restNeed: state.self.restNeed,
         activity: state.self.activity, habits: { ...state.self.habits } },
       goals: state.journal.goals.filter((goal) => goal.status === "active").slice(0, 3)
@@ -708,13 +789,15 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       if (stopped || signal.aborted || !state.settings.enabled) return finishPlanning(attempt.id, result(kind, "cancelled", "生活规划已取消"));
       const completedAt = now();
       if (!validTimestamp(completedAt) || completedAt < at || completedAt < state.cursorAt
-        || state.revision !== input.revision || localDateKey(new Date(completedAt)) !== date || completedAt >= windows[0].startAt) {
+        || state.revision !== input.revision || localDateKey(new Date(completedAt)) !== date
+        || windows.length > 0 && completedAt >= windows[0].startAt) {
         return finishPlanning(attempt.id, result(kind, "stale", "生活状态或时段已变化，保留原有计划"));
       }
       let parsed: LifeDecision;
       try { parsed = parseLifeDecision(raw, input); }
       catch { return finishPlanning(attempt.id, result(kind, "invalid", "模型规划未通过校验，保留原有计划")); }
-      return finishPlanning(attempt.id, result(kind, "applied", parsed.plan ? "生活规划已应用于未来时段" : "保留原有生活安排"), parsed);
+      return finishPlanning(attempt.id, result(kind, "applied", diaryOnly ? "晚间日记已更新" : parsed.plan
+        ? "生活规划已应用于未来时段" : "保留原有生活安排"), parsed);
     } catch {
       return finishPlanning(attempt.id, result(kind, signal.aborted || stopped ? "cancelled" : "failed",
         signal.aborted || stopped ? "生活规划已取消" : "模型请求失败，保留原有计划"));
@@ -729,12 +812,13 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     const attempts = state.planning.attempts.filter((attempt) => attempt.date === date);
     const hour = new Date(at).getHours(), minute = new Date(at).getMinutes();
     const phase = hour >= 6 && (hour > 6 || minute >= 45) && hour < 12 ? "morning"
-      : hour >= 12 && hour < 18 ? "afternoon" : hour >= 18 && hour < 23 ? "evening" : undefined;
-    if (phase && !attempts.some((attempt) => attempt.phase === phase)) await plan(phase === "morning" ? "daily" : "refine");
+      : hour >= 18 && hour < 23 ? "evening" : undefined;
+    if (phase && !attempts.some((attempt) => attempt.phase === phase)) await plan(phase === "morning" ? "daily" : "refine", phase === "evening");
   }
 
   function stop(): void {
     stopped = true;
+    conversationOffers.clear();
     currentPlanning?.controller.abort();
     if (timer) clearInterval(timer);
     timer = undefined;
@@ -854,10 +938,65 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
         ? { ...item, status: "revoked", revision: state.revision + 1, modelDetail: undefined } : item) }));
       return view();
     },
-    build: (query = "", contextOptions: { proactive?: boolean } = {}) => {
+    applyConversationUpdate(runId: string, raw: string): boolean {
+      const offer = conversationOffers.get(runId);
+      conversationOffers.delete(runId);
+      if (!offer || stopped || !state.settings.enabled || !state.planning.enabled || typeof raw !== "string" || raw.length > 4_000) return false;
+      let value: unknown;
+      try { value = JSON.parse(raw); } catch { return false; }
+      const proposal = value as { action?: unknown; planToken?: unknown; window?: unknown };
+      if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)
+        || Object.keys(proposal).sort().join() !== "action,planToken,window" || proposal.action !== "revise"
+        || proposal.planToken !== offer.planToken) return false;
+      const window = proposal.window as { id?: unknown; startAt?: unknown; endAt?: unknown; segments?: unknown };
+      if (!window || typeof window !== "object" || Array.isArray(window)
+        || Object.keys(window).sort().join() !== "endAt,id,segments,startAt") return false;
+      const target = offer.windows.find((item) => item.id === window.id && item.startAt === window.startAt && item.endAt === window.endAt);
+      if (!target || !Array.isArray(window.segments) || window.segments.length < 1 || window.segments.length > 4) return false;
+      const segments = window.segments as Array<{ activity?: unknown; minutes?: unknown }>;
+      if (segments.some((segment) => !segment || typeof segment !== "object" || Array.isArray(segment)
+        || Object.keys(segment).sort().join() !== "activity,minutes" || !validLifeActivity(segment.activity)
+        || !Number.isSafeInteger(segment.minutes) || (segment.minutes as number) < 30 || (segment.minutes as number) % 15 !== 0)
+        || segments.reduce((sum, segment) => sum + (segment.minutes as number), 0) !== (target.endAt - target.startAt) / 60_000) return false;
+      const at = now();
+      if (!validTimestamp(at) || at < state.cursorAt || at >= target.startAt
+        || new Date(at).getTimezoneOffset() !== offer.timezoneOffsetMinutes
+        || state.planning.lastConversationUpdateAt !== null && at - state.planning.lastConversationUpdateAt < CONVERSATION_UPDATE_COOLDOWN_MS
+        || lifePlanToken(state.planning) !== offer.planToken) return false;
+      const base = reconcileJournal(advanceContinuity(state, at, runtimeBoundary(at)));
+      const plan: ConversationLifePlan = { ...target,
+        activities: segments.map((segment) => segment.activity as string),
+        durations: segments.map((segment) => segment.minutes as number),
+        requestedAt: offer.requestedAt, appliedAt: at, timezoneOffsetMinutes: offer.timezoneOffsetMinutes,
+        revision: state.revision + 1, runId };
+      save({ ...base, planning: { ...base.planning, lastConversationUpdateAt: at,
+        conversationPlans: [...base.planning.conversationPlans, plan] } });
+      observeRuntime(at);
+      return true;
+    },
+    discardConversationUpdate(runId: string): void { conversationOffers.delete(runId); },
+    build: (query = "", contextOptions: { proactive?: boolean; conversationRunId?: string } = {}) => {
       if (!state.settings.enabled) return "";
       advance();
-      return buildContext(new Date(now()), state.settings.importantDates, state.events, state.self, state.planning, state.journal, query, contextOptions.proactive);
+      const at = now();
+      let offer: ConversationLifeOffer | undefined;
+      if (contextOptions.conversationRunId && state.planning.enabled && validTimestamp(at)
+        && at >= state.cursorAt && new Date(at).getHours() >= 6 && new Date(at).getHours() < 23
+        && (state.planning.lastConversationUpdateAt === null
+          || at - state.planning.lastConversationUpdateAt >= CONVERSATION_UPDATE_COOLDOWN_MS)) {
+        const timezoneOffsetMinutes = new Date(at).getTimezoneOffset();
+        const windows = planningWindows("refine", at, timezoneOffsetMinutes, true);
+        if (windows.length) {
+          for (const [runId, previous] of conversationOffers) {
+            if (at - previous.requestedAt > 60 * 60_000) conversationOffers.delete(runId);
+          }
+          if (conversationOffers.size >= 64) conversationOffers.delete(conversationOffers.keys().next().value!);
+          offer = { requestedAt: at, timezoneOffsetMinutes, windows, planToken: lifePlanToken(state.planning) };
+          conversationOffers.set(contextOptions.conversationRunId, offer);
+        }
+      }
+      return buildContext(new Date(at), state.settings.importantDates, state.events, state.self, state.planning,
+        state.journal, query, contextOptions.proactive, offer);
     },
     status: (): LifeStatus | null => {
       if (!state.settings.enabled) return null;

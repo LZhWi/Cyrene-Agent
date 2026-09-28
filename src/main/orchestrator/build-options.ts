@@ -1094,6 +1094,7 @@ export async function buildAgentRunOptions(
       executionMode,
       // 桌面 Chat 固定对齐本地 Collab 的 Tool→Soul；渠道保持上游原生路径。
       chatResponseMode: isChatMode && resolvedMode === "chat" && !input.channel ? "two-phase" as const : "native" as const,
+      companionLifeSidecar: useCompanionDesktopChat,
       originalQuery: latestUserText,
       contextualizedQuery,
       citaContextBlock,

@@ -119,7 +119,7 @@ function renderLife() {
   $("life-metrics").textContent = `精力 ${self.energy ?? "—"} / 100 · 专注 ${self.focus ?? "—"} / 100 · 休息需要 ${self.restNeed ?? "—"} / 100`;
   $("life-planning-enabled").checked = Boolean(planning.enabled);
   $("life-planning-enabled").disabled = !lifeSettings.enabled || lifeSettingsPending;
-  $("life-budget").textContent = `今日更新：早 ${Number(used("morning"))}/1 · 中 ${Number(used("afternoon"))}/1 · 晚 ${Number(used("evening"))}/1${planningBusy ? " · 正在生成" : ""}`;
+  $("life-budget").textContent = `固定更新：早计划 ${Number(used("morning"))}/1 · 晚日记 ${Number(used("evening"))}/1 · 中午仅手动或随对话调整${planningBusy ? " · 正在生成" : ""}`;
   $("life-plan-daily").disabled = !lifeSettings.enabled || planningBusy || lifeSettingsPending || busy || phase !== "morning" || used("morning");
   $("life-plan-refine").disabled = !lifeSettings.enabled || planningBusy || lifeSettingsPending || busy || !["afternoon", "evening"].includes(phase) || used(phase);
   $("life-plan-cancel").disabled = !planningBusy;
@@ -131,6 +131,13 @@ function renderLife() {
       const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       return `${time(window.startAt)}–${time(window.endAt)} ${window.activities.map((activity, index) => window.durations?.[index] ? `${activity} ${window.durations[index]} 分钟` : activity).join("、")}`;
     }).join("；")}`;
+    $("life-plans").append(row);
+  }
+  for (const plan of (planning.conversationPlans ?? []).filter((item) => item.endAt > Date.now())) {
+    const row = document.createElement("p");
+    const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    row.textContent = `对话调整：${time(plan.startAt)}–${time(plan.endAt)} ${plan.activities.map((activity, index) =>
+      `${activity} ${plan.durations[index]} 分钟`).join("、")}`;
     $("life-plans").append(row);
   }
   if (!$("life-plans").childElementCount) $("life-plans").textContent = "今日尚无模型计划，继续使用本地日程。";

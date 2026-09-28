@@ -19,9 +19,9 @@
 <dialog id="life-dialog" aria-labelledby="life-title"><h2 id="life-title">生活</h2>
 <p id="life-current"></p><p id="life-metrics"></p><p>这些数值描述角色的模拟生活；休息和精力变化不会阻止回复。</p>
 <label class="life-toggle"><input id="life-planning-enabled" type="checkbox"> 自动模型规划</label>
-<p>默认关闭。开启后使用当前所选模型，早上规划全天，中午和晚上分别决定是否修改未来安排，并可根据生活记录更新日记。每天各时段最多一次，失败或取消也占额度。最近聊天只读提供给模型。</p>
+<p>默认关闭。开启后早上生成基础计划、晚上更新日记；对话中角色也可调整尚未开始的安排。对话调整没有每日次数上限，两次成功调整至少间隔 15 分钟。固定调用失败或取消仍占本时段额度；最近聊天只读提供给模型。</p>
 <p id="life-budget"></p><div class="actions"><button id="life-plan-daily" type="button">生成今日计划</button><button id="life-plan-refine" type="button">更新未来安排</button><button id="life-plan-cancel" type="button">取消调用</button></div>
-<p id="life-result" role="status" aria-live="polite"></p><h3>今日模型计划</h3><div id="life-plans" class="life-records"></div>
+<p id="life-result" role="status" aria-live="polite"></p><h3>今日模型计划与对话调整</h3><div id="life-plans" class="life-records"></div>
 <h3>近期生活记录</h3><div id="life-events" class="life-records"></div>
 <h3>生活分享记录</h3><div id="life-sharing" class="life-records"></div>
 <h3>跨日目标</h3><p>由你明确创建，最多同时启用 3 个。关联生活片段表示持续参与；完成由你手动确认。</p>

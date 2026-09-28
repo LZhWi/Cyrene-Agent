@@ -146,7 +146,7 @@ const plugin: CyrenePlugin = {
       provide: (input) => input.source === "conversation"
         && (input as typeof input & { chatBackend?: "native" | "companion" }).chatBackend === "companion"
         && !input.channel
-        ? life.build(input.userText)
+        ? life.build(input.userText, { conversationRunId: (input as typeof input & { runId?: string }).runId })
         : "",
     });
     const savedLink = storage.get<{ enabled: boolean }>("memory-link");
@@ -397,6 +397,11 @@ const plugin: CyrenePlugin = {
       }
       if (event.source !== "desktop" || event.mode !== "chat") return;
       proactive.noteConversationEnded();
+      const lifeUpdate = (event as typeof event & { companionLifeUpdate?: string }).companionLifeUpdate;
+      if (event.chatBackend === "companion" && event.status === "success" && event.finalMessageId && lifeUpdate) {
+        try { life.applyConversationUpdate(event.runId, lifeUpdate); }
+        catch (error) { console.warn("[Life] 对话生活调整未提交:", error instanceof Error ? error.message : String(error)); }
+      } else life.discardConversationUpdate(event.runId);
       if (event.status === "success" && event.finalMessageId) worldbook.commit(event.runId);
       else worldbook.discard(event.runId);
     });

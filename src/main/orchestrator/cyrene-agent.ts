@@ -36,6 +36,7 @@ export interface SkillRouteInfo {
  */
 export interface AgentLoopResult {
   reply: string;
+  companionLifeUpdate?: string;
   toolResults: import("./types").ToolCallResult[];
   completionReason: "no_tool" | "timeout" | "max_rounds" | "tool_error";
   totalUsage?: { input: number; output: number };
@@ -124,6 +125,8 @@ export interface CyreneRunOptions {
   executionMode?: AgentExecutionMode;
   /** 桌面 Collab Chat 使用严格 Tool→Soul；缺省保持上游原生分流。 */
   chatResponseMode?: "native" | "two-phase";
+  /** 只对桌面陪伴 Chat 的最终 Soul 文本拆出生活提案。 */
+  companionLifeSidecar?: boolean;
   /** 原始 UI 模式（work / learn / chat / code），供工具做模式隔离。 */
   conversationMode?: ConversationMode;
   timeoutMs: number;
@@ -210,6 +213,7 @@ export interface CyreneRunOptions {
 /** Agent run 最终结果（供桥层做副作用用）。 */
 export interface CyreneRunResult {
   reply: string;
+  companionLifeUpdate?: string;
   toolResults: ToolCallResult[];
   totalUsage?: { input: number; output: number };
   soulPhaseReason?: "no_tool" | "max_rounds" | "timeout" | "tool_error";
@@ -467,6 +471,7 @@ export class CyreneAgent extends AbstractAgent {
               soulSampling: options.soulSampling,
               timeoutMs: options.timeoutMs,
               streaming: false,
+              companionLifeSidecar: options.companionLifeSidecar,
               fallbackRevealIntervalMs: 0,
               imageCaptionFallback: options.imageCaptionFallback,
               onEvent,
@@ -506,6 +511,7 @@ export class CyreneAgent extends AbstractAgent {
                   soulSampling: options.soulSampling,
                   timeoutMs: options.timeoutMs,
                   streaming: false,
+                  companionLifeSidecar: options.companionLifeSidecar,
                   fallbackRevealIntervalMs: 0,
                   diagnosticFailureReply: true,
                   onEvent,
@@ -518,6 +524,7 @@ export class CyreneAgent extends AbstractAgent {
 
           this.lastResult = {
             reply: result.reply,
+            ...(result.companionLifeUpdate ? { companionLifeUpdate: result.companionLifeUpdate } : {}),
             toolResults: result.toolResults,
             totalUsage: result.totalUsage,
             soulPhaseReason: result.completionReason,

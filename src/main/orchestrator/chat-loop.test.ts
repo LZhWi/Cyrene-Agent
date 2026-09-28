@@ -318,6 +318,39 @@ describe("runChatLoop", () => {
     expect(result.reply).toBe("完整回复");
   });
 
+  it("陪伴 Soul 只展示回复正文，并单独交出有效的生活提案", async () => {
+    const adapter = new FakeAdapter();
+    const events: Array<{ type: string; delta?: string }> = [];
+    const update = '{"action":"revise","planToken":4}';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ text: `我想去河边走走。\n<cyrene-life-update>${update}</cyrene-life-update>` }),
+      { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter, messages: [{ role: "user", content: "今天想做什么" }], soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000, companionLifeSidecar: true, fallbackRevealIntervalMs: 0,
+      onEvent: (event) => events.push(event), recordUsage: vi.fn(),
+    });
+    expect(result.reply).toBe("我想去河边走走。");
+    expect(result.companionLifeUpdate).toBe(update);
+    expect(events.filter((event) => event.type === "text_message_content")).toEqual([
+      expect.objectContaining({ delta: "我想去河边走走。" }),
+    ]);
+    expect(adapter.requests[0].stream).toBe(false);
+  });
+
+  it("无效生活提案不会进入可见回复，也不会产生修改指令", async () => {
+    const adapter = new FakeAdapter();
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ text: "先聊这件事。<cyrene-life-update>{bad}</cyrene-life-update>" }),
+      { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter, messages: [{ role: "user", content: "你好" }], soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000, companionLifeSidecar: true, fallbackRevealIntervalMs: 0, recordUsage: vi.fn(),
+    });
+    expect(result.reply).toBe("先聊这件事。");
+    expect(result.companionLifeUpdate).toBeUndefined();
+  });
+
   it("makes one plain Soul request without tools or structured output", async () => {
     const adapter = new FakeAdapter();
     const onEvent = vi.fn();

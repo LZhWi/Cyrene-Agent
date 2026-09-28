@@ -484,6 +484,32 @@ describe("跨插件协议与路径边界", () => {
       expect(await provider!.provide({ ...input, chatBackend: "companion" } as never)).toBe("");
     } finally { await ctx.dispose(); await chatPlugin.unregister?.(); }
   });
+  it("Soul 的生活提案随已落盘轮次修改未来日程，不额外调用模型", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 8, 28, 9));
+    const generateText = vi.fn(async () => "不应调用");
+    const ctx = createMockPluginContext({ pluginId: CHAT_ID, deps: { llm: { generateText } } });
+    ctx.storage.rootDir = () => temporaryDirectory("life-conversation-");
+    try {
+      await chatPlugin.register(ctx);
+      const ui = async (action: string, data?: unknown) => (await ctx.ipcChannels.get("ui")!(action, data) as any).data;
+      await ui("life-planning-settings", { enabled: true });
+      const provider = ctx.promptProviders.find((item) => item.id === "life-context")!;
+      const prompt = await provider.provide({ source: "conversation", mode: "chat", userText: "今天想去河边看看",
+        conversationId: "c", runId: "run-life", chatBackend: "companion", signal: ctx.signal } as never) as string;
+      const match = /planToken=(\d+)；可修改的未来窗口=(\[[^\n]+\])/.exec(prompt)!;
+      expect(match).toBeTruthy();
+      const window = (JSON.parse(match[2]) as Array<{ id: string; startAt: number; endAt: number }>)[0];
+      const update = JSON.stringify({ action: "revise", planToken: Number(match[1]), window: {
+        id: window.id, startAt: window.startAt, endAt: window.endAt,
+        segments: [{ activity: "沿河边小路散步", minutes: (window.endAt - window.startAt) / 60_000 }] } });
+      const finished = ctx.subscriptions.find((item) => item.event === "host:turn:finished")!;
+      await finished.listener({ source: "desktop", mode: "chat", runId: "run-life", conversationId: "c",
+        inputMessageId: "user-1", finalMessageId: "assistant-1", chatBackend: "companion", status: "success",
+        companionLifeUpdate: update });
+      expect((await ui("life-state")).planning.conversationPlans).toMatchObject([{ activities: ["沿河边小路散步"] }]);
+      expect(generateText).not.toHaveBeenCalled();
+    } finally { await ctx.dispose(); await chatPlugin.unregister?.(); vi.useRealTimers(); }
+  });
   it("主动消息测试只在显式调用后生成并交给宿主投递", async () => {
     const generateText = vi.fn().mockResolvedValue('{"decision":"send","text":"最近还好吗？记得也给自己留一点休息时间。"}');
     const postProactiveMessage = vi.fn(async (text: string) => ({

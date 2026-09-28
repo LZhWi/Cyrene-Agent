@@ -250,6 +250,8 @@ describe("build-options", () => {
     const desktop = (await buildAgentRunOptions(input, deps)).options;
     const channel = (await buildAgentRunOptions({ ...input, channel: "wechat" }, deps)).options;
     expect(desktop.soulSystemBaseContent).toContain("COMPANION_PERSONA");
+    expect(desktop.companionLifeSidecar).toBe(true);
+    expect(channel.companionLifeSidecar).toBe(false);
     expect(desktop.soulSystemBaseContent).not.toContain("SOUL_SYSTEM_BASE");
     expect(desktop.toolSystemContent).toContain("COMPANION_TOOL_RULES");
     expect(desktop.toolSystemContent).not.toContain("COMPANION_PERSONA");

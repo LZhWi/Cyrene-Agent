@@ -51,7 +51,7 @@ function readPersonaFile(root: string, relative: string): string {
   if (path.relative(root, resolved).startsWith("..")) throw new Error("内置人格资源路径越界");
   const stat = lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128 * 1024) throw new Error("内置人格资源无效");
-  return readFileSync(file, "utf8").trim();
+  return readFileSync(file, "utf8").replace(/\r\n/g, "\n").trim();
 }
 
 export function parsePersonaStyle(value: unknown): PersonaStyleId {

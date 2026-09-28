@@ -219,6 +219,7 @@ export async function runHarnessWithAdapter(
 
   return {
     reply: soulResult?.reply ?? result.finalAnswer,
+    ...(soulResult?.companionLifeUpdate ? { companionLifeUpdate: soulResult.companionLifeUpdate } : {}),
     toolResults,
     completionReason,
     terminal,

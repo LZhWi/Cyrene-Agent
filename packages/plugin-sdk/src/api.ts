@@ -377,6 +377,8 @@ export type PluginTurnFinishedEvent =
       conversationId: string;
       inputMessageId: string;
       finalMessageId?: string;
+      /** 已保存的陪伴回复附带的生活修改提案 JSON；仅在成功落盘后提供。 */
+      companionLifeUpdate?: string;
       /** 本轮开始时冻结的 Chat 后端；插件可据此避免把原生与陪伴会话混写。 */
       chatBackend?: "native" | "companion";
     })

@@ -20,6 +20,7 @@ export interface PendingTurnInput {
 export interface PendingTurnTerminal {
   status: PluginTurnStatus;
   durationMs?: number;
+  companionLifeUpdate?: string;
 }
 
 export interface PendingTurnPersistenceAck {
@@ -91,6 +92,8 @@ export function createPendingTurnLifecycle(deps: PendingTurnLifecycleDeps) {
       conversationId: entry.input.conversationId,
       inputMessageId: entry.input.inputMessageId,
       ...(finalMessageId ? { finalMessageId } : {}),
+      ...(entry.terminal.status === "success" && finalMessageId && entry.input.chatBackend === "companion"
+        && entry.terminal.companionLifeUpdate ? { companionLifeUpdate: entry.terminal.companionLifeUpdate } : {}),
       ...(entry.input.chatBackend ? { chatBackend: entry.input.chatBackend } : {}),
       status: entry.terminal.status,
       ...(entry.terminal.durationMs !== undefined ? { durationMs: entry.terminal.durationMs } : {}),

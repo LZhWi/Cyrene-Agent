@@ -37,6 +37,8 @@ export interface ChatLoopOptions {
   tailSystemContext?: string;
   /** 两阶段 Soul 失败时按本地版返回可诊断的中断回复，而不是让整轮直接失败。 */
   diagnosticFailureReply?: boolean;
+  /** 陪伴 Chat 的非流式 Soul 回复可携带末尾生活提案；提案不进入可见正文。 */
+  companionLifeSidecar?: boolean;
   soulSampling?: ApprovedStyleSampling;
   timeoutMs: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
@@ -108,6 +110,22 @@ function stripToolProtocol(text: string): string {
     .replace(/\[tool_call\][\s\S]*?\[\/tool_call\]/gi, "")
     .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
     .trim();
+}
+
+function splitCompanionLifeSidecar(text: string): { reply: string; update?: string } {
+  const open = "<cyrene-life-update>", close = "</cyrene-life-update>";
+  const start = text.lastIndexOf(open);
+  if (start < 0) return { reply: text };
+  const reply = text.slice(0, start).trim();
+  const tail = text.slice(start + open.length).trim();
+  if (!reply || !tail.endsWith(close)) return { reply };
+  const update = tail.slice(0, -close.length).trim();
+  if (update.length > 4_000) return { reply };
+  try {
+    const value: unknown = JSON.parse(update);
+    if (value && typeof value === "object" && !Array.isArray(value)) return { reply, update };
+  } catch { /* 无效提案仅保留可见回复 */ }
+  return { reply };
 }
 
 function sanitizeDiagnosticReason(reason: string): string {
@@ -350,7 +368,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
   };
 
   const invokeModel = async (messages: ChatMessage[]) => {
-    if (options.streaming === false) {
+    if (options.streaming === false || options.companionLifeSidecar) {
       return { response: await invokeNonStreaming(messages), needsReveal: true };
     }
     return invokeWithStreamFallback(messages);
@@ -385,7 +403,9 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     if (response.usage) {
       usageRecorder(response.usage.input, response.usage.output, 1, response.usage.cachedInput, response.usage.cacheCreation);
     }
-    const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))
+    const cleaned = stripLeakedChatTimeContext(stripToolProtocol(response.text));
+    const sidecar = options.companionLifeSidecar ? splitCompanionLifeSidecar(cleaned) : { reply: cleaned };
+    const reply = sidecar.reply
       || "刚才没有生成正常回复，请再试一次。";
     // 终态快照：把最终回复并入历史口径（与下一轮进入历史的文本一致）。
     emitContextUsage("terminal", reply);
@@ -402,6 +422,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     endText();
     return {
       reply,
+      ...(sidecar.update ? { companionLifeUpdate: sidecar.update } : {}),
       toolResults: [],
       totalUsage: response.usage,
       completionReason: "no_tool",

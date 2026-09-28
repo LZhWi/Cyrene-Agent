@@ -799,6 +799,8 @@ export function registerAgUiIpc(
           pendingTurns?.settleTerminal(runId, {
             status: settlement.status,
             durationMs: Date.now() - turnStartedAt,
+            ...(isSuccessfulCompletion && agent.lastResult?.companionLifeUpdate
+              ? { companionLifeUpdate: agent.lastResult.companionLifeUpdate } : {}),
           });
         }
         try {
