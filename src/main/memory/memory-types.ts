@@ -44,7 +44,7 @@ export interface L2Memory {
   triggerText: string
   sourceConversationId: string
   createdAt: number
-  /** 支持该记忆的原始对话时间；不保存消息 ID，缺失时回退 createdAt。 */
+  /** 支持该记忆的原始对话时间；缺失时回退 createdAt。 */
   sourceAt?: number
   /** 多轮共同支持时的来源时间范围终点。 */
   sourceEndAt?: number
@@ -64,6 +64,9 @@ export interface L2Memory {
   conflictWith?: string[]
   evidenceIds?: string[]
   sourceMessageIds?: string[]
+  sourceEvidence?: MemorySourceEvidence[]
+  /** 每次内容编辑递增；召回、权重及向量同步不改变该版本。 */
+  contentRevision?: number
   supersededBy?: string
   mergedInto?: string
   /** 提取时保留的「用户当时说的原话」片段：L2 是浓缩结论，会丢失专有名词/数字等
@@ -196,6 +199,8 @@ export interface ConflictScoringSignals {
 }
 
 export interface MemoryEvidence {
+  /** 自动更新前的正文，仅用于追溯。 */
+  previousContent?: string
   id: string
   memoryId: string
   quoteSnippet: string
@@ -234,10 +239,38 @@ export interface MemoryCandidate {
   createdAt?: number
   /** MemoryJudge 与摘要同批输出；缺失或非法时回落为保守的本地标签。 */
   facets?: MemoryFacets
+  sourceConversationId?: string
+  sourceMessageIds?: string[]
+  sourceEvidence?: MemorySourceEvidence[]
+  memoryAction?: "add" | "supplement" | "correct"
+  targetMemoryId?: string
+  targetVersion?: string
+  /** correct 只替换这一段唯一匹配的旧原文；content 是替代文本。 */
+  replaceText?: string
+}
+
+export interface MemorySourceEvidence {
+  conversationId: string
+  messageId: string
+  quote: string
+}
+
+export interface MemoryReviewTarget {
+  id: string
+  content: string
+  version: string
+  sourceMessageIds: string[]
+}
+
+export interface MemoryJudgeContext {
+  priorTurnCount: number
+  previousMemories: MemoryReviewTarget[]
 }
 
 export interface MemoryJudgeTurn {
   userInput: string
+  /** 会话保存的用户原文；userInput 中的附件解释不能作为用户原话证据。 */
+  sourceUserText?: string
   assistantReply: string
   userAt?: number
   assistantAt?: number
@@ -246,6 +279,24 @@ export interface MemoryJudgeTurn {
   assistantMessageId?: string
   /** true 时，提取前必须回查会话文件确认该轮仍存在。 */
   validateAgainstConversation?: boolean
+  /** 会话原文版本；与含额外上下文的 userInput 分开，供编辑后失效检查。 */
+  sourceUserVersion?: string
+  sourceAssistantVersion?: string
+}
+
+/** 保留已消费轮次的身份，删除后仍可去重；不保存回复正文。 */
+export interface MemoryCountedTurn {
+  conversationId: string
+  userMessageId: string
+  assistantMessageId: string
+  validateAgainstConversation: boolean
+  active: boolean
+}
+
+export interface MemoryRoundCountState {
+  /** 兼容无会话来源的旧计数；有完整聊天来源时从有效消息对重建。 */
+  baseCount: number
+  turns: MemoryCountedTurn[]
 }
 
 export interface MemoryStore {
@@ -260,6 +311,7 @@ export interface MemoryStore {
   lastDecayAt?: number
   /** 尚未被 MemoryJudge 提取的残余轮次，重启后恢复，避免丢轮 */
   pendingTurns?: MemoryJudgeTurn[]
+  roundCountState?: MemoryRoundCountState
   /** L2 DMAE 工作记忆状态表（按 l2Id 索引），重启后恢复驻留集 */
   l2DmaeStates?: Record<string, L2DmaeState>
   /** DMAE 全局轮次计数（每次带状态更新的注入轮 +1） */

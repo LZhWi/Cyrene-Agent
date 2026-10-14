@@ -16,8 +16,11 @@ describe("social context injection", () => {
     second.createdAt = Date.UTC(2026, 7, 4, 5, 45);
     const block = buildSocialContextBlock([first, second], "Asia/Shanghai");
 
-    expect(block).toContain("近期状态：\n- [形成于 2026-08-04 12:30, Asia/Shanghai] 用户这周在准备考试");
-    expect(block).toContain("尚未接上的话题：\n- [形成于 2026-08-04 13:45, Asia/Shanghai] 等用户考完后继续聊结果");
+    expect(block).toContain("历史背景（已过期，不是当前状态或待办）：");
+    expect(block).toContain("形成于 2026-08-04 12:30, Asia/Shanghai");
+    expect(block).toContain("形成于 2026-08-04 13:45, Asia/Shanghai");
+    expect(block).toContain("用户这周在准备考试");
+    expect(block).toContain("等用户考完后继续聊结果");
     expect(block).toContain("不要声称自己拥有额外记忆能力");
   });
 

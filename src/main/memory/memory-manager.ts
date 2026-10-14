@@ -1,4 +1,7 @@
 import { memoryStore } from "./memory-store"
+import type { MemoryJudgeTurn } from "./memory-types"
+import { assertNoTemporaryTurnRefs, bindCandidateEvidence, memoryContentVersion } from "./memory-write-validation"
+import { deleteUserMemoryVectors } from "../rag/index"
 import type { L0WritableField } from "./memory-store"
 import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, L2Memory } from "./memory-types"
 import { findPossibleConflictCandidate } from "./memory-conflict"
@@ -99,14 +102,31 @@ export class MemoryManager {
     await memoryStore.upsertL0Field("permanentNote", updated)
   }
 
-  async writeMemory(candidates: MemoryCandidate[]): Promise<void> {
+  async writeMemory(candidates: MemoryCandidate[], isSourceCurrent?: () => Promise<boolean>, source?: { turns: MemoryJudgeTurn[]; conversationId: string }): Promise<void> {
+    candidates = candidates.map(candidate => {
+      assertNoTemporaryTurnRefs(candidate.content)
+      return source ? bindCandidateEvidence(candidate, source.turns, source.conversationId) : candidate
+    })
+    const patches = candidates.filter(c => c.memoryAction === "supplement" || c.memoryAction === "correct")
+    if (patches.length) {
+      if (!source || !isSourceCurrent) throw new Error("记忆更新必须提供原文及来源版本校验")
+      const targets = await memoryStore.getAllL2()
+      for (const candidate of patches) {
+        const target = targets.find(m => m.id === candidate.targetMemoryId)
+        if (!target || memoryContentVersion(target) !== candidate.targetVersion) throw new Error("目标记忆版本已变化，拒绝更新")
+      }
+    }
     for (const candidate of candidates) {
+      if (isSourceCurrent && !await isSourceCurrent()) return
       if (shouldSkipCandidate(candidate)) {
         console.log("[MemoryManager] 候选标记为不写入或存在过度概括，跳过")
         continue
       }
 
-      if (candidate.layer === "L0") {
+      if (candidate.memoryAction === "supplement" || candidate.memoryAction === "correct") {
+        if (candidate.layer !== "L2") throw new Error("只允许更新 L2 记忆")
+        await this.patchL2(candidate, isSourceCurrent!)
+      } else if (candidate.layer === "L0") {
         if (!canWriteCoreProfile(candidate)) {
           console.log("[MemoryManager] L0 候选不是用户明确事实，跳过自动写核心画像")
           continue
@@ -135,6 +155,7 @@ export class MemoryManager {
         }
 
         // 情况三：合法字段，直接写入
+        if (isSourceCurrent && !await isSourceCurrent()) return
         await memoryStore.upsertL0Field(candidate.field as L0WritableField, candidate.content)
         console.log(`[MemoryManager] L0 更新字段: ${candidate.field} = "${candidate.content.slice(0, 20)}"`)
       } else if (candidate.layer === "L1") {
@@ -142,20 +163,41 @@ export class MemoryManager {
         await memoryStore.replaceL1Field(field, candidate.content)
         console.log(`[MemoryManager] L1 更新字段: ${field}`)
       } else if (candidate.layer === "L2") {
-        await this.writeL2(candidate)
+        await this.writeL2(candidate, isSourceCurrent)
       }
     }
   }
 
-  private async writeL2(candidate: MemoryCandidate): Promise<void> {
+  private async patchL2(candidate: MemoryCandidate, isSourceCurrent: () => Promise<boolean>): Promise<void> {
+    const { memory, oldRagId } = await memoryStore.applyL2MemoryPatch(candidate, isSourceCurrent)
+    const version = memoryContentVersion(memory)
+    const oldVectors = getEntriesBySource("user_memory").filter(e => e.metadata?.l2Id === memory.id).map(e => e.id)
+    if (oldRagId) oldVectors.push(oldRagId)
+    try { deleteUserMemoryVectors([...new Set(oldVectors)]) } catch (error) {
+      console.warn("[MemoryManager] 旧向量清理失败，旧映射已失效", error)
+    }
+    try {
+      const ragId = await addL2MemoryVector(memory.content, memory.id, { triggerText: memory.triggerText, facets: memory.facets }, { createdAt: memory.createdAt })
+      const synced = await memoryStore.markL2SyncStatus(memory.id, "synced", ragId, undefined, version)
+      if (!synced) deleteUserMemoryVectors([ragId])
+    } catch (error) {
+      await memoryStore.markL2SyncStatus(memory.id, "sync_failed", undefined, error, version)
+      console.warn("[MemoryManager] 更新已保存，向量同步失败", error)
+    }
+  }
+
+  private async writeL2(candidate: MemoryCandidate, isSourceCurrent?: () => Promise<boolean>): Promise<void> {
     // 高余弦也可能是时间更新或信息补充，不能在写入前直接吞掉。
     // 先保留两条完整记忆，写入成功后再把关系提交给后台 Resolver。
     const suspectedDuplicate = await this.findSuspectedDuplicateL2(candidate)
+    if (isSourceCurrent && !await isSourceCurrent()) return
 
     const l2Input: Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status"> = {
       content: candidate.content,
       triggerText: candidate.triggerText,
-      sourceConversationId: "",
+      sourceConversationId: candidate.sourceConversationId ?? "",
+      sourceMessageIds: candidate.sourceMessageIds,
+      sourceEvidence: candidate.sourceEvidence,
       sourceAt: candidate.sourceAt,
       sourceEndAt: candidate.sourceEndAt,
       validFrom: candidate.sourceAt ?? candidate.createdAt,

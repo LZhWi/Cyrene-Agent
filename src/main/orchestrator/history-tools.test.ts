@@ -10,7 +10,13 @@ const mocks = vi.hoisted(() => ({
   getEntriesBySource: vi.fn(() => [{}]),
   searchHistoryEntries: vi.fn(),
   registerTool: vi.fn(),
+  getSession: vi.fn(),
+  recordWindowShadow: vi.fn(),
+  standardReranker: false,
+  rerank: vi.fn(),
 }));
+
+vi.mock("./history-window-shadow", () => ({ recordHistoryWindowShadow: mocks.recordWindowShadow }));
 
 vi.mock("../runtime/runtime-paths", () => ({
   getUserDataDir: () => mocks.dataDir,
@@ -23,13 +29,17 @@ vi.mock("../rag", () => ({
   searchHistoryEntries: mocks.searchHistoryEntries,
 }));
 
+vi.mock("../chats/chats-store", () => ({
+  getSession: mocks.getSession,
+}));
+
 vi.mock("./tool-registry", () => ({
   toolRegistry: { register: mocks.registerTool },
 }));
 
 vi.mock("../rag/reranker", () => ({
-  getRerankerInstallStatus: () => ({ standard: false }),
-  createStandardReranker: vi.fn(),
+  getRerankerInstallStatus: () => ({ standard: mocks.standardReranker }),
+  createStandardReranker: vi.fn(async () => ({ rerank: mocks.rerank })),
 }));
 
 import {
@@ -39,6 +49,7 @@ import {
   expandHistoryHitsWithAdjacentTurns,
   expandHistoryHitsWithSentenceWindows,
   filterHistoryHitsByRelevance,
+  indexConversationTurn,
   reconcileHistoryHitsWithTimeline,
   registerRecallHistoryTool,
   resolveHistoryAutoInjectionLimit,
@@ -48,7 +59,82 @@ import {
   shouldAutoProbeHistoryRetrieval,
 } from "./history-tools";
 
+describe("history indexing source", () => {
+  it("uses the saved message instead of per-run text for desktop turns", async () => {
+    mocks.addHistoryMemory.mockReset();
+    mocks.getSession.mockReturnValue({ messages: [{
+      id: "u1", role: "user", at: 1, content: "你好 [sticker:HI]",
+      modelContext: "【文档内容】临时节选",
+    }] });
+    await indexConversationTurn("chat-1", "你好 （用户发送表情包：嗨，想我了吗）\n【文档内容】临时节选", "好的", {
+      userTurnId: "u1", assistantTurnId: "a1",
+    });
+    expect(mocks.addHistoryMemory.mock.calls[0][0]).toBe("你好 （用户发送表情包：嗨，想我了吗）");
+    expect(mocks.addHistoryMemory.mock.calls[1][0]).toBe("好的");
+  });
+
+  it("describes channel sticker markers when no desktop turn id exists", async () => {
+    mocks.addHistoryMemory.mockReset();
+    await indexConversationTurn("channel:wechat:test", "你好 [sticker:HI]", "好的");
+    expect(mocks.addHistoryMemory.mock.calls[0][0]).toBe("你好 （用户发送表情包：嗨，想我了吗）");
+  });
+});
+
 describe("history retrieval scaling", () => {
+  it("captures existing window scores while leaving the formal prefix and model calls unchanged", async () => {
+    const text = "前文。".repeat(110) + "我要给你造一副身体。" + "后文。".repeat(110);
+    const entry = { text, score: 1, createdAt: Date.now(), metadata: { sessionId: "s", turnId: "t", role: "user" } };
+    mocks.standardReranker = true;
+    mocks.rerank.mockReset();
+    mocks.rerank.mockImplementation(async (_q, documents: string[]) => documents.map(text => ({ text, score: 1 })));
+    mocks.searchHistoryEntries.mockReset();
+    mocks.searchHistoryEntries.mockResolvedValue([entry]);
+    mocks.getEntriesBySource.mockReturnValue([]);
+    mocks.recordWindowShadow.mockClear();
+    try {
+      const output = await runHistoryAutoInjection("还记得之前的事情吗");
+      const observed = mocks.recordWindowShadow.mock.calls[0][0];
+      expect(observed.evidence.ranked.length).toBeGreaterThan(1);
+      expect(observed.evidence.candidates.some((c: { metadata?: Record<string, unknown> }) =>
+        c.metadata?.retrievalExpansion === "sentence_window")).toBe(true);
+      expect(output).toContain(text.slice(0, 300) + "...");
+      expect(output).not.toContain("我要给你造一副身体。");
+      const retrievalCalls = mocks.searchHistoryEntries.mock.calls.length;
+      const modelCalls = mocks.rerank.mock.calls.length;
+      mocks.searchHistoryEntries.mockClear(); mocks.rerank.mockClear();
+      expect(await runHistoryAutoInjection("还记得之前的事情吗")).toBe(output);
+      expect(mocks.searchHistoryEntries).toHaveBeenCalledTimes(retrievalCalls);
+      expect(mocks.rerank).toHaveBeenCalledTimes(modelCalls);
+    } finally { mocks.standardReranker = false; }
+  });
+
+  it.each([
+    { scope: "normal", queryKinds: [], expected: 5 },
+    { scope: "normal", queryKinds: ["experience"], expected: 8 },
+    { scope: "scoped_list", queryKinds: ["experience"], expected: 10 },
+    { scope: "exhaustive_list", queryKinds: ["experience"], expected: 12 },
+  ] as const)("observes the actual routed $expected results without extra retrieval", async ({ scope, queryKinds, expected }) => {
+    const entries = Array.from({ length: 12 }, (_, index) => ({
+      text: `history-${index}`, score: 1, createdAt: Date.now() - index,
+      metadata: { sessionId: "s", turnId: `t${index}`, role: "user" },
+    }));
+    mocks.getEntriesBySource.mockReturnValue([]);
+    mocks.searchHistoryEntries.mockReset();
+    mocks.searchHistoryEntries.mockImplementation(async (_q, depth) => entries.slice(0, depth));
+    mocks.recordWindowShadow.mockClear();
+    const output = await runHistoryAutoInjection("还记得之前的事情吗", 90, {
+      retrievalPlan: { scope, queryKinds: [...queryKinds], semanticResults: 12,
+        kindResults: 12, maxResults: 12, candidateDepth: 12, characterBudget: 4000 },
+    });
+    const record = mocks.recordWindowShadow.mock.calls[0][0];
+    expect(record.finalK).toBe(expected);
+    expect(record.selected).toHaveLength(expected);
+    for (const hit of record.selected) expect(output).toContain(hit.text);
+    expect(record.selected.map((h: { createdAt: number }) => h.createdAt))
+      .toEqual(record.selected.map((h: { createdAt: number }) => h.createdAt).sort((a: number, b: number) => a - b));
+    expect(mocks.searchHistoryEntries.mock.calls.every(call => call[2]?.recordRecall === false)).toBe(true);
+  });
+
   it.each([
     { scope: "normal", queryKinds: [], expected: 5 },
     { scope: "normal", queryKinds: ["experience"], expected: 8 },
@@ -722,5 +808,16 @@ describe("chat history occurrence backfill", () => {
       complete: true,
       sessionOffsets: { "session-a": 3 },
     });
+  });
+
+  it("backfills the same stable sticker and attachment text as live indexing", async () => {
+    const sessionFile = path.join(mocks.dataDir, "cyrene-chats", "sessions", "session-a.json");
+    fs.writeFileSync(sessionFile, JSON.stringify({ messages: [{
+      id: "turn-1", role: "user", content: "你好 [sticker:HI]", at: 100,
+      modelContext: "【图片视觉信息】临时描述",
+      attachments: [{ kind: "image", name: "photo.png", filePath: "photo.png", status: "done" }],
+    }] }));
+    await backfillChatHistoryFromChatLogs();
+    expect(mocks.addHistoryMemory.mock.calls[0][0]).toBe("你好 （用户发送表情包：嗨，想我了吗）\n（用户发送了图片）");
   });
 });

@@ -43,8 +43,6 @@ export type ProactiveBlockReason =
   | "scene_cooldown"
   | "unanswered_limit"
   | "followup_cooldown"
-  | "followup_same_scene"
-  | "followup_score_too_low"
   | "stale_epoch";
 
 export interface ProactiveCommitDecision {

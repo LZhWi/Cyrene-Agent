@@ -9,6 +9,10 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import type { ChatMessage } from "../../shared/chat-types";
+import { getSession } from "../chats/chats-store";
+import { historyIndexText } from "../chats/history-index-text";
+import { describeMarkersForLlm } from "../channels/mobile-markers";
 import {
   addHistoryMemory,
   deleteHistoryEntriesBySessionId,
@@ -27,6 +31,7 @@ import {
 } from "./history-retrieval-diagnostics";
 import type { RetrievalPlan } from "../memory/memory-facets";
 import { toolRegistry } from "./tool-registry";
+import { recordHistoryWindowShadow, type WindowShadowEvidence } from "./history-window-shadow";
 
 const LOG_PREFIX = "[History]";
 const HISTORY_ADJACENT_MAX_GAP_MS = 5 * 60 * 1000;
@@ -651,6 +656,7 @@ async function retrieveHistoryHits(
   days: number,
   source: "tool" | "auto_injection",
   finalK = 5,
+  shadowEvidence: WindowShadowEvidence = {},
 ): Promise<HistoryRetrievalHit[]> {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   // baseline 召回记录按 source 语义：工具显式调用才记；自动注入是系统猜测，
@@ -689,15 +695,15 @@ async function retrieveHistoryHits(
         semanticOnly: true,
       }),
       rerank: reranker
-        ? async (rerankQuery, documents) => diversifySandboxRerankResults(
-            await rerankHistoryCandidatesForSandbox(
+        ? async (rerankQuery, documents) => {
+            const ranked = await rerankHistoryCandidatesForSandbox(
               rerankQuery,
               documents,
               (focusedQuery, focusedDocuments) => reranker.rerank(focusedQuery, focusedDocuments),
-            ),
-            candidates,
-            finalK,
-          )
+            );
+            shadowEvidence.ranked = ranked;
+            return diversifySandboxRerankResults(ranked, candidates, finalK);
+          }
         : undefined,
       expandCandidates: (candidateHits) => expandHistoryHitsWithSentenceWindows(
         expandHistoryHitsWithAdjacentTurns(candidateHits, historyEntries, new Set(), {
@@ -709,7 +715,7 @@ async function retrieveHistoryHits(
       writeLog: isHistoryRetrievalDiagnosticsEnabled(),
       actualResultUnchanged: false,
       finalK,
-      onCandidates: (candidateHits) => { candidates = candidateHits; },
+      onCandidates: (candidateHits) => { candidates = candidateHits; shadowEvidence.candidates = candidateHits; },
       onResult: (v2Hits) => {
         if (v2Hits.length > 0) selected = v2Hits;
       },
@@ -752,12 +758,15 @@ export async function runHistoryAutoInjection(
     }
     if (!triggered) return "";
     const finalK = resolveHistoryAutoInjectionLimit(options.retrievalPlan);
-    const hits = await retrieveHistoryHits(query, userQuery, days, "auto_injection", finalK);
+    const shadowEvidence: WindowShadowEvidence = {};
+    const hits = await retrieveHistoryHits(query, userQuery, days, "auto_injection", finalK, shadowEvidence);
     const cleanQuery = query.normalize("NFC").replace(/\r\n?/g, "\n").trim();
     const selected = hits
       .filter((hit) => hit.text.normalize("NFC").replace(/\r\n?/g, "\n").trim() !== cleanQuery)
       .sort((a, b) => a.createdAt - b.createdAt)
       .slice(0, finalK);
+    recordHistoryWindowShadow({ userQuery, toolQuery: query, days, source: "auto_injection",
+      finalK, selected, evidence: shadowEvidence });
     if (selected.length === 0) return "";
     const lines = selected.map((hit) => {
       const date = new Date(hit.createdAt).toLocaleString("zh-CN");
@@ -792,11 +801,25 @@ export async function indexConversationTurn(
 ): Promise<void> {
   const ts = Date.now();
   try {
-    if (userText) {
-      await addHistoryMemory(userText, { sessionId, role: "user", ts, turnId: turnIds?.userTurnId });
+    const savedUser = turnIds?.userTurnId
+      ? getSession(sessionId)?.messages.find((message) => message.id === turnIds.userTurnId && message.role === "user")
+      : undefined;
+    const indexedUserText = turnIds?.userTurnId
+      ? (savedUser ? historyIndexText(savedUser) : "")
+      : describeMarkersForLlm(userText);
+    if (indexedUserText) {
+      await addHistoryMemory(indexedUserText, { sessionId, role: "user", ts: savedUser?.at ?? ts,
+        turnId: turnIds?.userTurnId });
     }
-    if (assistantText) {
-      await addHistoryMemory(assistantText, { sessionId, role: "assistant", ts, turnId: turnIds?.assistantTurnId });
+    const savedAssistant = turnIds?.assistantTurnId
+      ? getSession(sessionId)?.messages.find((message) => message.id === turnIds.assistantTurnId && message.role === "model")
+      : undefined;
+    const indexedAssistantText = savedAssistant
+      ? historyIndexText(savedAssistant)
+      : describeMarkersForLlm(assistantText, "assistant");
+    if (indexedAssistantText) {
+      await addHistoryMemory(indexedAssistantText, { sessionId, role: "assistant", ts: savedAssistant?.at ?? ts,
+        turnId: turnIds?.assistantTurnId });
     }
   } catch (e) {
     console.warn(LOG_PREFIX, "索引对话失败:", e);
@@ -837,17 +860,22 @@ export function registerRecallHistoryTool(): void {
       const days = Number(args.days) || 90;
 
       let finalHits: HistoryRetrievalHit[];
+      const shadowEvidence: WindowShadowEvidence = {};
       try {
-        finalHits = await retrieveHistoryHits(query, ctx?.userQuery?.trim() || query, days, "tool");
+        finalHits = await retrieveHistoryHits(query, ctx?.userQuery?.trim() || query, days, "tool", 5, shadowEvidence);
       } catch (e) {
         return "[recall_history] 检索失败：" + (e instanceof Error ? e.message : String(e));
       }
       if (finalHits.length === 0) {
+        recordHistoryWindowShadow({ userQuery: ctx?.userQuery?.trim() || query, toolQuery: query,
+          days, source: "tool", finalK: 5, selected: [], evidence: shadowEvidence });
         return `[recall_history] 没有找到关于 "${query}" 的历史记录`;
       }
 
       // 按时间正序（最早的在前），让对话脉络自然
       const sorted = [...finalHits].sort((a, b) => a.createdAt - b.createdAt);
+      recordHistoryWindowShadow({ userQuery: ctx?.userQuery?.trim() || query, toolQuery: query,
+        days, source: "tool", finalK: 5, selected: sorted, evidence: shadowEvidence });
 
       const lines = sorted.map(h => {
         const date = new Date(h.createdAt).toLocaleString("zh-CN");
@@ -971,14 +999,14 @@ export async function backfillChatHistoryFromChatLogs(): Promise<void> {
           continue;
         }
         const data = JSON.parse(fs.readFileSync(file, "utf8")) as {
-          messages?: Array<{ id?: unknown; role?: string; content?: unknown; at?: unknown }>;
+          messages?: Array<Partial<ChatMessage>>;
         };
         const fileMtime = fs.statSync(file).mtimeMs;
         const fileSignature = historySessionFileSignature(file);
         let sessionFailed = false;
         for (const [messageIndex, m] of (data.messages ?? []).entries()) {
           if (messageIndex <= (progress.sessionOffsets[session.id] ?? -1)) continue;
-          if (typeof m.content !== "string" || !m.content.trim()) {
+          if (typeof m.content !== "string") {
             progress.sessionOffsets[session.id] = messageIndex;
             continue;
           }
@@ -992,9 +1020,14 @@ export async function backfillChatHistoryFromChatLogs(): Promise<void> {
           const turnId = typeof m.id === "string" && m.id
             ? m.id
             : `backfill:${session.id}:${messageIndex}`;
+          const indexText = historyIndexText(m as ChatMessage);
+          if (!indexText) {
+            progress.sessionOffsets[session.id] = messageIndex;
+            continue;
+          }
           try {
             await addHistoryMemory(
-              m.content,
+              indexText,
               {
                 sessionId: session.id,
                 role,

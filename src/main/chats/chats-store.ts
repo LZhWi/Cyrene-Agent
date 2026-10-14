@@ -44,6 +44,20 @@ const sessionCache = new Map<string, ChatSession>();
 let initialized = false;
 let storageStatus: ChatStorageStatus = { status: "ready" };
 const storageStatusListeners = new Set<(status: ChatStorageStatus) => void>();
+const messageChangeListeners = new Set<(conversationId: string) => void>();
+
+export function onMessagesChanged(listener: (conversationId: string) => void): () => void {
+  messageChangeListeners.add(listener);
+  return () => messageChangeListeners.delete(listener);
+}
+
+function notifyMessagesChanged(conversationId: string): void {
+  for (const listener of messageChangeListeners) {
+    try { listener(conversationId); } catch (error) {
+      console.warn("[chats-store] 消息变更观察器失败:", error);
+    }
+  }
+}
 
 type SessionRecoverySource = "legacy_tmp" | "last_good";
 interface SessionInspection {
@@ -615,6 +629,7 @@ export function replaceMessages(id: string, messages: ChatMessage[]): ChatSessio
   }
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
+  notifyMessagesChanged(id);
   return session;
 }
 
@@ -627,6 +642,7 @@ export function replaceMessagesTail(id: string, startIndex: number, messages: Ch
   if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
+  notifyMessagesChanged(id);
   return session;
 }
 
@@ -661,6 +677,7 @@ export function deleteMessageRound(id: string, messageId: string): ChatSession |
   if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
+  notifyMessagesChanged(id);
   return session;
 }
 
@@ -700,6 +717,7 @@ export function deleteSession(id: string): boolean {
   const inIndex = indexCache.some((m) => m.id === id);
   sessionCache.delete(id);
   if (inIndex) removeMetaById(id);
+  if (fileExisted || inIndex) notifyMessagesChanged(id);
   return fileExisted || inIndex;
 }
 

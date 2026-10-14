@@ -3,9 +3,11 @@ import * as path from "path"
 import { getAdapterForConfig } from "../orchestrator/vendors"
 import type { VendorConfig, ChatMessage } from "../orchestrator/vendors"
 import { getUserDataDir } from "../runtime/runtime-paths"
-import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, MemoryJudgeTurn } from "./memory-types"
+import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, MemoryJudgeTurn, MemoryJudgeContext } from "./memory-types"
+import { assertNoTemporaryTurnRefs, validateIncrementalCandidates } from "./memory-write-validation"
 import { recordUsage } from "../token-usage-store"
 import { normalizeMemoryFacets, tryNormalizeModelFacets, type MemoryFacets } from "./memory-facets"
+import { requireSemanticReview } from "./memory-semantic-review"
 
 interface ModelSettings {
   provider: string
@@ -58,7 +60,7 @@ function stripThinkBlocks(text: string): string {
     .trim()
 }
 
-function extractJsonArray(raw: string): unknown[] | null {
+function extractJsonArray(raw: string, requireComplete = false): unknown[] | null {
   // 第一步：去掉 markdown 代码块包裹 + think 块
   let text = raw
     .replace(/```json\s*/gi, '')
@@ -75,6 +77,8 @@ function extractJsonArray(raw: string): unknown[] | null {
     const parsed = JSON.parse(text) as unknown[]
     if (Array.isArray(parsed)) return parsed
   } catch (_) {}
+
+  if (requireComplete) return null
 
   // 第四步：截断救场 —— 即使末尾 ] 缺失，把已完整的 {...} 对象逐个捞出来。
   // 关键：用栈匹配大括号深度，避免把对象内部的 } 当成对象结束。
@@ -137,12 +141,6 @@ function extractJsonArray(raw: string): unknown[] | null {
   return null
 }
 
-const ABSOLUTE_TERMS = ["只", "永远", "从不", "一定", "完全", "绝对", "以后都", "不再"]
-
-function hasUnsupportedAbsolute(summary: string, evidenceQuotes: string[]): boolean {
-  return ABSOLUTE_TERMS.some((term) => summary.includes(term) && !evidenceQuotes.some((quote) => quote.includes(term)))
-}
-
 function normalizeCandidate(input: unknown): MemoryCandidate | null {
   if (!input || typeof input !== "object") return null
   const record = input as Record<string, unknown>
@@ -167,8 +165,6 @@ function normalizeCandidate(input: unknown): MemoryCandidate | null {
   if (typeof contextSummary !== "string" || !contextSummary.trim()) return null
   if (typeof reason !== "string" || !reason.trim()) return null
   if (evidenceQuotes.length === 0) return null
-  if (forbiddenOverclaims.length > 0) return null
-  if (hasUnsupportedAbsolute(summary, evidenceQuotes)) return null
 
   const confidence =
     certainty === "explicit" ? 0.9 :
@@ -323,6 +319,7 @@ export class MemoryJudge {
   async judgeRecentTurns(
     turns: MemoryJudgeTurn[],
     conversationId: string,
+    context?: MemoryJudgeContext,
   ): Promise<MemoryCandidate[]> {
     console.log(`[MemoryJudge] 分析最近 ${turns.length} 轮对话...`)
 
@@ -335,7 +332,7 @@ export class MemoryJudge {
         throw new Error("MemoryJudge missing api key")
       }
 
-      const systemPrompt = [
+      let systemPrompt = [
         "你是一个保守的记忆候选提取器，不是事实裁判，也不是用户画像改写器。",
         "你的目标是少记错，不是多记住。",
         "",
@@ -362,7 +359,7 @@ export class MemoryJudge {
         "- 如果只是 AI 的建议、安慰、总结、推断，不要写成用户事实",
         "- 不要把「这次」「刚刚」「这个话题里」变成长期偏好",
         "- 用户明确表达的未来计划、承诺或约定，即使依赖某个前置条件，只要对未来对话有帮助，也应按原条件保守记录；不要仅因含有「等……以后」「如果……」就返回空数组",
-        "- 不要自动使用绝对化表达：只、永远、从不、一定、完全、绝对、以后都、不再，除非用户原话明确说过这些词",
+        "- 不得扩大原文的范围、程度或确定性，也不得丢失否定和条件；允许有依据的同义转述，不要求摘要与原文使用同一个词",
         "- 如果 summary 中存在可能过度概括的词，必须写入 forbiddenOverclaims；有 forbiddenOverclaims 时 shouldWrite 必须是 false",
         "",
         "重要格式规则：",
@@ -413,10 +410,26 @@ export class MemoryJudge {
         "summary 和 evidenceQuotes 里禁止出现英文双引号，用「」替代。",
       ].join("\n")
 
+      if (context) systemPrompt += [
+        "", "增量记忆规则（输出仍为 JSON 数组）：",
+        `前 ${context.priorTurnCount} 轮是已处理上下文，其余为新增轮次。先逐条审阅提供的旧记忆，再提取未覆盖的新事实。`,
+        "每个旧记忆 ID 恰好输出一次 memoryAction=keep、supplement 或 correct，并用 targetMemoryId 指定目标。",
+        "keep 仅输出 memoryAction、targetMemoryId、reason，不产生写入；即使无新事实也要完成旧记忆审阅。",
+        "supplement 用于同一事项的新细节：summary 只写新增事实，不复述或重写旧记忆，程序会完整保留旧内容并追加补充。",
+        "correct 仅用于用户明确纠正：replaceText 必须是旧记忆中唯一匹配的待替换原文片段，summary 仅写该片段的替代文本。未纠正的内容由程序保留。",
+        "supplement/correct 必须为 L2，并包含原候选格式的全部字段，证据仅引用支持变更的用户原话。不得删除旧记忆。",
+        "新增使用 memoryAction=add，不指定 targetMemoryId。不同事实不能因来自同一消息而合并；旧事实已记录不代表新状态已记录。",
+        "只在 evidenceTurnRefs 使用 T1～T8，summary 禁止包含临时轮次编号。路径、名称、日期、数字必须保持用户原文的字面内容。",
+        "evidenceQuotes 每项必须是完整、连续且可唯一定位的用户原文片段；禁止自行添加省略号、改变标点或拼接多段，多个片段分别列出。",
+        "不得把 AI 解释或已有记忆中的推断当成用户证据。已有记忆的旧 T 编号没有本批含义。",
+      ].join("\n")
+
       const transcript = turns.map((turn, index) => [
         `T${index + 1}（第 ${index + 1} 轮）：`,
         ...(typeof turn.userAt === "number" ? [`用户时间：${new Date(turn.userAt).toISOString()}（本地：${new Date(turn.userAt).toLocaleString("zh-CN", { hour12: false })}）`] : []),
         `用户：${turn.userInput}`,
+        ...(turn.sourceUserText !== undefined && turn.sourceUserText !== turn.userInput
+          ? [`可引用的用户原文（以上附加解释仅供理解，不得当作用户事实）：${turn.sourceUserText}`] : []),
         ...(typeof turn.assistantAt === "number" ? [`AI时间：${new Date(turn.assistantAt).toISOString()}（本地：${new Date(turn.assistantAt).toLocaleString("zh-CN", { hour12: false })}）`] : []),
         `AI：${turn.assistantReply}`,
       ].join("\n")).join("\n\n")
@@ -425,34 +438,42 @@ export class MemoryJudge {
         `conversationId: ${conversationId}`,
         "最近对话：",
         transcript,
+        ...(context ? ["前置轮次的相关记忆：", JSON.stringify(context.previousMemories.map(({ version: _version, ...memory }) => memory))] : []),
       ].join("\n")
 
-      const raw = await callChatCompletions(
-        settings,
-        [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        300000, // 开思考实测 40~72s（8 轮窗口），服务端忙时可更久；后台任务不在关键路径，
-        // 给足余量避免历史停摆根因（120s 被思考链拖破后静默失败数天）重演。
-        "MemoryJudge",
-      )
+      let candidates: MemoryCandidate[] = []
+      let repair = ""
+      const semanticRequests = new Set<string>()
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const raw = await callChatCompletions(
+          settings,
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt + repair },
+          ],
+          300000, // 思考与完整 JSON 共享 token 预算；失败不推进提取水位线。
+          "MemoryJudge",
+        )
 
-      const parsed = extractJsonArray(raw)
-      if (!parsed) {
-        console.error("[MemoryJudge] JSON 解析失败，原始内容：\n", raw.slice(0, 200))
-        // 只有合法的 [] 才表示“模型明确判断无记忆”。空内容或非 JSON 文本都没有
-        // 给出可验证的判断，必须保留轮次重试，不能静默推进水位线。
-        throw new Error(raw.trim()
-          ? "MemoryJudge JSON 解析失败"
-          : "MemoryJudge 拿到空 content（token 预算耗尽）")
+        try {
+          const parsed = extractJsonArray(raw, Boolean(context))
+          if (!parsed) throw new Error(raw.trim()
+            ? "MemoryJudge JSON 解析失败，请输出完整数组"
+            : "MemoryJudge 拿到空 content（token 预算耗尽）")
+          candidates = context
+            ? validateIncrementalCandidates(parsed, normalizeCandidate, turns, conversationId, context)
+            : parsed.map(normalizeCandidate)
+              .filter((item): item is MemoryCandidate => item !== null)
+              .filter((item) => item.shouldWrite === true)
+              .filter((item) => item.layer !== "L0" || (item.certainty === "explicit" && item.attribution === "user_explicit"))
+          for (const candidate of candidates) assertNoTemporaryTurnRefs(candidate.content)
+          requireSemanticReview(candidates, semanticRequests, attempt > 0)
+          break
+        } catch (error) {
+          if (attempt === 1) throw error
+          repair = `\n上次结果未通过写入校验：${error instanceof Error ? error.message : String(error)}。请按原文重新输出完整结果，不要省略其他有效候选。`
+        }
       }
-
-      const candidates = parsed
-        .map(normalizeCandidate)
-        .filter((item): item is MemoryCandidate => item !== null)
-        .filter((item) => item.shouldWrite === true)
-        .filter((item) => item.layer !== "L0" || (item.certainty === "explicit" && item.attribution === "user_explicit"))
 
       if (candidates.length === 0) {
         console.log("[MemoryJudge] 本轮无值得记录的信息")

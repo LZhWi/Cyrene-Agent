@@ -2,6 +2,6 @@
 import { memoryScheduler } from "../memory/memory-scheduler";
 import type { MemoryScheduleContext } from "../memory/memory-scheduler";
 
-export function scheduleMemoryWrite(userInput: string, assistantReply: string, context?: Partial<MemoryScheduleContext>): void {
-  memoryScheduler.scheduleMemoryWrite(userInput, assistantReply, context);
+export function scheduleMemoryWrite(userInput: string, assistantReply: string, context?: Partial<MemoryScheduleContext>): Promise<void> {
+  return memoryScheduler.scheduleMemoryWrite(userInput, assistantReply, context);
 }

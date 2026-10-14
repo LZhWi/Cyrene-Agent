@@ -17,6 +17,25 @@ function persist(store: JsonVectorStore): Promise<void> {
 describe("JsonVectorStore persistence", () => {
   const tempDirs: string[] = [];
 
+  it("does not recreate an image index when its source disappears during embedding", async () => {
+    const dbPath = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-image-source-race-"));
+    tempDirs.push(dbPath);
+    const store = new JsonVectorStore(dbPath);
+    const embeddingReady = deferred();
+    let sourceExists = true;
+    const provider = { name: "test", dims: 2,
+      embed: async () => { await embeddingReady.promise; return [1, 0]; },
+      embedBatch: async () => [[1, 0]] };
+    const indexing = store.upsertChatImage("old image", provider, {
+      sessionId: "session", turnId: "turn", imageKey: "image", name: "image.png", summary: "old", ts: 1,
+    }, () => sourceExists);
+    sourceExists = false;
+    embeddingReady.resolve();
+    expect(await indexing).toBeNull();
+    expect(store.stats.total).toBe(0);
+    store.flushSync();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {

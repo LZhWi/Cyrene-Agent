@@ -15,7 +15,6 @@ export const GLOBAL_PROACTIVE_INTERVAL_MS = 2 * 60 * 60 * 1000;
 export const SILENT_COOLDOWN_MS = 10 * 60 * 1000;
 export const FOLLOWUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
 export const NIGHT_ACTIVE_IDLE_LIMIT_SEC = 60;
-export const FOLLOWUP_MIN_SCORE = 65;
 
 const allow = (): ProactiveCommitDecision => ({ allowed: true, reason: "allowed" });
 const block = (reason: ProactiveCommitDecision["reason"]): ProactiveCommitDecision => ({ allowed: false, reason });
@@ -79,8 +78,6 @@ export function canStartProactiveGeneration(
       state.lastProactiveAt !== null &&
       snapshot.now - state.lastProactiveAt < FOLLOWUP_INTERVAL_MS
     ) return block("followup_cooldown");
-    if (state.lastProactiveScene === candidate.sceneId) return block("followup_same_scene");
-    if (candidate.score < FOLLOWUP_MIN_SCORE) return block("followup_score_too_low");
   }
 
   return allow();

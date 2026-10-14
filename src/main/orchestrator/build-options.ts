@@ -95,6 +95,7 @@ export interface BuildOptionsDeps {
   /** 可选：构造 [你的生活] 拟态日程（life-context.ts）。缺省或异常时返回空串=不启用。 */
   buildLifeContext?: () => string;
   isSocialContextEnabled?: () => boolean;
+  captureSocialSourceRevision?: (conversationId: string, userTurnId: string) => string | undefined;
   getSocialEmbeddingProvider?: () => EmbeddingProvider | null | undefined;
   retrieveSocialContext?: (conversationId: string, query: string, provider?: EmbeddingProvider | null) => Promise<SocialAtom[]>;
   getCallContextEvents?: () => CallContextEvent[];
@@ -106,7 +107,7 @@ export interface BuildOptionsDeps {
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
 export interface OnRunFinishedDeps {
   loadModelSettings: () => ModelSettingsLite;
-  scheduleMemoryWrite: (userText: string, reply: string, context?: Partial<MemoryScheduleContext>) => void;
+  scheduleMemoryWrite: (userText: string, reply: string, context?: Partial<MemoryScheduleContext>) => void | Promise<void>;
   inferRuntimeState: (userText: string, reply: string, flag: boolean) => { status: string };
   runtimeState: {
     status: string;
@@ -440,6 +441,7 @@ export async function buildAgentRunOptions(
   let socialContext: SocialTurnContext | undefined;
   if (usesDesktopConversationContext && deps.isSocialContextEnabled?.() && input.userTurnId && input.assistantTurnId && deps.retrieveSocialContext) {
     try {
+      const sourceRevision = deps.captureSocialSourceRevision?.(conversationId, input.userTurnId);
       const retrievedAtoms = await deps.retrieveSocialContext(
         conversationId,
         latestUserText,
@@ -452,19 +454,11 @@ export async function buildAgentRunOptions(
         assistantTurnId: input.assistantTurnId,
         userText: latestUserText,
         retrievedAtoms,
+        sourceRevision,
+        timezone: contextTimezone,
       };
-      // 重叠抑制：short_term 类型 social atom 与 user_memory 可能命中同一事实。
-      // 同时注入会让模型看到重复信息、消耗双份 token，且 social 过期后 user_memory 仍在会造成时间不一致。
-      // 命中时优先保留 social（更新、更带时间语义），从 memoryInjection 的【相关记忆】块移除重叠条目。
-      // open_loop 是话题延续，与长期事实不同维度，不参与抑制。
-      memoryInjection = suppressOverlappingMemoryEntries(memoryInjection, retrievedAtoms, (match) => {
-        console.debug("[SocialContext] suppressed overlapping L2 injection:", {
-          conversationId,
-          score: Number(match.score.toFixed(3)),
-          shortTerm: match.socialText,
-          memory: match.memoryText,
-        });
-      });
+      // Formatted L2 entries have no source IDs here. Keep both evidence sets;
+      // text similarity cannot establish duplication, freshness or agreement.
     } catch (err) {
       console.warn("[SocialContext] retrieval failed:", err);
     }
@@ -658,8 +652,8 @@ export async function onAgentRunFinished(
     ? `${sideEffectUserText}\n\n${memoryContextText}`
     : sideEffectUserText;
   if (scheduleMemoryWriteNow) {
-    if (memoryScheduleContext) deps.scheduleMemoryWrite(memoryUserText, chatContent, memoryScheduleContext);
-    else deps.scheduleMemoryWrite(memoryUserText, chatContent);
+    if (memoryScheduleContext) await deps.scheduleMemoryWrite(memoryUserText, chatContent, memoryScheduleContext);
+    else await deps.scheduleMemoryWrite(memoryUserText, chatContent);
   }
   if (result.socialContext && deps.scheduleSocialContextWrite) {
     deps.scheduleSocialContextWrite(result.socialContext, chatContent, deps.loadModelSettings());
@@ -722,73 +716,4 @@ export async function onAgentRunFinished(
   // - 渠道（wechat/feishu/...）的 sticker 由 dispatcher 收下，纳入 OutgoingMessage.parts
   // - 桌面路径也返回 sticker 以保持签名一致；dispatcher 路径下 channel !== undefined 才会消费它
   return { sticker };
-}
-
-// ─── social ↔ user_memory 注入重叠抑制 ───────────────────────────────────
-// 同一事实可能同时被 social-context 抓成 short_term atom，又被 MemoryJudge 写进 L2 再由
-// RAG 注入【相关记忆】。同时注入会重复消耗 token，且 social 过期后 user_memory 仍在会造成
-// 时间不一致。命中时优先保留 social（更新、更带时间语义），从【相关记忆】块移除重叠条目。
-// 只抑制 short_term（临时状态）；open_loop 是话题延续，与长期事实不同维度，不参与。
-
-function lexicalOverlap(a: string, b: string): number {
-  const setA = new Set(a.toLowerCase().replace(/\s+/g, ""));
-  const setB = new Set(b.toLowerCase().replace(/\s+/g, ""));
-  if (!setA.size || !setB.size) return 0;
-  let intersection = 0;
-  for (const ch of setA) if (setB.has(ch)) intersection += 1;
-  // min 归一化：短句对长句的重叠率更宽容，适合"明天考试" vs "用户明天有考试"这类同义短句。
-  return intersection / Math.min(setA.size, setB.size);
-}
-
-const MEMORY_OVERLAP_THRESHOLD = 0.6;
-
-export interface MemoryOverlapDiagnostic {
-  memoryText: string;
-  socialText: string;
-  score: number;
-}
-
-/** 从 memoryInjection 的【相关记忆】块移除与 short_term social atoms 高度重叠的条目。
- *  只动【相关记忆】块；【相关文档】/【人物关系】不参与抑制。整块空了则移除整块。 */
-export function suppressOverlappingMemoryEntries(
-  memoryInjection: string,
-  socialAtoms: ReadonlyArray<SocialAtom>,
-  onSuppressed?: (match: MemoryOverlapDiagnostic) => void,
-): string {
-  if (!memoryInjection || socialAtoms.length === 0) return memoryInjection;
-  const shortTermContents = socialAtoms
-    .filter((atom) => atom.type === "short_term")
-    .map((atom) => atom.content.trim())
-    .filter(Boolean);
-  if (shortTermContents.length === 0) return memoryInjection;
-
-  // 块以 \n\n + 【 分隔。【相关记忆】块内部条目以 \n 分行，notes 行以（开头。
-  const blocks = memoryInjection.split(/\n\n(?=【)/);
-  const result = blocks.map((block) => {
-    if (!block.startsWith("【相关记忆】")) return block;
-    const lines = block.split("\n");
-    const entries: string[] = [];
-    const tail: string[] = [];
-    for (const line of lines.slice(1)) {
-      if (line.startsWith("· ")) entries.push(line);
-      else if (line.trim()) tail.push(line);
-    }
-    const kept = entries.filter((entry) => {
-      // 提取核心文本：去掉 · 前缀，去掉尾部标注（较久远的印象）/⚠️（...）
-      const text = entry.replace(/^·\s*/, "").replace(/\s*[（(].*$/, "").trim();
-      let strongestMatch: MemoryOverlapDiagnostic | undefined;
-      for (const socialText of shortTermContents) {
-        const score = lexicalOverlap(text, socialText);
-        if (score >= MEMORY_OVERLAP_THRESHOLD && (!strongestMatch || score > strongestMatch.score)) {
-          strongestMatch = { memoryText: text, socialText, score };
-        }
-      }
-      if (!strongestMatch) return true;
-      onSuppressed?.(strongestMatch);
-      return false;
-    });
-    if (kept.length === 0) return ""; // 整块移除
-    return [lines[0], ...kept, ...tail].filter((line) => line.trim()).join("\n");
-  }).filter(Boolean);
-  return result.join("\n\n");
 }

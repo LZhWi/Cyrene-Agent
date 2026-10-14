@@ -1,8 +1,10 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getUserDataDir } from "../runtime/runtime-paths"
-import { ConflictLog, DreamNarrative, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
+import { ConflictLog, DreamNarrative, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryRoundCountState, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
+import type { MemoryCandidate } from "./memory-types"
+import { applyMemoryContentPatch, memoryContentVersion } from "./memory-write-validation"
 import { createPendingMemoryFacets, repairStoredMemoryFacets, type MemoryFacets } from "./memory-facets"
 
 const CURRENT_SCHEMA_VERSION = 6
@@ -136,6 +138,13 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
     pendingTurns: Array.isArray(store.pendingTurns) ? store.pendingTurns.filter(
       (turn) => turn && typeof turn.userInput === "string" && typeof turn.assistantReply === "string",
     ) : [],
+    roundCountState: store.roundCountState && Array.isArray(store.roundCountState.turns) ? {
+      baseCount: Math.max(0, Math.trunc(store.roundCountState.baseCount) || 0),
+      turns: store.roundCountState.turns.filter((turn) => turn
+        && typeof turn.conversationId === "string" && typeof turn.userMessageId === "string"
+        && typeof turn.assistantMessageId === "string" && typeof turn.active === "boolean"
+        && typeof turn.validateAgainstConversation === "boolean"),
+    } : undefined,
     // DMAE 状态属于运行时缓存：损坏/缺失时重建为空表即可，不影响记忆本体。
     l2DmaeStates: store.l2DmaeStates && typeof store.l2DmaeStates === "object" ? store.l2DmaeStates : {},
     l2DmaeRound: typeof store.l2DmaeRound === "number" ? store.l2DmaeRound : 0,
@@ -409,6 +418,7 @@ class MemoryStoreManager {
     if (!mem) return null
     const oldRagId = mem.ragId
     mem.content = normalized
+    mem.contentRevision = (mem.contentRevision ?? 0) + 1
     mem.embedding = []
     mem.syncStatus = "pending_sync"
     mem.facets = createPendingMemoryFacets()
@@ -435,6 +445,50 @@ class MemoryStoreManager {
       details: { syncStatus: "pending_sync" },
     })
     return { memory: mem, oldRagId }
+  }
+
+  async applyL2MemoryPatch(candidate: MemoryCandidate, isSourceCurrent: () => Promise<boolean>): Promise<{ memory: L2Memory; oldRagId?: string }> {
+    const store = await this.load()
+    if (!await isSourceCurrent()) throw new Error("记忆来源已变化，拒绝更新")
+    // 校验与同步写盘之间没有 await；编辑、归档、合并或删除均使旧快照失效。
+    const memory = store.l2.find(m => m.id === candidate.targetMemoryId)
+    if (!memory || memory.isPinned || !["active", "aging"].includes(memory.status)
+      || memoryContentVersion(memory) !== candidate.targetVersion) throw new Error("目标记忆版本已变化，拒绝更新")
+    if (!candidate.sourceEvidence?.length || candidate.sourceConversationId !== memory.sourceConversationId) throw new Error("更新缺少可靠来源")
+    const content = applyMemoryContentPatch(memory.content, candidate)
+    const oldRagId = memory.ragId
+    const evidence = this.createEvidence(memory, { ...memory, content: candidate.content, triggerText: candidate.triggerText,
+      sourceMessageIds: candidate.sourceMessageIds })
+    evidence.previousContent = memory.content
+    memory.content = content
+    memory.contentRevision = (memory.contentRevision ?? 0) + 1
+    memory.sourceMessageIds = [...new Set([...(memory.sourceMessageIds ?? []), ...(candidate.sourceMessageIds ?? [])])]
+    memory.sourceEvidence = [...(memory.sourceEvidence ?? []), ...candidate.sourceEvidence]
+    memory.sourceQuote = [memory.sourceQuote || memory.triggerText, candidate.sourceQuote].filter(Boolean).join("\n")
+    const times = [memory.sourceAt, memory.sourceEndAt, candidate.sourceAt, candidate.sourceEndAt]
+      .filter((at): at is number => typeof at === "number" && Number.isFinite(at))
+    if (times.length) { memory.sourceAt = Math.min(...times); memory.sourceEndAt = Math.max(...times) }
+    memory.evidenceIds = [...(memory.evidenceIds ?? []), evidence.id]
+    memory.embedding = []
+    memory.syncStatus = "pending_sync"
+    memory.facets = createPendingMemoryFacets()
+    delete memory.ragId
+    delete memory.conflictWith
+    store.conflictLogs = (store.conflictLogs ?? []).filter(log =>
+      log.sourceL2Id !== memory.id && log.targetL2Id !== memory.id && log.resolutionMemoryId !== memory.id)
+    if (oldRagId) for (const other of store.l2) {
+      if (!other.conflictWith) continue
+      other.conflictWith = other.conflictWith.filter(id => id !== oldRagId)
+      if (!other.conflictWith.length) delete other.conflictWith
+    }
+    if (store.l2DmaeStates) delete store.l2DmaeStates[memory.id]
+    store.evidence ??= []
+    store.evidence.push(evidence)
+    const committedMemory = structuredClone(memory)
+    await this.save(store)
+    appendMemoryTrace({ op: "l2.edit", layer: "L2", status: "ok", l2Id: memory.id,
+      details: { action: candidate.memoryAction, revision: memory.contentRevision } })
+    return { memory: committedMemory, oldRagId }
   }
 
   async deleteL2(id: string): Promise<void> {
@@ -536,10 +590,11 @@ class MemoryStoreManager {
     return true
   }
 
-  async markL2SyncStatus(id: string, syncStatus: L2SyncStatus, ragId?: string, error?: unknown): Promise<L2Memory | null> {
+  async markL2SyncStatus(id: string, syncStatus: L2SyncStatus, ragId?: string, error?: unknown, expectedVersion?: string): Promise<L2Memory | null> {
     const store = await this.load()
     const mem = store.l2.find((m) => m.id === id)
     if (!mem) return null
+    if (expectedVersion && memoryContentVersion(mem) !== expectedVersion) return null
     mem.syncStatus = syncStatus
     if (ragId) mem.ragId = ragId
     await this.save(store)
@@ -926,14 +981,23 @@ class MemoryStoreManager {
     return (store.pendingTurns ?? []).map((turn) => ({ ...turn }))
   }
 
-  /** 固化尚未提取的残余轮次；单段文本截断，避免长文档粘贴撞大 memory.json 体积 */
-  async setPendingTurns(turns: MemoryJudgeTurn[]): Promise<void> {
+  async getRoundCountState(): Promise<MemoryRoundCountState | null> {
+    const store = await this.load()
+    return store.roundCountState ? structuredClone(store.roundCountState) : null
+  }
+
+  /** 将待提取轮次与有效计数写入同一快照；截断正文以控制 memory.json 体积。 */
+  async setPendingTurns(turns: MemoryJudgeTurn[], roundCountState?: MemoryRoundCountState): Promise<void> {
     const store = await this.load()
     store.pendingTurns = turns.map((turn) => ({
       ...turn,
       userInput: snippet(turn.userInput, 4000) ?? "",
       assistantReply: snippet(turn.assistantReply, 4000) ?? "",
     }))
+    if (roundCountState) {
+      store.roundCountState = structuredClone(roundCountState)
+      store.l1.roundCount = roundCountState.baseCount + roundCountState.turns.filter((turn) => turn.active).length
+    }
     await this.save(store)
   }
 

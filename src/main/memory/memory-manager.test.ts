@@ -50,6 +50,25 @@ describe("MemoryManager L2 sync", () => {
     vi.resetModules()
   })
 
+  it("rechecks the source after embedding and skips a superseded candidate", async () => {
+    let finishEmbedding!: (value: number[]) => void
+    const embedding = new Promise<number[]>((resolve) => { finishEmbedding = resolve })
+    const embed = vi.fn(() => embedding)
+    embeddingMock.getEmbeddingProvider.mockReturnValue({ embed })
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    let sourceCurrent = true
+    const write = memoryManager.writeMemory([
+      { layer: "L2", content: "old reply", triggerText: "user", confidence: 1 },
+    ], async () => sourceCurrent)
+    await vi.waitFor(() => expect(embed).toHaveBeenCalled())
+    sourceCurrent = false
+    finishEmbedding([1, 0])
+    await write
+    expect(await memoryStore.getAllL2()).toEqual([])
+    expect(ragMock.addL2MemoryVector).not.toHaveBeenCalled()
+  })
+
   it("creates L2 first, syncs it to RAG with l2Id metadata, then marks it synced", async () => {
     ragMock.addL2MemoryVector.mockResolvedValue("rag_synced")
     const { memoryManager } = await import("./memory-manager")

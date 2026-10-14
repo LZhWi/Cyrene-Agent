@@ -155,6 +155,25 @@ export async function addHistoryMemory(
   return entry.id;
 }
 
+export async function upsertChatImageVector(
+  text: string,
+  metadata: { sessionId: string; turnId: string; imageKey: string; name: string; summary: string; ts: number },
+  isSourceCurrent?: () => boolean,
+): Promise<string | null> {
+  if (!store || !provider) throw new Error("RAG not initialized");
+  return (await store.upsertChatImage(text, provider, metadata, isSourceCurrent))?.id ?? null;
+}
+
+export function deleteChatImagesBySessionId(sessionId: string): number {
+  if (!store) throw new Error("RAG not initialized");
+  return store.deleteChatImagesBySessionId(sessionId);
+}
+
+export function deleteChatImagesByTurnIds(sessionId: string, turnIds: string[]): number {
+  if (!store) throw new Error("RAG not initialized");
+  return store.deleteChatImagesByTurnIds(sessionId, turnIds);
+}
+
 export async function addL2MemoryVector(
   text: string,
   l2Id: string,

@@ -19,6 +19,7 @@ import {
   type CyreneRunResult,
 } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
+import { scheduleVisualHistoryIndex } from "./chat/visual-history-index";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { isRunCancelledError, RunControl } from "./runtime/run-control";
 
@@ -235,6 +236,9 @@ export function registerAgUiIpc(
               agent.lastResult.reply,
               { userTurnId: input.userTurnId, assistantTurnId: input.assistantTurnId },
             );
+            if (input.sessionId && input.userTurnId) {
+              scheduleVisualHistoryIndex(input.sessionId, input.userTurnId);
+            }
           }
         } catch (err) {
           if (control.signal.aborted || isRunCancelledError(err)) return;

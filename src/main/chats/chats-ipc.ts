@@ -23,7 +23,58 @@ import { rollbackLastProactive } from "../proactive/proactive-policy";
 import { deleteSocialContextByTurnIds, deleteSocialContextForConversation } from "../social-context";
 import { deleteCallContextEvent } from "../call/call-context-store";
 import { deleteMinecraftSessionEvent } from "../game-bot/minecraft/session-store";
-import { deleteHistoryEntriesBySessionId, deleteHistoryEntriesByTurnIds } from "../rag";
+import { deleteChatImagesBySessionId, deleteChatImagesByTurnIds, deleteHistoryEntriesBySessionId, deleteHistoryEntriesByTurnIds, getEntriesBySource, isUserMemoryVectorStoreReady } from "../rag";
+import { queueSessionHistoryDeletion } from "./history-deletion-retry";
+import { queueHistoryTurnReconciliation, retryHistoryTurnReconciliations } from "./history-turn-reconciliation";
+import { scheduleVisualHistoryIndex } from "../chat/visual-history-index";
+
+function sourceFingerprint(message: ChatMessage): string {
+  return JSON.stringify({
+    role: message.role,
+    content: message.content,
+    at: message.at,
+    sticker: message.sticker,
+    attachments: message.attachments?.map((item) => ({ kind: item.kind, name: item.name,
+      filePath: item.filePath, status: item.status, caption: item.kind === "image" ? item.caption : undefined })),
+  });
+}
+
+function changedImageMessages(before: ChatMessage[], after: ChatMessage[]): ChatMessage[] {
+  const previous = new Map(before.map((message) => [message.id, sourceFingerprint(message)]));
+  return after.filter((message) => message.role === "user"
+    && message.attachments?.some((item) => item.kind === "image" && item.status === "done")
+    && previous.get(message.id) !== sourceFingerprint(message));
+}
+
+function changedIndexedTurnIds(before: ChatMessage[], after: ChatMessage[]): string[] {
+  const next = new Map(after.map((message) => [message.id, sourceFingerprint(message)]));
+  const changed = before.filter((message) => next.get(message.id) !== sourceFingerprint(message)).map((message) => message.id);
+  if (!changed.length || !isUserMemoryVectorStoreReady()) return changed;
+  const indexed = new Set<string>();
+  for (const entry of [...getEntriesBySource("chat_history"), ...getEntriesBySource("chat_image")]) {
+    if (typeof entry.metadata?.turnId === "string") indexed.add(entry.metadata.turnId);
+    if (Array.isArray(entry.metadata?.occurrences)) {
+      for (const occurrence of entry.metadata.occurrences) {
+        if (occurrence && typeof occurrence === "object" && typeof occurrence.turnId === "string") indexed.add(occurrence.turnId);
+      }
+    }
+  }
+  return changed.filter((id) => indexed.has(id));
+}
+
+function deletedRoundIds(messages: ChatMessage[], messageId: string): string[] {
+  const index = messages.findIndex((message) => message.id === messageId);
+  if (index < 0) return [];
+  const target = messages[index];
+  if (target.callEvent) return [target.id];
+  if (target.role === "model" && index > 0 && messages[index - 1].role === "user") {
+    return [messages[index - 1].id, target.id];
+  }
+  if (target.role === "user" && index + 1 < messages.length && messages[index + 1].role === "model") {
+    return [target.id, messages[index + 1].id];
+  }
+  return [target.id];
+}
 
 function minecraftSessionStoreFile(): string {
   return path.join(app.getPath("userData"), "game-bot", "minecraft-sessions.json");
@@ -99,7 +150,12 @@ export function registerChatsIpc(): void {
     (event, payload: { id: string; message: ChatMessage }) => {
       if (!payload || !payload.id || !payload.message) return null;
       const session = chatsStore.appendMessage(payload.id, payload.message);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        if (payload.message.role === "user" && payload.message.attachments?.some((item) => item.kind === "image" && item.status === "done")) {
+          scheduleVisualHistoryIndex(payload.id, payload.message.id);
+        }
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
@@ -108,8 +164,15 @@ export function registerChatsIpc(): void {
     IPC.CHATS_REPLACE_MESSAGES,
     (event, payload: { id: string; messages: ChatMessage[] }) => {
       if (!payload || !payload.id || !Array.isArray(payload.messages)) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
+      const changed = changedIndexedTurnIds(before, payload.messages);
+      queueHistoryTurnReconciliation(payload.id, changed);
       const session = chatsStore.replaceMessages(payload.id, payload.messages);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        if (changed.length) void retryHistoryTurnReconciliations();
+        for (const message of changedImageMessages(before, session.messages)) scheduleVisualHistoryIndex(payload.id, message.id);
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
@@ -117,8 +180,16 @@ export function registerChatsIpc(): void {
     IPC.CHATS_REPLACE_TAIL,
     (event, payload: { id: string; startIndex: number; messages: ChatMessage[] }) => {
       if (!payload?.id || !Array.isArray(payload.messages)) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
+      const after = before.slice(0, payload.startIndex).concat(payload.messages);
+      const changed = changedIndexedTurnIds(before, after);
+      queueHistoryTurnReconciliation(payload.id, changed);
       const session = chatsStore.replaceMessagesTail(payload.id, payload.startIndex, payload.messages);
-      if (session) broadcastChanged(event.sender);
+      if (session) {
+        if (changed.length) void retryHistoryTurnReconciliations();
+        for (const message of changedImageMessages(before, session.messages)) scheduleVisualHistoryIndex(payload.id, message.id);
+        broadcastChanged(event.sender);
+      }
       return session;
     },
   );
@@ -136,11 +207,15 @@ export function registerChatsIpc(): void {
   ipcMain.handle(IPC.CHATS_DELETE, (event, id: string) => {
     if (!id) return false;
     const beforeSession = chatsStore.getSession(id);
+    if (!beforeSession) return false;
+    // Intent must reach disk before the session disappears from the authoritative chat list.
+    queueSessionHistoryDeletion(id);
     const ok = chatsStore.deleteSession(id);
     if (ok) {
       deleteSocialContextForConversation(id);
       try {
         deleteHistoryEntriesBySessionId(id);
+        deleteChatImagesBySessionId(id);
       } catch (err) {
         console.warn("[Chats] 删除会话历史索引失败:", err);
       }
@@ -161,6 +236,7 @@ export function registerChatsIpc(): void {
       // 删除前检查：是否是 proactive-chat 会话中最后一条未回复的 AI 主动消息
       // 条件：1) purpose === "proactive-chat" 2) 最后一条是 AI 消息 3) 被删除的正是最后一条
       const beforeSession = chatsStore.getSession(payload.id);
+      queueHistoryTurnReconciliation(payload.id, deletedRoundIds(beforeSession?.messages ?? [], payload.messageId));
       const lastMsg = beforeSession?.messages?.[beforeSession.messages.length - 1];
       const isLastUnrepliedProactive =
         beforeSession?.purpose === "proactive-chat" &&
@@ -177,9 +253,11 @@ export function registerChatsIpc(): void {
         // 历史召回索引联动：删除该轮索引条目，避免已删除对话仍被 recall_history 召回
         try {
           deleteHistoryEntriesByTurnIds(deletedTurnIds);
+          deleteChatImagesByTurnIds(payload.id, deletedTurnIds);
         } catch (err) {
           console.warn("[Chats] 删除历史索引失败:", err);
         }
+        void retryHistoryTurnReconciliations();
         // 通话/联机消息删除联动：从对应档案移除事件，
         // 这样 LLM 上下文（callContextBlock / minecraftContextBlock）也不会再注入这条记录。
         for (const deleted of deletedMessages) {

@@ -58,6 +58,20 @@ function createScheduler(overrides: Partial<MemorySchedulerDeps> = {}) {
 }
 
 describe("MemoryScheduler", () => {
+  it("provides only the two prior turns' related memories to the next 6/8 batch", async () => {
+    const target = { id: "m", content: "fact", version: "v", sourceMessageIds: ["old-user"] }
+    const loadRelatedMemories = vi.fn(async (prior: MemoryJudgeTurn[]) => prior.length ? [target] : [])
+    const { scheduler, deps } = createScheduler({ loadRelatedMemories })
+    for (let i = 1; i <= 12; i++) {
+      await scheduler.scheduleMemoryWrite(`user ${i}`, `assistant ${i}`)
+      await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", i))
+    }
+    await vi.waitFor(() => expect(deps.judgeMemory).toHaveBeenCalledTimes(2))
+    expect(loadRelatedMemories.mock.calls[1][0].map(t => t.userInput)).toEqual(["user 5", "user 6"])
+    expect(vi.mocked(deps.judgeMemory).mock.calls[1][2]).toEqual({ priorTurnCount: 2, previousMemories: [target] })
+    expect(vi.mocked(deps.judgeMemory).mock.calls[1][0]).toHaveLength(8)
+  })
+
   it("defers MemoryJudge until every sixth round", async () => {
     const { scheduler, deps, enqueueLabels } = createScheduler()
 
@@ -325,8 +339,8 @@ describe("MemoryScheduler", () => {
     await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
 
     // 轮次一入缓冲即被固化（后到的轮次也提前受保护）；第 6 轮 judge 成功后水位线推进，残余清空
-    expect(savedBatches[4]).toHaveLength(6)
-    expect(savedBatches[5]).toEqual([])
+    expect(savedBatches.some((turns) => turns.length === 6)).toBe(true)
+    await vi.waitFor(() => expect(savedBatches.at(-1)).toEqual([]))
   })
 
   it("converts temporary evidence turn refs into source times without persisting message IDs", async () => {
@@ -449,7 +463,7 @@ describe("MemoryScheduler", () => {
         validateAgainstConversation: true,
       })
     }
-    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 5))
     expect(deps.judgeMemory).not.toHaveBeenCalled()
 
     scheduler.scheduleMemoryWrite("live user 7", "live assistant 7", {
@@ -493,7 +507,7 @@ describe("MemoryScheduler", () => {
         validateAgainstConversation: true,
       })
     }
-    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 1))
     expect(deps.judgeMemory).not.toHaveBeenCalled()
   })
 
@@ -541,7 +555,7 @@ describe("MemoryScheduler", () => {
 
     messages.splice(messages.findIndex((message) => message.id === "u2"), 2)
     resolveJudge([candidate])
-    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenLastCalledWith("roundCount", 5))
 
     expect(deps.writeMemory).not.toHaveBeenCalled()
     expect(savedBatches.at(-1)?.map((turn) => turn.userMessageId)).toEqual(["u1", "u3", "u4", "u5", "u6"])

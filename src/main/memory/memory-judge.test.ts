@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   dataDir: "",
   llmText: "[]",
+  llmTexts: [] as string[],
   capturedMessages: [] as Array<{ role: string; content: string }>,
 }));
 
@@ -24,7 +25,7 @@ vi.mock("../orchestrator/vendors", () => ({
       mocks.capturedMessages = req.messages;
       return { url: "http://mock.local/chat", headers: {}, body: "{}" };
     },
-    parseResponse: () => ({ text: mocks.llmText }),
+    parseResponse: () => ({ text: mocks.llmTexts.shift() ?? mocks.llmText }),
   }),
 }));
 
@@ -51,6 +52,27 @@ function validL2Raw(sourceQuote?: string, facets?: Record<string, unknown>, evid
 }
 
 describe("MemoryJudge sourceQuote", () => {
+  it.each([
+    ["眼前景色只是梦境", "眼前景色在梦里面", true],
+    ["用户只喝茶", "用户喝茶", false],
+    ["用户只喝茶", "用户只是喜欢喝茶", false],
+    ["用户永远喝茶", "用户喝茶", false],
+    ["用户只喝茶", "用户只喝茶", true],
+  ])("reviews risky wording within two calls: %s", async (summary, quote, accepted) => {
+    const [raw] = JSON.parse(validL2Raw());
+    mocks.llmText = JSON.stringify([{ ...raw, summary, evidenceQuotes: [quote] }]);
+    if (accepted) {
+      mocks.llmTexts = [mocks.llmText, JSON.stringify([{...raw,summary,evidenceQuotes:[quote],
+        reason:"语义复核通过：原文与摘要表达相同范围，没有增加限制或确定性。"}])];
+      const candidates = await memoryJudge.judgeRecentTurns([{ userInput: quote, assistantReply: "好的" }], "s");
+      expect(candidates).toHaveLength(1);
+    } else {
+      await expect(memoryJudge.judgeRecentTurns([{ userInput: quote, assistantReply: "好的" }], "s")).rejects.toThrow("需要语义复核");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(mocks.capturedMessages[1].content).toContain(quote);
+      expect(mocks.capturedMessages[1].content).toContain("不要为通过检查机械删除词语");
+    }
+  });
   it("includes the persisted user and assistant timestamps for every turn", async () => {
     mocks.llmText = "[]"
 
@@ -66,6 +88,7 @@ describe("MemoryJudge sourceQuote", () => {
   })
 
   beforeEach(() => {
+    mocks.llmTexts = [];
     mocks.dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-judge-"));
     mocks.llmText = "[]";
     mocks.capturedMessages = [];
@@ -80,6 +103,50 @@ describe("MemoryJudge sourceQuote", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     fs.rmSync(mocks.dataDir, { recursive: true, force: true });
+  });
+
+  it("retries an invalid temporary-index summary once and binds repaired evidence to IDs", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const row = JSON.parse(validL2Raw())[0];
+      row.summary = ++calls === 1 ? "用户于T1开始项目" : "用户在做前端项目";
+      mocks.llmText = JSON.stringify([row]);
+      return { ok: true, json: async () => ({}) };
+    }));
+    const candidates = await memoryJudge.judgeRecentTurns([
+      { conversationId: "chat", userMessageId: "u1", userInput: "我在做前端", assistantReply: "嗯" },
+    ], "chat", { priorTurnCount: 0, previousMemories: [] });
+    expect(calls).toBe(2);
+    expect(candidates[0].sourceMessageIds).toEqual(["u1"]);
+    expect(candidates[0].sourceQuote).toBe("我在做前端");
+    expect(mocks.capturedMessages[1].content).toContain("上次结果未通过写入校验");
+  });
+
+  it("rejects unmatched evidence after one repair rather than reporting an empty success", async () => {
+    mocks.llmText = validL2Raw();
+    await expect(memoryJudge.judgeRecentTurns([
+      { conversationId: "chat", userMessageId: "u1", userInput: "不同原文", assistantReply: "我在做前端" },
+    ], "chat", { priorTurnCount: 0, previousMemories: [] })).rejects.toThrow("证据");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reviews old memories and emits a delta with the local target version", async () => {
+    const row = JSON.parse(validL2Raw())[0];
+    mocks.llmText = JSON.stringify([{ ...row, memoryAction: "supplement", targetMemoryId: "m1", targetVersion: "invented" }]);
+    const candidates = await memoryJudge.judgeRecentTurns([
+      { conversationId: "chat", userMessageId: "u1", userInput: "我在做前端", assistantReply: "嗯" },
+    ], "chat", { priorTurnCount: 0, previousMemories: [{ id: "m1", content: "用户的旧项目", version: "local-version", sourceMessageIds: ["old"] }] });
+    expect(candidates[0]).toMatchObject({ memoryAction: "supplement", targetMemoryId: "m1", targetVersion: "local-version", content: row.summary });
+    expect(mocks.capturedMessages[0].content).toContain("summary 只写新增事实");
+    expect(mocks.capturedMessages[1].content).not.toContain("local-version");
+  });
+
+  it("does not consume a truncated incremental array as a successful partial batch", async () => {
+    mocks.llmText = validL2Raw().slice(0, -1);
+    await expect(memoryJudge.judgeRecentTurns([
+      { conversationId: "chat", userMessageId: "u1", userInput: "我在做前端", assistantReply: "嗯" },
+    ], "chat", { priorTurnCount: 0, previousMemories: [] })).rejects.toThrow("完整数组");
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("requires sourceQuote for L2 candidates in the extraction prompt", async () => {

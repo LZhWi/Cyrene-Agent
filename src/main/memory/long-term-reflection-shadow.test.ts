@@ -3,6 +3,7 @@ import {
   parseJsonObject,
   parseJsonArray,
   buildSemanticCandidateGroups,
+  deduplicateShadowObservations,
   validateLongTermAudits,
   validateLongTermObservations,
   type LongTermShadowEvidence,
@@ -58,8 +59,9 @@ describe("long-term reflection shadow validation", () => {
       { key: "steady", verdict: "supported", evidenceIds: ["l2-4"], reason: "后续仍出现" },
       { key: "steady", verdict: "contradicted", evidenceIds: ["l2-1"], reason: "泄漏训练证据" },
     ] }, observations, [evidence[3]])
-    expect(result.accepted).toHaveLength(1)
-    expect(result.rejected[0].reason).toContain("outside the holdout")
+    expect(result.accepted).toHaveLength(0)
+    expect(result.rejected.map((r) => r.reason)).toContain("audit cites evidence outside the holdout set")
+    expect(result.rejected.map((r) => r.reason)).toContain("duplicate audit key")
   })
 
   it("parses fenced output while stripping reasoning", () => {
@@ -74,5 +76,15 @@ describe("long-term reflection shadow validation", () => {
     })), 0.95)
     expect(groups).toHaveLength(1)
     expect(groups[0].evidenceIds).toEqual(["l2-1", "l2-2", "l2-3"])
+  })
+
+  it("rejects time-near evidence, overlapping messages, short spans and missing audits", () => {
+    const raw = { observations: [{ key: "x", claim: "观察", scope: "recurring_pattern", confidence: 0.8, evidenceIds: ["l2-1", "l2-2", "l2-3"] }] }
+    expect(validateLongTermObservations(raw, evidence.map((e) => ({ ...e, grounding: "time_near" }))).accepted).toEqual([])
+    expect(validateLongTermObservations(raw, evidence.map((e) => ({ ...e, sourceKeys: ["same-message"] }))).accepted).toEqual([])
+    expect(validateLongTermObservations(raw, evidence.map((e, i) => ({ ...e, sourceAt: base + i * day, sourceEndAt: base + i * day }))).accepted).toEqual([])
+    const accepted = validateLongTermObservations(raw, evidence).accepted
+    expect(validateLongTermAudits({ audits: [] }, accepted, evidence).rejected).toEqual([{ key: "x", reason: "missing audit" }])
+    expect(deduplicateShadowObservations([accepted[0], { ...accepted[0], key: "y", claim: "近似观察" }]).deferred).toHaveLength(1)
   })
 })

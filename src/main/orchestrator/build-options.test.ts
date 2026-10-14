@@ -6,11 +6,9 @@ import {
   buildAgentRunOptions,
   buildChannelSystem,
   onAgentRunFinished,
-  suppressOverlappingMemoryEntries,
   type BuildOptionsDeps,
   type OnRunFinishedDeps,
 } from "./build-options"
-import type { SocialAtom } from "../social-context"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -38,6 +36,25 @@ function createBuildDeps(): BuildOptionsDeps {
 }
 
 describe("build-options", () => {
+  it("keeps conflicting L2 evidence and captures the source before social retrieval", async () => {
+    const deps = createBuildDeps()
+    deps.isSocialContextEnabled = () => true
+    let captured = false
+    deps.captureSocialSourceRevision = () => { captured = true; return "source-revision" }
+    deps.buildMemoryInjection = async () => "【相关记忆】\n· 用户明天不去学校，行程已经取消"
+    deps.retrieveSocialContext = async () => {
+      expect(captured).toBe(true)
+      return [{ id: "old", conversationId: "session-1", type: "short_term", content: "用户明天去学校",
+        evidenceTurnId: "old-user", evidenceQuote: "明天去学校", createdAt: Date.now(), updatedAt: Date.now(),
+        expiresAt: Date.now() + 10000, status: "active" }]
+    }
+    const result = await buildAgentRunOptions({ messages: [{ role: "user", content: "行程呢" }],
+      style: "01_default.md", sessionId: "session-1", userTurnId: "u", assistantTurnId: "a" }, deps)
+    expect(result.options.soulSystemBaseContent).toContain("用户明天不去学校，行程已经取消")
+    expect(result.options.soulSystemBaseContent).toContain("用户明天去学校")
+    expect(result.options.socialContext?.sourceRevision).toBe("source-revision")
+  })
+
   it("resolves one retrieval plan and shares it with L2 and history injection", async () => {
     const deps = createBuildDeps()
     const retrievalPlan = {
@@ -641,104 +658,5 @@ describe("build-options", () => {
       false,
     )
     expect(scheduleMemoryWrite).not.toHaveBeenCalled()
-  })
-})
-
-describe("suppressOverlappingMemoryEntries", () => {
-  function makeAtom(type: "short_term" | "open_loop", content: string): SocialAtom {
-    return {
-      id: `atom-${Math.random()}`,
-      conversationId: "conv",
-      type,
-      content,
-      evidenceTurnId: "turn-1",
-      evidenceQuote: content,
-      createdAt: 1_000,
-      updatedAt: 1_000,
-      expiresAt: 2_000,
-      status: "active",
-    }
-  }
-
-  it("removes user_memory entries that overlap with short_term social atoms", () => {
-    const memoryInjection = [
-      "【相关记忆】",
-      "· 用户明天要考试",
-      "· 用户喜欢跑步",
-      "· 用户在学法语（较久远的印象）",
-      "（标注「较久远的印象」的条目可能已过时，提及时用不确定的语气，不要断言。）",
-    ].join("\n")
-    const atoms = [makeAtom("short_term", "明天考试，需要复习")]
-
-    const diagnostics: Array<{ memoryText: string; socialText: string; score: number }> = []
-    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms, (match) => diagnostics.push(match))
-
-    expect(result).toContain("用户喜欢跑步")
-    expect(result).toContain("用户在学法语")
-    expect(result).not.toContain("用户明天要考试")
-    expect(diagnostics).toEqual([
-      expect.objectContaining({
-        memoryText: "用户明天要考试",
-        socialText: "明天考试，需要复习",
-        score: expect.any(Number),
-      }),
-    ])
-    // notes 行保留（仍有未抑制的条目）
-    expect(result).toContain("较久远的印象")
-  })
-
-  it("removes the entire 【相关记忆】 block when all entries are suppressed", () => {
-    const memoryInjection = [
-      "【相关记忆】",
-      "· 用户明天要考试",
-    ].join("\n")
-    const atoms = [makeAtom("short_term", "明天考试")]
-
-    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
-
-    expect(result).not.toContain("【相关记忆】")
-    expect(result).not.toContain("考试")
-  })
-
-  it("leaves 【相关文档】 and 【人物关系】 blocks untouched", () => {
-    const memoryInjection = [
-      "【相关记忆】",
-      "· 用户明天要考试",
-      "",
-      "【相关文档】",
-      "· 文档内容提到考试安排",
-      "",
-      "【人物关系】",
-      "· 小明是同学",
-    ].join("\n")
-    const atoms = [makeAtom("short_term", "明天考试")]
-
-    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
-
-    // 【相关记忆】整块移除（唯一条目被抑制）
-    expect(result).not.toContain("【相关记忆】")
-    // 但【相关文档】/【人物关系】里即使有"考试"字样也不动
-    expect(result).toContain("【相关文档】")
-    expect(result).toContain("文档内容提到考试安排")
-    expect(result).toContain("【人物关系】")
-    expect(result).toContain("小明是同学")
-  })
-
-  it("does not suppress based on open_loop atoms", () => {
-    const memoryInjection = [
-      "【相关记忆】",
-      "· 用户喜欢跑步",
-    ].join("\n")
-    const atoms = [makeAtom("open_loop", "用户喜欢跑步")]
-
-    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
-
-    expect(result).toContain("用户喜欢跑步")
-  })
-
-  it("passes through unchanged when there are no short_term atoms", () => {
-    const memoryInjection = "【相关记忆】\n· 用户喜欢跑步"
-    const result = suppressOverlappingMemoryEntries(memoryInjection, [])
-    expect(result).toBe(memoryInjection)
   })
 })

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   FOLLOWUP_INTERVAL_MS,
-  FOLLOWUP_MIN_SCORE,
   GLOBAL_PROACTIVE_INTERVAL_MS,
   NORMAL_QUIET_MS,
   SILENT_COOLDOWN_MS,
@@ -70,7 +69,7 @@ describe("proactive hard policy", () => {
     expect(canStartProactiveGeneration(snapshot({ generationBusy: true }), state, candidate()).reason).toBe("generation_busy");
   });
 
-  it("requires three hours, a new scene, and a moderately stricter score for the second message", () => {
+  it("requires three hours but allows the same scene for the second message", () => {
     const state = createDefaultProactiveState();
     state.unansweredCount = 1;
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS + 1;
@@ -78,17 +77,38 @@ describe("proactive hard policy", () => {
 
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_cooldown");
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
-    expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_same_scene");
+    expect(canStartProactiveGeneration(snapshot(), state, candidate()).allowed).toBe(true);
     expect(canStartProactiveGeneration(snapshot(), state, candidate({
       sceneId: "rainy_day",
-      score: FOLLOWUP_MIN_SCORE - 1,
-    })).reason)
-      .toBe("followup_score_too_low");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({
-      sceneId: "rainy_day",
-      score: FOLLOWUP_MIN_SCORE,
     })).allowed)
       .toBe(true);
+  });
+
+  it("allows consecutive back_from_away messages after cooldown but blocks a third unanswered message", () => {
+    const state = createDefaultProactiveState();
+    const awayCandidate = candidate({ sceneId: "back_from_away", score: 100, sceneCooldownMs: 30 * 60 * 1000 });
+    markProactiveCommitted(state, awayCandidate, NOW - FOLLOWUP_INTERVAL_MS);
+
+    expect(canStartProactiveGeneration(snapshot(), state, awayCandidate).allowed).toBe(true);
+    expect(canCommitProactiveMessage(snapshot(), state, awayCandidate, state.proactiveEpoch).allowed).toBe(true);
+
+    markProactiveCommitted(state, awayCandidate, NOW);
+    expect(canStartProactiveGeneration(snapshot({ now: NOW + FOLLOWUP_INTERVAL_MS }), state, awayCandidate).reason)
+      .toBe("unanswered_limit");
+  });
+
+  it.each([1, 39, 40, 54, 55])("uses the same score policy for first and second messages at score %s", (score) => {
+    const state = createDefaultProactiveState();
+    const nextCandidate = candidate({ sceneId: "rainy_day", score });
+    const firstDecision = canStartProactiveGeneration(snapshot(), state, nextCandidate);
+    expect(firstDecision.allowed).toBe(true);
+
+    state.unansweredCount = 1;
+    state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
+    state.lastProactiveScene = "work_break";
+    expect(canStartProactiveGeneration(snapshot(), state, nextCandidate)).toEqual(firstDecision);
+    expect(canCommitProactiveMessage(snapshot(), state, nextCandidate, state.proactiveEpoch))
+      .toEqual(firstDecision);
   });
 
   it("hard-blocks a third unanswered proactive message", () => {

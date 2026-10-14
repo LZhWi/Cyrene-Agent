@@ -481,6 +481,59 @@ export class JsonVectorStore {
     return existing;
   }
 
+  /** One visual-description vector per attached image; changing its caption replaces the vector. */
+  async upsertChatImage(
+    text: string,
+    provider: EmbeddingProvider,
+    metadata: { sessionId: string; turnId: string; imageKey: string; name: string; summary: string; ts: number },
+    isSourceCurrent?: () => boolean,
+  ): Promise<MemoryEntry | null> {
+    if (isSourceCurrent && !isSourceCurrent()) return null;
+    const find = () => this.entries.find((entry) => entry.source === "chat_image"
+      && entry.metadata?.sessionId === metadata.sessionId
+      && entry.metadata?.turnId === metadata.turnId
+      && entry.metadata?.imageKey === metadata.imageKey);
+    const current = find();
+    if (current?.text === text) {
+      if (current.metadata?.summary !== metadata.summary) {
+        current.metadata = { ...metadata };
+        this.dirty = true;
+        this.save();
+      }
+      return current;
+    }
+    const embedding = await provider.embed(text);
+    if (isSourceCurrent && !isSourceCurrent()) return null;
+    const latest = find();
+    if (latest) {
+      latest.text = text;
+      latest.embedding = embedding;
+      latest.metadata = { ...metadata };
+      this.dirty = true;
+      this.markIndexDirty();
+      this.save();
+      return latest;
+    }
+    return this.addPreparedBatch([{
+      text,
+      source: "chat_image",
+      embedding,
+      metadata: { ...metadata },
+      createdAt: metadata.ts,
+    }])[0];
+  }
+
+  deleteChatImagesBySessionId(sessionId: string): number {
+    return this.deleteEntriesByIds(this.entries.filter((entry) => entry.source === "chat_image"
+      && entry.metadata?.sessionId === sessionId).map((entry) => entry.id), "chat_image");
+  }
+
+  deleteChatImagesByTurnIds(sessionId: string, turnIds: string[]): number {
+    const ids = new Set(turnIds);
+    return this.deleteEntriesByIds(this.entries.filter((entry) => entry.source === "chat_image"
+      && entry.metadata?.sessionId === sessionId && ids.has(String(entry.metadata?.turnId))).map((entry) => entry.id), "chat_image");
+  }
+
   // 批量添加（用于导入文档 chunk）
   async addBatch(
     items: Array<{ text: string; source: string; metadata?: Record<string, unknown> }>,
