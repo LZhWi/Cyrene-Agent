@@ -126,6 +126,12 @@ export class ConversationDatabase {
         CREATE INDEX memory_pending_batch ON memory_pending_turns(conversation_id,active,processed,seq);
         INSERT INTO schema_migrations VALUES(8)`));
     }
+    if (!this.db.prepare("SELECT version FROM schema_migrations WHERE version=9").get()) {
+      this.transaction(() => this.db.exec(`CREATE TABLE IF NOT EXISTS shell_jobs(
+   job_id TEXT PRIMARY KEY, status TEXT NOT NULL, ended_at INTEGER, record_json TEXT NOT NULL);
+   CREATE INDEX IF NOT EXISTS shell_jobs_retention ON shell_jobs(status, ended_at);
+   INSERT INTO schema_migrations VALUES(9)`));
+    }
     this.transaction(() => {
       const rows = this.db.prepare("SELECT run_id,record_json FROM runs WHERE status IN ('prepared','running')").all();
       for (const row of rows) {

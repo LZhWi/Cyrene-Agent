@@ -1,3 +1,4 @@
+import { runShellJobCommand } from "./shell-job-repository";
 import { parentPort, workerData } from "node:worker_threads";
 import { importRuns, runCommand } from "./conversation-run-repository";
 import { importTaskSessions, runTaskCommand } from "./conversation-task-repository";
@@ -340,6 +341,9 @@ async function execute(method: string, args: any[]): Promise<unknown> {
   if (method.startsWith('moments.')) {
     // loadAll/nextSeq 只读；写命令内部自管事务。
     return runMomentsCommand(database, method, args);
+  }
+  if (method.startsWith('shellJobs.')) {
+    return database.transaction(() => runShellJobCommand(database, method, args));
   }
   if (method.startsWith('tools.')) {
     const [scope, id, fingerprint] = args;

@@ -1,3 +1,4 @@
+import { disposeAllShellJobs } from "../orchestrator/tools/builtin-tools/shell-job-manager";
 import { closeConversationDatabases } from "../storage/conversation-database-client";
 /**
  * 默认应用依赖装配（真正的组合根胶水层）：
@@ -287,6 +288,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
   const readiness = createStartupReadiness();
   const activation = createWindowActivationBroker();
   const shutdown = createShutdownCoordinator({ readiness, timeoutMs: SHUTDOWN_TIMEOUT_MS });
+  shutdown.register({ id: "shell-jobs", phase: "stopLocalResources", dispose: disposeAllShellJobs });
   shutdown.register({ id: "conversation-database", phase: "closePersistence", dispose: closeConversationDatabases });
 
   // 注入应用图标路径 getter（窗口工厂统一读取，避免循环依赖）。

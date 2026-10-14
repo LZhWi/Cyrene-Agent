@@ -571,8 +571,8 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
       });
     }
     const spec = buildSpawnSpec(plan, resolvedShell);
-    const { jobId, logFile } = startShellJob({
-      spec, command, shell: requestedShell, totalMs: timeoutPolicy.totalMs,
+    const { jobId, logFile } = await startShellJob({
+      spec, command, shell: requestedShell, totalMs: timeoutPolicy.totalMs, signal: context?.signal,
     });
     logger.info(LogTag.BuiltinTools, `[run_shell] background ${jobId} started: command="${command}" totalMs=${timeoutPolicy.totalMs}`);
     return JSON.stringify({
