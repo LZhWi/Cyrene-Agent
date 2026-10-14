@@ -5,7 +5,7 @@ export interface ExtractionTranscriptTurn {
   id: string;
   userAt: string;
   assistantAt: string;
-  user: string;
+  user: string; memoryContext?: string;
   assistant: string;
   writable: boolean;
 }
@@ -28,9 +28,12 @@ export interface ExtractedMemoryCandidate {
   sourceQuote?: string;
   evidenceTurnRefs: string[];
   facets?: MemoryFacets;
+  memoryAction?: "add" | "supplement" | "correct";
+  targetMemoryId?: string;
+  replaceText?: string;
+  forbiddenOverclaims?: string[];
 }
 
-const ABSOLUTE_TERMS = ["只", "永远", "从不", "一定", "完全", "绝对", "以后都", "不再"];
 const L0_FIELD_DESCRIPTIONS: Record<keyof typeof L0_FIELDS, string> = {
   preferredName: '用户希望被如何称呼、叫什么名字、昵称。例如："叫我P宝""我叫Playa""以后喊我宝宝"',
   occupation: '用户的职业、身份、工作。例如："我是前端工程师""我在做设计"',
@@ -97,8 +100,7 @@ function normalizeCandidate(input: unknown, maxTurn: number): ExtractedMemoryCan
     || !["user_explicit", "assistant_inferred", "mixed"].includes(String(attribution))
     || value.shouldWrite !== true || !evidenceQuotes.length || evidenceQuotes.some((quote) => quote.length > 1000)
     || typeof contextSummary !== "string" || !contextSummary.trim() || contextSummary.trim().length > 1500
-    || typeof reason !== "string" || !reason.trim() || reason.trim().length > 1500 || forbidden.length
-    || ABSOLUTE_TERMS.some((term) => summary.includes(term) && !evidenceQuotes.some((quote) => quote.includes(term)))) return null;
+    || typeof reason !== "string" || !reason.trim() || reason.trim().length > 1500) return null;
   const evidenceTurnRefs = Array.isArray(value.evidenceTurnRefs)
     ? [...new Set(value.evidenceTurnRefs.filter((item): item is string => {
       if (typeof item !== "string") return false;
@@ -109,6 +111,9 @@ function normalizeCandidate(input: unknown, maxTurn: number): ExtractedMemoryCan
   const normalizedLayer = layer as ExtractedMemoryCandidate["layer"];
   return {
     layer: normalizedLayer,
+    ...(value.memoryAction ? { memoryAction: value.memoryAction as ExtractedMemoryCandidate["memoryAction"] } : {}),
+    ...(typeof value.targetMemoryId === "string" ? { targetMemoryId: value.targetMemoryId } : {}),
+    ...(typeof value.replaceText === "string" ? { replaceText: value.replaceText } : {}),
     ...(typeof value.field === "string" ? { field: value.field } : {}),
     content: summary.trim(),
     confidence: certainty === "explicit" ? 0.9 : certainty === "inferred" ? 0.65 : 0.4,
@@ -120,26 +125,47 @@ function normalizeCandidate(input: unknown, maxTurn: number): ExtractedMemoryCan
     evidenceQuotes,
     contextSummary: contextSummary.trim(),
     reason: reason.trim(),
+    forbiddenOverclaims: forbidden,
     ...(typeof value.sourceQuote === "string" && value.sourceQuote.trim() ? { sourceQuote: value.sourceQuote.trim().slice(0, 500) } : {}),
     evidenceTurnRefs,
     ...(normalizedLayer === "L2" ? { facets: normalizeModelFacets(value.facets) } : {}),
   };
 }
 
-export function parseMemoryExtraction(raw: string, turnCount: number): ExtractedMemoryCandidate[] {
-  const parsed = extractJsonArray(raw);
-  if (!parsed) throw new Error(raw.trim() ? "提取结果 JSON 无效，保留待处理队列" : "提取模型返回空内容，保留待处理队列");
+export function parseMemoryExtraction(raw: string, turnCount: number, previousMemories?: Array<{ id: string }>): ExtractedMemoryCandidate[] {
+  // 增量审阅不能从截断响应中抢救局部写入。
+  const parsed = previousMemories === undefined ? extractJsonArray(raw) : JSON.parse(raw.trim());
+  if (!Array.isArray(parsed)) throw new Error(raw.trim() ? "提取结果 JSON 无效，保留待处理队列" : "提取模型返回空内容，保留待处理队列");
   const candidates: ExtractedMemoryCandidate[] = [];
+  const reviewed = new Set<string>();
   for (const item of parsed) {
-    if (item && typeof item === "object" && (item as Record<string, unknown>).shouldWrite === false) continue;
+    if (previousMemories !== undefined) {
+      const action = item?.memoryAction ?? "add";
+      if (!["keep", "supplement", "correct", "add"].includes(action)) throw new Error("未知记忆操作");
+      if (action !== "add") {
+        if (!previousMemories.some(m => m.id === item.targetMemoryId) || reviewed.has(item.targetMemoryId)) throw new Error("旧记忆审阅目标无效或重复");
+        reviewed.add(item.targetMemoryId);
+        if (action === "keep") continue;
+        if (item.layer !== "L2") throw new Error("增量修改仅允许 L2");
+      } else if (item.targetMemoryId !== undefined) throw new Error("新增不能指定旧记忆目标");
+    }
+    if (item && typeof item === "object" && (item as Record<string, unknown>).shouldWrite === false) {
+      if (previousMemories !== undefined && item.targetMemoryId) throw new Error("旧记忆审阅不可跳过，请使用 keep");
+      continue;
+    }
     const candidate = normalizeCandidate(item, turnCount);
-    if (!candidate) continue;
+    if (!candidate) {
+      if (previousMemories !== undefined) throw new Error("候选字段无效");
+      continue;
+    }
+    if (previousMemories !== undefined && /\bT\d+\b/u.test(candidate.content)) throw new Error("摘要包含临时轮次编号");
     if (candidate.layer !== "L0" || (candidate.certainty === "explicit" && candidate.attribution === "user_explicit")) candidates.push(candidate);
   }
+  if (previousMemories?.some(m => !reviewed.has(m.id))) throw new Error("未审阅全部旧记忆");
   return candidates;
 }
 
-export function buildMemoryExtractionMessages(turns: ExtractionTranscriptTurn[], sessionId: string): ExtractionPromptMessage[] {
+export function buildMemoryExtractionMessages(turns: ExtractionTranscriptTurn[], sessionId: string, previousMemories?: Array<{ id: string; content: string }>): ExtractionPromptMessage[] {
   const maxRef = `T1～T${turns.length}`;
   const writableRefs = turns.flatMap((turn, index) => turn.writable ? [`T${index + 1}`] : []);
   const systemPrompt = [
@@ -170,7 +196,7 @@ export function buildMemoryExtractionMessages(turns: ExtractionTranscriptTurn[],
     "- 如果只是 AI 的建议、安慰、总结、推断，不要写成用户事实",
     "- 不要把「这次」「刚刚」「这个话题里」变成长期偏好",
     "- 用户明确表达的未来计划、承诺或约定，即使依赖某个前置条件，只要对未来对话有帮助，也应按原条件保守记录；不要仅因含有「等……以后」「如果……」就返回空数组",
-    "- 不要自动使用绝对化表达：只、永远、从不、一定、完全、绝对、以后都、不再，除非用户原话明确说过这些词",
+    "- 不得扩大原文的范围、程度或确定性，也不得丢失否定和条件；允许有依据的同义转述，不要求摘要与原文使用同一个词",
     "- 如果 summary 中存在可能过度概括的词，必须写入 forbiddenOverclaims；有 forbiddenOverclaims 时 shouldWrite 必须是 false",
     "",
     "重要格式规则：",
@@ -225,9 +251,22 @@ export function buildMemoryExtractionMessages(turns: ExtractionTranscriptTurn[],
     `T${index + 1}（第 ${index + 1} 轮，${turn.writable ? "可写" : "只读上下文"}）：`,
     `用户时间：${turn.userAt}（本地：${new Date(turn.userAt).toLocaleString("zh-CN", { hour12: false })}）`,
     `用户：${turn.user}`,
+    ...(turn.memoryContext ? [turn.memoryContext, "以上通话/联机梗概仅用于理解，不是用户逐字原话；新事实证据仍须引用用户原文。"] : []),
     `AI时间：${turn.assistantAt}（本地：${new Date(turn.assistantAt).toLocaleString("zh-CN", { hour12: false })}）`,
     `AI：${turn.assistant}`,
   ].join("\n")).join("\n\n");
-  const userPrompt = [`conversationId: ${sessionId}`, "最近对话：", transcript].join("\n");
-  return [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }];
+  const incrementalPrompt = previousMemories === undefined ? "" : [
+    "增量记忆规则：先逐条审阅前置轮次的相关旧记忆，再提取未覆盖的新事实。",
+    "每个旧记忆 ID 恰好输出一次 memoryAction=keep、supplement 或 correct，并指定 targetMemoryId。",
+    "keep 仅需 memoryAction、targetMemoryId、reason。supplement/correct 仍须包含全部候选字段。",
+    "同一事项新增细节用 supplement，summary 只写新增事实，程序完整保留旧内容再追加；禁止重写旧记忆。",
+    "correct 仅用于用户明确纠正，replaceText 必须是旧内容中唯一匹配的待替换片段，summary 仅写替代文本；禁止删除记忆。",
+    "supplement/correct 仅限 L2，变更必须有本批可写轮次的逐字用户证据。",
+    "新增使用 memoryAction=add，不指定 targetMemoryId；不要重复新增已提供的事实。同一消息的不同事实分别保留。",
+    "summary 禁止临时 T 编号；路径、名称、数字保持原文。evidenceQuotes 必须连续且唯一匹配用户原话，不能拼接或改标点。",
+    "旧记忆不是用户证据，旧 T 编号不代表本批轮次。即使没有新增，也要完成全部旧记忆审阅。",
+  ].join("\n");
+  const userPrompt = [`conversationId: ${sessionId}`, "最近对话：", transcript,
+    ...(previousMemories === undefined ? [] : ["前置轮次的相关记忆：", JSON.stringify(previousMemories)])].join("\n");
+  return [{ role: "system", content: [systemPrompt, incrementalPrompt].filter(Boolean).join("\n") }, { role: "user", content: userPrompt }];
 }

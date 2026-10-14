@@ -2,12 +2,7 @@ import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, MemoryJudgeTurn } from "./memor
 import { invokeMemoryStructuredOutput, getDefaultMaxOutputTokens } from "./memory-llm-client"
 import { loadMemoryModelConfig } from "./memory-llm-shared"
 import { parseMemoryJudgeResult, validateMemoryJudgeBusiness, MemoryJudgeResult } from "./memory-schemas"
-
-const ABSOLUTE_TERMS = ["只", "永远", "从不", "一定", "完全", "绝对", "以后都", "不再"]
-
-function hasUnsupportedAbsolute(summary: string, evidenceQuotes: string[]): boolean {
-  return ABSOLUTE_TERMS.some((term) => summary.includes(term) && !evidenceQuotes.some((quote) => quote.includes(term)))
-}
+import { requireSemanticReview } from "./memory-semantic-review"
 
 /**
  * 业务级后处理：过滤不符合条件的候选。
@@ -17,8 +12,6 @@ function postFilterCandidates(candidates: MemoryCandidate[]): MemoryCandidate[] 
   return candidates
     .filter((item) => item.shouldWrite === true)
     .filter((item) => item.layer !== "L0" || (item.certainty === "explicit" && item.attribution === "user_explicit"))
-    .filter((item) => !item.forbiddenOverclaims || item.forbiddenOverclaims.length === 0)
-    .filter((item) => !hasUnsupportedAbsolute(item.summary ?? item.content, item.evidenceQuotes ?? []))
 }
 
 export class MemoryJudge {
@@ -35,11 +28,6 @@ export class MemoryJudge {
 
     try {
       const config = loadMemoryModelConfig()
-      if (!config.apiKey) {
-        console.error("[PMRS/Judge] LLM 调用失败: missing api key")
-        console.log("[PMRS/Judge] 本轮无值得记录的信息")
-        return { candidates: [], entities: [] }
-      }
 
       const systemPrompt = [
         "你是一个保守的记忆候选提取器，不是事实裁判，也不是用户画像改写器。",
@@ -69,7 +57,7 @@ export class MemoryJudge {
         "- summary 必须忠于用户原话和上下文，不要自行推广范围",
         "- 如果只是 AI 的建议、安慰、总结、推断，不要写成用户事实",
         "- 不要把「这次」「刚刚」「这个话题里」变成长期偏好",
-        "- 不要自动使用绝对化表达：只、永远、从不、一定、完全、绝对、以后都、不再，除非用户原话明确说过这些词",
+        "- 不得扩大原文的范围、程度或确定性，也不得丢失否定和条件；允许有依据的同义转述，不要求摘要与原文使用同一个词",
         "- 如果 summary 中存在可能过度概括的词，必须写入 forbiddenOverclaims；有 forbiddenOverclaims 时 shouldWrite 必须是 false",
         "",
         "重要格式规则：",
@@ -151,12 +139,24 @@ export class MemoryJudge {
         transcript,
       ].join("\n")
 
+      const semanticRequests = new Set<string>()
+      let semanticInstructions = ""
       const result = await invokeMemoryStructuredOutput<MemoryJudgeResult>({
         operation: "judge",
         systemPrompt,
         userPrompt,
         maxOutputTokens: getDefaultMaxOutputTokens("judge"),
-        parseSchema: parseMemoryJudgeResult,
+        parseSchema: (value) => {
+          const parsed = parseMemoryJudgeResult(value)
+          try {
+            requireSemanticReview(postFilterCandidates(parsed.candidates), semanticRequests, semanticRequests.size > 0)
+          } catch (error) {
+            semanticInstructions = error instanceof Error ? error.message : String(error)
+            throw error
+          }
+          return parsed
+        },
+        repairInstructions: () => semanticInstructions,
         validateBusiness: validateMemoryJudgeBusiness,
         config,
       })
@@ -175,8 +175,7 @@ export class MemoryJudge {
       return { candidates: filtered, entities: result.entities }
     } catch (error) {
       console.error("[PMRS/Judge] LLM 调用失败:", error)
-      console.log("[PMRS/Judge] 本轮无值得记录的信息")
-      return { candidates: [], entities: [] }
+      throw error
     }
   }
 

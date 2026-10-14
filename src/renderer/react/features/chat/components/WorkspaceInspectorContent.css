@@ -1,0 +1,12 @@
+.cy-inspector-content { flex: 1; min-height: 0; overflow: auto; padding: 12px; color: var(--cy-text); font-size: 12px; user-select: text; }
+.cy-inspector-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.cy-inspector-toolbar span, .cy-inspector-toolbar strong { overflow-wrap: anywhere; min-width: 0; }
+.cy-inspector-toolbar button { flex: none; border: 0; border-radius: 6px; padding: 6px; background: var(--cy-bg-hover); cursor: pointer; }
+.cy-file-tree { margin: 0; padding-left: 12px; list-style: none; }
+.cy-file-tree button { display: flex; align-items: center; gap: 5px; border: 0; border-radius: 5px; background: transparent; color: inherit; padding: 6px 4px; max-width: 100%; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.cy-file-tree button:hover { background: var(--cy-bg-hover); }
+.cy-file-tree .lucide { flex: none; }
+.cy-file-tree .lucide.is-open { transform: rotate(90deg); }
+.cy-file-preview-text, .cy-task-transcript pre, .cy-inspector-content details pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 monospace; }
+.cy-file-preview-image { display: block; max-width: 100%; height: auto; }
+.cy-task-transcript { padding: 12px 0; border-bottom: 1px solid var(--cy-border); }

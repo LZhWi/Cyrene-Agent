@@ -1,4 +1,6 @@
+import { resolveChatModuleModel } from "../../settings/chat-module-routes";
 import path from "node:path";
+import { getSession } from "../../chats/chats-store";
 import { app } from "electron";
 import { loadModelSettings } from "../../settings/model-settings";
 import { getAdapterForConfig } from "../../orchestrator/vendors";
@@ -35,13 +37,24 @@ export function createSocialContextService(deps: SocialContextServiceDeps): Soci
 
   const scheduler = createSocialContextScheduler({
     store,
+    sourceRevision: (input) => {
+      const messages = getSession(input.conversationId)?.messages;
+      const user = messages?.find(message => message.id === input.userTurn.id && message.role === "user");
+      if (!user) return undefined;
+      return JSON.stringify([user.id, user.content, user.at]);
+    },
+    // The renderer may persist the final reply after scheduling. Check it at commit,
+    // rather than treating an unfinished placeholder as a permanently stale source.
+    canCommit: (input) => getSession(input.conversationId)?.messages.some(message =>
+      message.id === input.assistantTurn.id && message.role === "model" && message.content === input.assistantTurn.text,
+    ) ?? false,
     enqueue: (label, task) =>
       deps.enqueueLLMTask(label, task, {
         log: false,
         retryRateLimit: false,
       }),
     generate: async (input, repair) => {
-      const settings = loadModelSettings();
+      const settings = resolveChatModuleModel("social", loadModelSettings());
       const config: VendorConfig = {
         provider: settings.provider,
         baseUrl: settings.baseUrl,

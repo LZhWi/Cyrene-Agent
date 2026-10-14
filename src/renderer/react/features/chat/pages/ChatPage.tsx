@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "../../../i18n";
 import { DownOutlined } from "@ant-design/icons";
+import { Files, FolderOpen, MessageSquareText } from "lucide-react";
 import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
+import { LearnExamList } from "../components/LearnExamList";
 import { CodeGitPanel } from "../components/CodeGitPanel";
 import type { PlanReviewPhase } from "../components/PlanReviewPanel";
 import { ChatPageInspector, type ChatPageInspectorTabId } from "../components/ChatPageInspector";
+import type { InspectorTab } from "../components/RightInspector";
+import { ReviewDiffContent } from "../components/ReviewInspector";
+import { FilePreviewContent, FileTreeContent, TaskSessionContent } from "../components/WorkspaceInspectorContent";
 import {
   normalizeDeferredPlanChoice,
   normalizePopQuizCard,
@@ -17,6 +22,7 @@ import { ChatMessageList } from "../components/ChatMessageList";
 import { ChatPageNavigation, type ChatPagePanel } from "../components/ChatPageNavigation";
 import { ReasoningControl } from "../components/ReasoningControl";
 import { StyleControl } from "../components/StyleControl";
+import { ModelSelector } from "../components/ModelSelector";
 import {
   ContextCompressionNotice,
   FileDropOverlay,
@@ -26,9 +32,12 @@ import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "..
 import { EarlyTtsPlaybackQueue, type EarlyTtsSplitMode } from "../tts/early-tts-queue";
 
 import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
+import type { SidebarOrganizationDraft, SidebarOrganizationSnapshot } from "../../../../../shared/sidebar-organization";
 import { type ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import type { ModelFailureInfo } from "../../../../../shared/model-error";
 import type { SegmentedOutputMode } from "../../../../../shared/preferences";
 import { ChatPagePanelHost } from "../components/ChatPagePanelHost";
+import { CodeExecutorSurface } from "../components/CodeExecutorSurface";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
 import { shouldListenForDeferredPlanEvents } from "./conversation-run-policy";
@@ -65,6 +74,7 @@ import { useChannelMirrorEvents } from "../hooks/useChannelMirrorEvents";
 import { AgentRunController, type AgentRunInput } from "./run/AgentRunController";
 import {
   appendPendingQueueEntry,
+  editPendingQueueEntry,
   clearSessionInteraction,
   bindWorkspaceName,
   findSessionIdForRun,
@@ -116,7 +126,11 @@ export function ChatPage() {
   /** 右侧 Review 检查面板：打开时把白色工作区挤窄 */
   const [reviewInspector, setReviewInspector] = useState<{ runId: string; fileIndex: number } | null>(null);
   /** 右侧面板当前激活的 tab（diff / plan），由打开动作自动切换 */
-  const [inspectorTab, setInspectorTab] = useState<"diff" | "plan">("plan");
+  const [inspectorTab, setInspectorTab] = useState<string>("plan");
+  const [workspaceTabsBySession, setWorkspaceTabsBySession] = useState<Record<string, Array<
+    { id: string; kind: "files" } | { id: string; kind: "file"; file: string }
+    | { id: string; kind: "task"; taskId: string } | { id: string; kind: "diff"; runId: string; fileIndex: number }
+  >>>({});
   const [mode, setMode] = useState<ConversationMode>(() => {
     if (windowKind === "chat") return "chat";
     if (windowKind === "workspace") {
@@ -144,6 +158,8 @@ export function ChatPage() {
     Partial<Record<ConversationMode, string>>
   >({});
   const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
+  const [workspaceSidebarSessions, setWorkspaceSidebarSessions] = useState<ChatSessionMeta[]>([]);
+  const [sidebarOrganization, setSidebarOrganization] = useState<SidebarOrganizationSnapshot | null>(null);
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
 
   const [modelBusyByMode, setModelBusyByMode] = useState<Partial<Record<ConversationMode, boolean>>>({});
@@ -344,6 +360,7 @@ export function ChatPage() {
     isDraggingFiles,
     chooseFiles,
     handlePastedImage,
+    handlePastedFileUris,
     handleScreenshot,
     removeAttachment,
     prepareImageAttachments,
@@ -351,6 +368,7 @@ export function ChatPage() {
     deleteScopeAttachments,
     dragHandlers,
   } = useComposerAttachments({
+    mode,
     scopeKey,
     getActiveScope: () => activeScopeRef.current,
     patchMessageAttachments: updateMessageAttachments,
@@ -360,6 +378,7 @@ export function ChatPage() {
   // 会话级最新上下文快照（环形图优先读取点）：run 事件实时写入；
   // 手动压缩后随会话重载从 session.currentContextUsage 初始化（known-issues 问题 3）。
   const [sessionContextUsageBySession, setSessionContextUsageBySession] = useState<Record<string, ContextUsageSnapshot>>({});
+  const [mainModelFailureBySession, setMainModelFailureBySession] = useState<Record<string, ModelFailureInfo>>({});
 
   activeModeRef.current = mode;
   activeSessionIdsRef.current = activeSessionIds;
@@ -385,10 +404,34 @@ export function ChatPage() {
   useEffect(() => {
     const store = chatStore();
     if (!store) return;
-    const refresh = () => void refreshSessions(activeModeRef.current, true);
+    const refresh = () => {
+      void refreshSessions(activeModeRef.current, true);
+      if (windowKind === "workspace") void store.list().then((listed) => setWorkspaceSidebarSessions(listed.filter((session) => session.mode !== "chat")));
+    };
     const off = store.onChanged(refresh);
     return off;
   }, []);
+
+  useEffect(() => {
+    if (windowKind !== "workspace") return;
+    const store = chatStore();
+    if (!store) return;
+    const refresh = () => {
+      void store.getSidebarOrganization().then(setSidebarOrganization);
+      void store.list().then((listed) => setWorkspaceSidebarSessions(listed.filter((session) => session.mode !== "chat")));
+    };
+    refresh();
+    return store.onSidebarOrganizationChanged(refresh);
+  }, [windowKind]);
+
+  async function saveSidebarOrganization(draft: SidebarOrganizationDraft): Promise<boolean> {
+    const store = chatStore();
+    if (!store) return false;
+    const base = sidebarOrganization ?? await store.getSidebarOrganization();
+    const result = await store.applySidebarOrganization(base.revision, draft);
+    setSidebarOrganization(result.snapshot);
+    return result.ok;
+  }
 
   // 模式 effect：bootstrap 完成后才刷新；bootstrap 自身由下方合并 effect 接管
   useEffect(() => {
@@ -781,6 +824,15 @@ export function ChatPage() {
     if (!store) return;
     const listed = await store.list({ mode: targetMode });
     setSessionsByMode((current) => ({ ...current, [targetMode]: listed }));
+    if (windowKind === "workspace" && targetMode !== "chat") {
+      setWorkspaceSidebarSessions((current) => [
+        ...current.filter((session) => session.mode !== targetMode),
+        ...listed,
+      ]);
+      if (targetMode === "work" || targetMode === "code") {
+        setSidebarOrganization(await store.getSidebarOrganization());
+      }
+    }
     if (!selectCurrent) return;
     const currentId = activeSessionIdsRef.current[targetMode];
     const nextId = listed.some((session) => session.id === currentId) ? currentId : listed[0]?.id;
@@ -825,6 +877,14 @@ export function ChatPage() {
           ...current,
           [sessionId]: snapshot,
         })),
+        setMainModelFailure: (sessionId, failure) => setMainModelFailureBySession((current) => {
+          if (!failure) {
+            const next = { ...current };
+            delete next[sessionId];
+            return next;
+          }
+          return { ...current, [sessionId]: failure };
+        }),
         setCompressingContext: (_sessionId, value) => setIsCompressingContext(value),
         setModeBusy: (targetMode, busy) => {
           if (busy) {
@@ -1379,6 +1439,18 @@ export function ChatPage() {
     setPendingQueueBySession(next);
   }
 
+  function editQueuedMessage(sessionId: string, id: string, content: string): boolean {
+    const entry = pendingQueueBySessionRef.current[sessionId]?.find((item) => item.id === id);
+    if (!entry || !content.trim() && !entry.attachments.length) return false;
+    const parsed = parseComposerMessage(mode, content);
+    const next = editPendingQueueEntry(pendingQueueBySessionRef.current, sessionId, id, {
+      rawContent: parsed.rawContent, visibleContent: parsed.visibleContent, userSticker: parsed.userSticker,
+    });
+    pendingQueueBySessionRef.current = next;
+    setPendingQueueBySession(next);
+    return true;
+  }
+
   function queueCurrentDraft(value: string) {
     if (!activeSessionId || !value.trim()) return;
     const sessionId = activeSessionId;
@@ -1403,7 +1475,7 @@ export function ChatPage() {
 
   const isCurrentScopeRunning = Boolean(activeSessionId && activeRunsBySession.current[activeSessionId]);
   const currentPendingQueue = activeSessionId
-    ? (pendingQueueBySession[activeSessionId] ?? []).map((item) => ({ id: item.id, content: item.visibleContent }))
+    ? (pendingQueueBySession[activeSessionId] ?? []).map((item) => ({ id: item.id, content: mode === "chat" ? item.visibleContent : item.rawContent, attachmentNames: item.attachments.map((attachment) => attachment.name) }))
     : [];
   // 上下文容量圆环：session 级快照优先（手动压缩等不产生新消息的操作也即时刷新），
   // 消息级快照兜底兼容旧数据；无快照不渲染。
@@ -1413,7 +1485,32 @@ export function ChatPage() {
   const activeModelProfileId = activeSession?.id === activeSessionId && activeSession
     ? activeSession.modelProfileId
     : pendingModelProfileByMode[mode];
+  function selectModelProfile(modelProfileId: string) {
+    if (!activeSessionId) {
+      setPendingModelProfileByMode((current) => ({ ...current, [mode]: modelProfileId }));
+      return;
+    }
+    const store = chatStore();
+    if (store) void store.setModelProfile(activeSessionId, modelProfileId).then(setActiveSession);
+  }
   const collapsed = collapsedByMode[mode];
+  const workspaceRoot = activeSession && activeSession.id === activeSessionId ? activeSession.workspaceBinding?.workspaceRoot : undefined;
+  function openWorkspaceTab(tab: (typeof workspaceTabsBySession)[string][number]) {
+    if (!activeSessionId || mode === "chat") return;
+    setWorkspaceTabsBySession((current) => ({ ...current, [activeSessionId]: [
+      ...(current[activeSessionId] ?? []).filter((item) => item.id !== tab.id), tab,
+    ] }));
+    setInspectorTab(tab.id);
+  }
+  const workspaceTabs: InspectorTab[] = mode !== "chat" && activeSessionId ? (workspaceTabsBySession[activeSessionId] ?? []).map((tab) => ({
+    id: tab.id,
+    label: tab.kind === "files" ? t("workspaceUi.files") : tab.kind === "file" ? tab.file.split("/").pop()!
+      : tab.kind === "task" ? t("workspaceUi.tasks") : `Diff ${tab.fileIndex + 1}`,
+    content: tab.kind === "files" ? <FileTreeContent sessionId={activeSessionId} workspaceRoot={workspaceRoot} onOpen={(file) => openWorkspaceTab({ id: `file:${file}`, kind: "file", file })} />
+      : tab.kind === "file" ? <FilePreviewContent sessionId={activeSessionId} file={tab.file} />
+      : tab.kind === "task" ? <TaskSessionContent sessionId={activeSessionId} taskId={tab.taskId} />
+      : <ReviewDiffContent runId={tab.runId} fileIndex={tab.fileIndex} />,
+  })) : [];
 
   return (
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""} ${mode === "chat" ? "is-chat-mode" : ""} ${windowKind === "workspace" ? "is-workspace-window" : ""}`}>
@@ -1425,11 +1522,15 @@ export function ChatPage() {
         companionLifeStatus={companionLifeStatus}
         titlebarControls={mode === "chat" ? (
           <>
+            <ModelSelector activeProfileId={activeModelProfileId} onSelect={selectModelProfile} />
             <StyleControl titlebar />
             <ReasoningControl titlebar sessionId={activeSessionId} modelProfileId={activeModelProfileId} />
           </>
         ) : undefined}
         sessions={sessions}
+        sidebarSessions={workspaceSidebarSessions}
+        sidebarOrganization={sidebarOrganization}
+        onSaveSidebarOrganization={saveSidebarOrganization}
         activeSessionId={activeSessionId}
         onToggleCollapsed={() => setCollapsedByMode((current) => ({ ...current, [mode]: !current[mode] }))}
         onModeChange={(nextMode) => {
@@ -1444,7 +1545,7 @@ export function ChatPage() {
         }}
         onSelectSession={(sessionId) => {
           setActivePanel(null);
-          void selectSession(sessionId);
+          void openSessionById(sessionId);
         }}
         onOpenProject={(workspaceRoot) => {
           void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
@@ -1458,9 +1559,12 @@ export function ChatPage() {
         onMaximize={() => window.chat?.toggleMaximize()}
         onCloseWindow={() => window.chat?.close()}
         onOpenSettings={() => sidebarApi()?.openSettings("appearance")}
-        onOpenTasks={() => sidebarApi()?.openTasks()}
+        onOpenTasks={() => setActivePanel((current) => current === "scheduledTasks" ? null : "scheduledTasks")}
         onSearchSessions={async () => (await chatStore()?.list() ?? []).filter((session) => session.mode !== "chat")}
-        onSelectSearchSession={(session) => { void openSessionById(session.id); }}
+        onSelectSearchSession={(session) => {
+          setActivePanel(null);
+          void openSessionById(session.id);
+        }}
       />
       <main
         className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}
@@ -1470,6 +1574,11 @@ export function ChatPage() {
         onDrop={dragHandlers.onDrop}
       >
         <FileDropOverlay visible={isDraggingFiles} />
+        {windowKind === "workspace" && <header className="cy-workspace-titlebar">
+          <MessageSquareText size={16} /><strong>{sessions.find((session) => session.id === activeSessionId)?.title || t("sidebar.defaultSessionTitle")}</strong>
+          {workspaceRoot && <button type="button" title={workspaceRoot} onClick={() => void chatStore()?.openWorkspace(workspaceRoot).then((result) => { if (!result.ok) window.alert(result.error); })}><FolderOpen size={16} /><span>{workspaceNames[mode]}</span></button>}
+          <button type="button" disabled={!activeSessionId} onClick={() => openWorkspaceTab({ id: "files", kind: "files" })}><Files size={16} />{t("workspaceUi.files")}</button>
+        </header>}
         {activePanel ? (
           <ChatPagePanelHost panel={activePanel} />
         ) : (
@@ -1542,13 +1651,31 @@ export function ChatPage() {
               scrollToBottomRef.current = scroll;
             }}
             onOpenReviewInspector={(runId, fileIndex) => {
+              if (mode !== "chat") {
+                openWorkspaceTab({ id: `diff:${runId}:${fileIndex}`, kind: "diff", runId, fileIndex });
+                return;
+              }
               setReviewInspector({ runId, fileIndex });
               setInspectorTab("diff");
             }}
+            onOpenTaskInspector={mode !== "chat" ? (taskId) => openWorkspaceTab({ id: `task:${taskId}`, kind: "task", taskId }) : undefined}
           />
         )}
         <ContextCompressionNotice visible={isCompressingContext} />
         <div className="cy-workspace-composer">
+          {windowKind === "workspace" && mode === "learn" && activeSessionId && <LearnExamList
+            conversationId={activeSessionId}
+            busy={isCurrentScopeRunning}
+            onGrade={async (exam) => {
+              if (activeModeRef.current !== "learn" || activeSessionIdsRef.current.learn !== exam.conversationId
+                || isSessionBusy(exam.conversationId)) throw new Error("请在所属空闲 Learn 会话中开始批改");
+              const text = `我已交卷，请批改试卷 ${exam.examId}。先调用 learn_exam_get_submission 读取冻结答案，再调用 learn_exam_save_grading 保存完整评分与分析。`;
+              const result = await dispatchUserMessage({ targetMode: "learn", sessionId: exam.conversationId,
+                rawContent: text, visibleContent: text, attachments: [], keepComposer: true,
+                assistantId: crypto.randomUUID(), userMessageId: crypto.randomUUID() });
+              if (!result.persisted) throw new Error("批改请求未能落盘");
+            }}
+          />}
           {scrollToBottomVisible && (
             <button
               type="button"
@@ -1560,7 +1687,17 @@ export function ChatPage() {
               <DownOutlined />
             </button>
           )}
+          <CodeExecutorSurface enabled={windowKind === "workspace" && mode === "code"} sessionId={activeSessionId ?? null}
+            workspace={activeSession?.workspaceBinding?.workspaceRoot} nativeBusy={isCurrentScopeRunning || currentPendingQueue.length > 0}
+            onChooseWorkspace={() => void (async () => {
+              const id = await ensureSession("code");
+              await chooseWorkspace();
+              const session = await chatStore()?.get(id);
+              if (session && activeModeRef.current === "code" && activeSessionIdsRef.current.code === id) setActiveSession(session);
+            })()}>
           <ComposerSlot
+            key={mode === "chat" ? undefined : activeSessionId ?? mode}
+            collapsible={mode !== "chat"}
             composer={<ChatComposer
             value={draft}
             mode={mode}
@@ -1577,11 +1714,13 @@ export function ChatPage() {
             onCancel={() => void cancelCurrentRun()}
             onQueueMessage={(value) => queueCurrentDraft(value)}
             onRemoveQueuedMessage={(id) => activeSessionId && removeQueuedMessage(activeSessionId, id)}
+            onEditQueuedMessage={(id, content) => Boolean(activeSessionId && editQueuedMessage(activeSessionId, id, content))}
             onChooseWorkspace={() => void chooseWorkspace()}
             onChooseFiles={(files) => void chooseFiles(files)}
             onRemoveAttachment={removeAttachment}
             onScreenshot={() => void handleScreenshot()}
             onPasteImage={(file) => void handlePastedImage(file)}
+            onPasteFileUris={mode !== "chat" ? (uris) => void handlePastedFileUris(uris) : undefined}
             onChooseSticker={(id) => {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
@@ -1589,16 +1728,8 @@ export function ChatPage() {
             activeModelProfileId={activeModelProfileId}
             titlebarControls={mode === "chat"}
             contextUsage={latestContextUsage}
-            onSelectModelProfile={(modelProfileId) => {
-              // 欢迎页（无会话）：暂存选择，ensureSession 建会话后落地；不再静默丢弃。
-              if (!activeSessionId) {
-                setPendingModelProfileByMode((current) => ({ ...current, [mode]: modelProfileId }));
-                return;
-              }
-              const store = chatStore();
-              if (!store) return;
-              void store.setModelProfile(activeSessionId, modelProfileId).then((session) => setActiveSession(session));
-            }}
+            mainModelFailure={activeSessionId ? mainModelFailureBySession[activeSessionId] : undefined}
+            onSelectModelProfile={selectModelProfile}
             />}
             interaction={composerInteraction}
             interactionBusy={interactionBusy}
@@ -1658,17 +1789,27 @@ export function ChatPage() {
               return settings.skipPopQuiz(quizId);
             }}
           />
+          </CodeExecutorSurface>
         </div>
         </>
         )}
       </main>
       <ChatPageInspector
+        key={activeSessionId ?? mode}
+        additionalTabs={workspaceTabs}
+        resizable={windowKind === "workspace"}
         reviewInspector={reviewInspector}
         activePlan={activePlan}
         planDrawerOpen={planDrawerOpen}
         activeTabId={inspectorTab}
         onTabChange={setInspectorTab}
         onCloseTab={(tabId: ChatPageInspectorTabId) => {
+          if (tabId !== "diff" && tabId !== "plan" && activeSessionId) {
+            const remaining = (workspaceTabsBySession[activeSessionId] ?? []).filter((tab) => tab.id !== tabId);
+            setWorkspaceTabsBySession((current) => ({ ...current, [activeSessionId]: remaining }));
+            if (inspectorTab === tabId) setInspectorTab(remaining.at(-1)?.id ?? "plan");
+            return;
+          }
           if (tabId === "diff") {
             setReviewInspector(null);
             if (activePlan && planDrawerOpen) setInspectorTab("plan");

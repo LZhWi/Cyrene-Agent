@@ -16,7 +16,7 @@
   <p>各项权限独立保存。读取只接收启用后的成功桌面轮次，不扫描旧会话；自动提取才会把插件已保存的待处理轮次发给主程序当前模型；注入只在下一轮回复前提供相关插件记忆。</p>
   <form id="native-integration-form">
     <label><input type="checkbox" id="native-capture">读取以后成功完成的原生桌面聊天</label>
-    <label><input type="checkbox" id="native-auto-extract">满 10 轮后使用主程序当前模型自动提取</label>
+    <label><input type="checkbox" id="native-auto-extract">满 6 轮后使用主程序当前模型自动提取</label>
     <label><input type="checkbox" id="native-prompt-injection">在上游原生桌面 Chat 回复中自动检索并注入插件记忆（不用于外部渠道）</label>
     <label><input type="checkbox" id="native-social-context">提取并注入短期状态／未完话题（每个成功回合额外调用一次主程序当前模型）</label>
     <label><input type="checkbox" id="native-moments-injection">在动态发帖决策中提供相关插件记忆（不更新 DMAE）</label>
@@ -38,6 +38,10 @@
   <label><input type="checkbox" id="legacy-source-attested">我已在旧系统中核验这份来源；导入时标记为“用户确认旧库已核验”，但不冒充已保存的消息 ID</label>
   <label><input type="checkbox" id="legacy-preserve-runtime" disabled>同时保留旧权重、访问统计和 DMAE 状态（仅字段兼容时可选；不自动启用插件更新）</label>
   <button id="legacy-import" disabled>确认导入到插件私有空库</button><pre id="legacy-preview"></pre>
+  <button id="legacy-pending-preview">核验旧待处理轮次</button><button id="legacy-pending-restore" disabled>恢复已核验轮次到队列</button><pre id="legacy-pending-status"></pre>
+  <label for="legacy-context-directory">旧上下文目录</label><input id="legacy-context-directory" maxlength="2048">
+  <button id="legacy-context-preview">只读预检上下文</button><button id="legacy-context-import" disabled>导入上下文快照</button>
+  <p>读取实体、关系日志、社交背景和 Dream 记录。使用上方所选会话核验社交来源；未核验项保留但不参与回复。目标须无同类状态文件，导入后重启插件生效。</p><pre id="legacy-context-status"></pre>
   <h2>旧向量索引</h2>
   <p>仅复制与已导入 L2 对应的 user_memory 向量；不复制聊天历史文本，不调用原 RAG，不更新访问计数。必须先完成上方旧记忆导入。</p>
   <form id="vector-preview-form"><label for="vector-source">源 memory-store.json</label><input id="vector-source" maxlength="2048"><button>只读预检向量</button></form>

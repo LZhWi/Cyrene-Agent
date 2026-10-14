@@ -9,11 +9,10 @@
 
 import { app, dialog } from "electron";
 import * as path from "node:path";
-import { createApplication } from "./application/application";
-import { createDefaultApplicationDependencies } from "./application/default-dependencies";
+import * as fs from "node:fs";
 import { CURRENT_MEMORY_SCHEMA_VERSION } from "./memory/memory-store-defaults";
-import { registerPluginPanelScheme } from "./plugin-panel-protocol";
 import { inspectUserDataSafety } from "./user-data-safety";
+import { prepareChatMigration, commitChatMigration, resolveChatMigrationData, rollbackChatMigration } from "./chats/chat-migration-transaction";
 
 // 打包版双击启动时 stdout/stderr 管道可能不存在或中途关闭，
 // 此时任何 console.log 写入都会抛异步 EPIPE 并升级成 uncaughtException 弹错误框
@@ -41,17 +40,57 @@ if (!userDataSafety.safe) {
   dialog.showErrorBox("Cyrene-Agent-N 已阻止不安全启动", message);
   app.exit(78);
 } else {
-  // 插件设置面板协议：scheme 特权必须在 app.ready 之前注册（Electron 硬性要求）
-  registerPluginPanelScheme();
+  startPrimary();
+}
 
-  const application = createApplication(createDefaultApplicationDependencies());
+function startPrimary() {
+  // Keep the lock on the stable root, not on a generation that changes after import.
+  if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  let committedThisLaunch = false;
+  try {
+    fs.mkdirSync(startupUserDataPath, { recursive: true });
+    const candidate = process.argv.find(arg => arg.startsWith("--import-chat-package="))?.slice("--import-chat-package=".length);
+    const rollback = process.argv.includes("--rollback-chat-migration");
+    if (candidate && rollback) throw new Error("导入与回滚不能同时执行");
+    if (rollback) rollbackChatMigration(startupUserDataPath);
+    if (candidate) {
+      const prepared = prepareChatMigration(startupUserDataPath, path.resolve(candidate));
+      if (!prepared.unchanged && prepared.id) { commitChatMigration(startupUserDataPath, prepared.id); committedThisLaunch = true; }
+    }
+    const selected = resolveChatMigrationData(startupUserDataPath);
+    const safety = inspectUserDataSafety({ userDataPath: selected, appDataPath: process.env.APPDATA || path.dirname(startupUserDataPath), supportedMemorySchemaVersion: CURRENT_MEMORY_SCHEMA_VERSION });
+    if (!safety.safe) throw new Error(safety.reason);
+    app.setPath("userData", selected);
+    if (selected !== startupUserDataPath) {
+      const sessionData = path.join(selected, "session-data"); fs.mkdirSync(sessionData, { recursive: true }); app.setPath("sessionData", sessionData);
+    }
+  } catch (error) {
+    if (committedThisLaunch) rollbackChatMigration(startupUserDataPath);
+    dialog.showErrorBox("聊天数据迁移失败", String(error)); app.exit(78); return;
+  }
+  try {
+    // Lazy imports are required: several stores capture userData at module load.
+    const { registerPluginPanelScheme } = require("./plugin-panel-protocol") as typeof import("./plugin-panel-protocol");
+    const { createApplication } = require("./application/application") as typeof import("./application/application");
+    const { createDefaultApplicationDependencies } = require("./application/default-dependencies") as typeof import("./application/default-dependencies");
+    // 插件设置面板协议：scheme 特权必须在 app.ready 之前注册（Electron 硬性要求）
+    registerPluginPanelScheme();
 
-  application.installLifecycleHandlers();
-  application.prepareBeforeReady();
+    const application = createApplication(createDefaultApplicationDependencies());
 
-  if (application.isPrimaryProcess()) {
-    void app.whenReady()
-      .then(() => application.start())
-      .catch((error) => application.handleFatalStartup(error));
+    application.installLifecycleHandlers();
+    application.prepareBeforeReady();
+
+    if (application.isPrimaryProcess()) {
+      void app.whenReady()
+        .then(() => application.start())
+        .catch((error) => {
+          if (committedThisLaunch) rollbackChatMigration(startupUserDataPath);
+          return application.handleFatalStartup(error);
+        });
+    }
+  } catch (error) {
+    if (committedThisLaunch) rollbackChatMigration(startupUserDataPath);
+    dialog.showErrorBox("聊天数据迁移启动失败", String(error)); app.exit(78);
   }
 }

@@ -1,3 +1,5 @@
+import { resolveChatModuleModel } from "../settings/chat-module-routes";
+import { getAdapterForConfig } from "./vendors";
 import type { ChatVendorAdapter, ChatMessage, ChatRequest, OpenAIContentBlock } from "./vendors/types";
 import type { AgentLoopSettings, AgentLoopEvent } from "./cyrene-agent";
 import { recordRequest, recordUsage } from "../token-usage-store";
@@ -153,6 +155,8 @@ export async function callSummarizeModel(
   settings: AgentLoopSettings,
   signal?: AbortSignal,
 ): Promise<string> {
+  const routed = resolveChatModuleModel("compression", settings);
+  if (routed !== settings) { settings = routed; adapter = getAdapterForConfig(settings); }
   const prompt = COMPRESSION_PROMPT.replace("{history}", formatConversation(messages));
   const request: ChatRequest = {
     model: settings.model,

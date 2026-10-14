@@ -3,6 +3,7 @@ import { useTranslation } from "../../../i18n";
 import fallbackIconUrl from "../../../assets/status-moods/陪伴中.png?url";
 import modelIconUrl from "../../../assets/model.png?url";
 import "./ModelModePanel.css";
+import { isChatGptOAuth } from "../../../../../shared/chatgpt-oauth";
 
 interface ModelProfile {
   id: string;
@@ -204,6 +205,7 @@ export function ModelModePanel() {
                     <button
                       type="button"
                       className="model-card__delete"
+                      hidden={isChatGptOAuth(profile)}
                       onClick={() => handleDelete(profile.id)}
                       title={t("modelPanel.delete")}
                     >

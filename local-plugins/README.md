@@ -35,6 +35,14 @@ local-plugins/
   artifacts/         # 本地产物，不进入 Git
 ```
 
+`npm run build` 会调用需要原生程序或运行依赖的插件专用构建脚本，先在
+`artifacts/.build-*` 暂存并校验全部插件，全部成功后才替换对应产物；构建失败保留
+原有目录和 ZIP，其他产物不删除。发布替换失败时会恢复旧产物；若恢复也失败，
+错误会指出保留备份的目录，不自动删除备份。
+Minecraft 需要已安装的固定版本运行依赖；若不在其 `runtime/node_modules` 下，可用
+`npm run build -- --dependency-source <node_modules目录>` 指定，不会自动下载依赖。
+专用脚本单独运行和 HUD 的 `--release` 输出位置保持原有约定。
+
 每个插件都必须只依赖官方 SDK 的公开类型和接口，不得导入 Cyrene 的 `src/main/**`、
 `src/renderer/**` 或 `src/shared/**`。
 

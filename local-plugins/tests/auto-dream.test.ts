@@ -11,7 +11,7 @@ function fixture(opts: { ids?: string[]; review?: (ids: string[], signal: AbortS
   const apply = vi.fn(opts.apply ?? (() => ({ applied: true, reviewId: "dream-review" })));
   const after = vi.fn(opts.after ?? (async () => undefined));
   const service = createAutoDream(storage, events, () => opts.ids ?? ["a", "b"], review, Date.now, apply, opts.after ? after : undefined);
-  const desktop = { eventId: "e", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
+  const desktop = { eventId: "e", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
   return { map, review, apply, after, service, off, emit: (event: PluginTurnFinishedEvent = desktop) => listener?.(event) };
 }
 
@@ -23,7 +23,7 @@ describe("原生 Chat 近似空闲梦境草稿", () => {
     const data = fixture(); await data.emit(); await vi.advanceTimersByTimeAsync(15 * 60 * 1000); expect(data.review).not.toHaveBeenCalled();
     data.service.set(true);
     const lastActivityAt = data.service.view().lastActivityAt, scheduledTimers = vi.getTimerCount();
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.service.view().lastActivityAt).toBe(lastActivityAt); expect(vi.getTimerCount()).toBe(scheduledTimers);
     await data.emit();
     await vi.advanceTimersByTimeAsync(15 * 60 * 1000 - 1); expect(data.review).not.toHaveBeenCalled();
@@ -48,7 +48,7 @@ describe("原生 Chat 近似空闲梦境草稿", () => {
 
   it("没有 Chat 活动时，其他桌面模式不会启动空闲梦境", async () => {
     const data = fixture(); data.service.set(true);
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.service.view().lastActivityAt).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
@@ -82,13 +82,13 @@ describe("原生 Chat 近似空闲梦境草稿", () => {
     const data = fixture({ review: (_ids, signal) => new Promise((resolve) => signal.addEventListener("abort", () => { aborted = true; resolve(undefined); }, { once: true })) });
     data.service.set(true); await data.emit();
     vi.advanceTimersByTime(15 * 60 * 1000); await Promise.resolve();
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(aborted).toBe(false);
     await data.emit(); await Promise.resolve();
     expect(aborted).toBe(true); expect(data.service.view().lastCompletedAt).toBeUndefined();
     const lastActivityAt = data.service.view().lastActivityAt;
     await data.emit({ eventId: "c", timestamp: "", runId: "r", mode: "chat", source: "channel", channel: "x", status: "success" });
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.service.view().lastActivityAt).toBe(lastActivityAt);
   });
 

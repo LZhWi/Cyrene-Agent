@@ -39,7 +39,7 @@ export function prepareHarnessRecovery(
 
   for (const persisted of session.toolCalls) {
     if (resolvedCallIds.has(persisted.toolCallId) || persisted.status === "committed" || persisted.status === "not_executed") continue;
-    const isUnknown = persisted.sideEffect === "non_idempotent_side_effect";
+    const isUnknown = persisted.sideEffect === "non_idempotent_side_effect" && persisted.status !== "planned";
     const call = callById.get(persisted.toolCallId);
     if (isUnknown) {
       const args = call ? parseToolCallArgs(call) : {};

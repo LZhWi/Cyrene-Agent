@@ -6,3 +6,4 @@ export const timeoutUserChoiceReset = document.getElementById("timeout-user-choi
 export const timeoutTestInput = document.getElementById("timeout-test") as HTMLInputElement;
 export const timeoutTestReset = document.getElementById("timeout-test-reset-btn") as HTMLButtonElement;
 export const maxParallelToolCallsInput = document.getElementById("max-parallel-tool-calls") as HTMLInputElement;
+export const modelRequestMaxRetriesInput = document.getElementById("model-request-max-retries") as HTMLInputElement;

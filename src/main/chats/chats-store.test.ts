@@ -22,6 +22,48 @@ describe("chats store", () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-chats-store-"));
   });
 
+  it("blocks corrupt session reads and writes across restart until explicit recovery", async () => {
+    let store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({ mode: "chat", initialMessages: [{ id: "u", role: "user", content: "keep", at: 1 }] });
+    const file = path.join(store.getRootDir(), "sessions", session.id + ".json");
+    const backup = file.replace(/\.json$/, ".last-good.json");
+    const good = fs.readFileSync(backup);
+    fs.writeFileSync(file, "broken");
+    vi.resetModules(); store = await import("./chats-store"); store.initialize();
+    expect(() => store.listSessions()).toThrow("等待恢复确认");
+    expect(() => store.createSession()).toThrow("等待恢复确认");
+    expect(fs.readFileSync(file, "utf8")).toBe("broken");
+    expect(fs.readFileSync(backup)).toEqual(good);
+    store.approveStorageRecovery(file);
+    expect(store.getSession(session.id)?.messages[0].content).toBe("keep");
+    expect(store.listSessions()).toHaveLength(1);
+  });
+
+  it("reconciles a session saved before an interrupted index write without changing tie order", async () => {
+    let store = await import("./chats-store"); store.initialize();
+    const session = store.createSession({ mode: "chat" });
+    const file = path.join(store.getRootDir(), "sessions", session.id + ".json");
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+    saved.messages.push({ id: "u", role: "user", content: "saved", at: 1 });
+    fs.writeFileSync(file, JSON.stringify(saved));
+    vi.resetModules(); store = await import("./chats-store"); store.initialize();
+    expect(store.listSessions()[0].messageCount).toBe(1);
+  });
+
+  it("isolates an unrecoverable session only after approval and keeps other sessions", async () => {
+    let store = await import("./chats-store"); store.initialize();
+    const lost = store.createSession({ mode: "chat" }), kept = store.createSession({ mode: "chat" });
+    const file = path.join(store.getRootDir(), "sessions", lost.id + ".json");
+    fs.writeFileSync(file, "broken");
+    fs.writeFileSync(file.replace(/\.json$/, ".last-good.json"), "broken backup");
+    vi.resetModules(); store = await import("./chats-store"); store.initialize();
+    store.approveStorageRecovery(file, true);
+    expect(store.listSessions().map(item => item.id)).toEqual([kept.id]);
+    const recoveryDir = path.join(path.dirname(file), "recovery");
+    expect(fs.readdirSync(recoveryDir).map(name => fs.readFileSync(path.join(recoveryDir, name), "utf8")).sort()).toEqual(["broken", "broken backup"]);
+  });
+
   it("includes messageCount in paged session metadata", async () => {
     const { createSession, getSessionPage, initialize } = await import("./chats-store");
     initialize();

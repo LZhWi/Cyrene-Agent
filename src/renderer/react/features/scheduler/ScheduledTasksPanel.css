@@ -1,0 +1,29 @@
+.cy-scheduled-page { width: min(920px, calc(100% - 64px)); height: 100%; margin: 0 auto; padding: 44px 0 52px; overflow: auto; color: var(--rb-text-primary); font-family: var(--rb-font-ui); }
+.cy-scheduled-header, .cy-scheduled-card-main, .cy-scheduled-card-title-row, .cy-scheduled-meta, .cy-scheduled-summary, .cy-scheduled-card-actions { display: flex; align-items: center; }
+.cy-scheduled-header { justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.cy-scheduled-header h1 { margin: 7px 0 5px; color: var(--rb-text-primary); font: var(--rb-text-h2); }
+.cy-scheduled-header p { margin: 0; color: var(--rb-text-secondary); font: var(--rb-text-small); }
+.cy-scheduled-eyebrow { display: flex; align-items: center; gap: 7px; color: var(--rb-accent); font: var(--rb-text-micro); }
+.cy-scheduled-summary { gap: 22px; padding: 13px 16px; margin-bottom: 14px; border: 1px solid var(--rb-border-default); border-radius: var(--rb-radius-lg); color: var(--rb-text-secondary); font: var(--rb-text-micro); }
+.cy-scheduled-summary strong { color: var(--rb-text-primary); font: var(--rb-text-body-em); }
+.cy-scheduled-list { display: grid; gap: 10px; }
+.cy-scheduled-card.ant-card { border-color: var(--rb-border-default); border-radius: var(--rb-radius-xl); background: var(--rb-surface-elevated); box-shadow: var(--rb-shadow-card); }
+.cy-scheduled-card .ant-card-body { padding: 16px 18px; }
+.cy-scheduled-card-main { justify-content: space-between; gap: 20px; }
+.cy-scheduled-card-copy { min-width: 0; flex: 1; }
+.cy-scheduled-card-title-row { gap: 7px; }
+.cy-scheduled-card-title-row h2 { margin: 0; color: var(--rb-text-primary); font: var(--rb-text-small-em); }
+.cy-scheduled-prompt { display: -webkit-box; overflow: hidden; margin: 8px 0; color: var(--rb-text-secondary); font: var(--rb-text-micro); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.cy-scheduled-meta { flex-wrap: wrap; gap: 12px; color: var(--rb-text-secondary); font: var(--rb-text-micro); }
+.cy-scheduled-meta span { display: inline-flex; align-items: center; gap: 5px; }
+.cy-scheduled-card-actions { flex-shrink: 0; gap: 2px; }
+.cy-scheduled-card-actions .ant-btn { display: inline-grid; width: 32px; height: 32px; place-items: center; }
+.cy-scheduled-empty.ant-card { margin-top: 16px; padding: 42px 20px; border: 1px dashed var(--rb-border-default); border-radius: var(--rb-radius-xl); background: transparent; }
+.cy-scheduled-loading { padding: 70px 0; text-align: center; color: var(--rb-text-secondary); }
+.cy-scheduled-editor { display: grid; gap: 14px; padding-top: 12px; }
+.cy-scheduled-editor label { display: grid; gap: 6px; font-size: 12px; }
+.cy-scheduled-editor-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.cy-scheduled-editor-row label { min-width: 120px; flex: 1; }
+.cy-scheduled-editor-toggle { display: flex !important; align-items: center; justify-content: space-between; }
+.cy-scheduled-history { display: grid; max-height: 420px; overflow: auto; gap: 8px; }
+.cy-scheduled-history p { margin: 8px 0 0; white-space: pre-wrap; }

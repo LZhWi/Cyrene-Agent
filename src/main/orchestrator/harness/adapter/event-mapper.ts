@@ -16,6 +16,9 @@ export function sendHarnessEventAsAgui(
   send: (event: BaseEvent) => void,
 ): void {
   switch (event.type) {
+    case "model_retry":
+      send({ type: EventType.CUSTOM, name: "cyrene.model.retry", value: event.status, threadId, runId } as BaseEvent);
+      break;
     case "round_start":
     case "round_end": {
       send({

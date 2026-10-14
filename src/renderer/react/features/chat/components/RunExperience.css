@@ -158,6 +158,10 @@
 }
 
 .cy-composer-slot__composer { opacity: 1; transform: translateY(0); }
+.cy-composer-slot__card { grid-area: 1 / 1; width: 100%; display: flex; justify-content: center; }
+.cy-composer-slot__card[hidden] { display: none; }
+.cy-composer-slot.has-collapsible-interaction { z-index: 1001; }
+.cy-composer-slot__toggle { grid-column: 1; grid-row: 1; justify-self: end; align-self: start; z-index: 3; transform: translateY(-100%); display: flex; align-items: center; gap: 4px; padding: 5px 9px; border: 1px solid var(--cy-border); border-radius: 8px; background: var(--cy-bg-workspace); color: var(--cy-text-muted); cursor: pointer; }
 .cy-composer-slot__interaction { z-index: 1; animation: cy-interaction-enter 220ms ease both; }
 .cy-composer-slot.is-ask .cy-composer-slot__composer,
 .cy-composer-slot.is-permission .cy-composer-slot__composer,

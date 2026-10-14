@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DESIRE_THRESHOLD,
-  FOLLOWUP_MIN_SCORE,
   createPlannerState,
   markPlannerCommitted,
   sampleAndPlan,
@@ -132,7 +131,7 @@ describe("主动消息场景规划", () => {
   it("回复时提高 affinity；只有下一次准备开口时才把未回复结算为忽略", () => {
     const at = Date.now();
     const state = createPlannerState(at);
-    const candidate = { scene: "morning" as const, score: FOLLOWUP_MIN_SCORE };
+    const candidate = { scene: "morning" as const, score: 54 };
     markPlannerCommitted(state, candidate, at);
     expect(settleReplyFeedback(state)).toBe(true);
     expect(state.affinity.morning).toBeCloseTo(1.2);

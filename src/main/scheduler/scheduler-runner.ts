@@ -1,3 +1,4 @@
+import { withChatModuleRoutes } from "../settings/chat-module-routes";
 import type { WebContents } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import type { PluginPromptMode, PluginTurnStatus } from "../../plugins/api";
@@ -203,5 +204,6 @@ export function createSchedulerRunner(deps: RunnerDeps) {
     }
   }
 
-  return { runScheduledTask };
+  return { runScheduledTask: (task: ScheduledTask, scheduledFireAt: Date, manual: boolean) =>
+    withChatModuleRoutes(task.mode ?? "work", () => runScheduledTask(task, scheduledFireAt, manual), true) };
 }

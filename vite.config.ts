@@ -48,6 +48,7 @@ export default defineConfig({
         "chat-react": resolve(__dirname, "src/renderer/react/index.html"),
         music: resolve(__dirname, "src/renderer/music/index.html"),
         toast: resolve(__dirname, "src/renderer/toast/index.html"),
+        "learn-exam": resolve(__dirname, "src/renderer/learn-exam.html"),
       },
     },
   },

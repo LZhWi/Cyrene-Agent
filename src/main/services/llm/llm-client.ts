@@ -10,6 +10,9 @@ import {
 } from "../../chat-stream-utils";
 import { recordUsage, recordRequest } from "../../token-usage-store";
 import { appendApiLog } from "../../chat-api-utils";
+import { AgentRuntimeError } from "../../orchestrator/agent-runtime-error";
+import { classifyModelFailure } from "../../orchestrator/vendors/model-error-classifier";
+import { readRetryAfterMs } from "../../orchestrator/vendors/model-retry-policy";
 
 export interface LlmClient {
   chat(
@@ -232,13 +235,16 @@ export function createLlmClient(): LlmClient {
     const controller = new AbortController();
     const abort = (): void => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    if (signal?.aborted) abort();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     const startTime = Date.now();
     console.log(
       `[TIMING] ${label} START (non-stream) timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`,
     );
 
     try {
+      controller.signal.throwIfAborted();
       const http = adapter.buildRequest(chatRequest, cfg);
       const response = await fetch(http.url, {
         method: "POST",
@@ -249,7 +255,10 @@ export function createLlmClient(): LlmClient {
       if (!response.ok) {
         const errorData = (await response.json().catch(() => ({}))) as Record<string, unknown>;
         const errMsg = (errorData as { error?: { message?: string } }).error?.message;
-        throw new Error(errMsg || `模型请求失败：HTTP ${response.status}`);
+        throw new AgentRuntimeError("E_MODEL_HTTP_ERROR", errMsg || `模型请求失败：HTTP ${response.status}`, {
+          modelFailure: classifyModelFailure({ provider: cfg.provider, model: cfg.model, status: response.status, error: errorData }),
+          retryAfterMs: readRetryAfterMs(response.headers),
+        });
       }
       const parsed = adapter.parseResponse(await response.json());
       recordRequest(settings.model);
@@ -272,7 +281,18 @@ export function createLlmClient(): LlmClient {
       } else {
         console.log(`[TIMING] ${label} ERROR at ${totalTime}ms: ${error}`);
       }
-      throw error;
+      if (signal?.aborted || error instanceof AgentRuntimeError) throw error;
+      if (timedOut) {
+        throw new AgentRuntimeError("E_MODEL_REQUEST_TIMEOUT", "模型请求超时，请稍后重试。", {
+          cause: error,
+          modelFailure: { provider: cfg.provider, model: cfg.model, category: "TIMEOUT", retryable: true },
+        });
+      }
+      throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", error instanceof Error ? error.message : String(error), {
+        cause: error,
+        modelFailure: classifyModelFailure({ provider: cfg.provider, model: cfg.model,
+          error: error instanceof Error && error.cause ? error.cause : error }),
+      });
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);

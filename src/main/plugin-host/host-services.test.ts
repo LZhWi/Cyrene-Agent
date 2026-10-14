@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isPluginHostError } from "../../plugins/api";
-import { createHostServiceFactory } from "./host-services";
+import { createHostServiceFactory, type PluginHostServicesOptions } from "./host-services";
 import type { PluginSchedulerStore } from "./scheduler-service";
 import type { SafeStorageLike } from "./secrets-service";
 
@@ -85,7 +85,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function factory() {
+function factory(windowNavigation?: PluginHostServicesOptions["windowNavigation"]) {
   return createHostServiceFactory({
     pluginDataRoot: tmp,
     channelManager: { has: (id) => id === "builtin" },
@@ -112,10 +112,28 @@ function factory() {
     },
     proactiveDocuments: { search: async (query) => `【相关文档】${query}` },
     schedulerStore,
+    windowNavigation,
   });
 }
 
 describe("宿主服务装配工厂", () => {
+  it("仅提供窗口管理入口时装配导航，插件停止后禁止打开窗口", async () => {
+    const controller = new AbortController();
+    const input = { pluginId: "hud", signal: controller.signal, trackResource: undefined as never };
+    expect(factory().createForPlugin(input).windowNavigation).toBeUndefined();
+    const createSettingsWindow = vi.fn();
+    const deps = factory({
+      listSessions: () => [],
+      createSession: mode => ({ id: "new", title: "new", mode }),
+      windows: { createSettingsWindow, openReactChatWindow: vi.fn(), openReactWorkspaceWindow: vi.fn() },
+    }).createForPlugin(input);
+    await deps.windowNavigation?.open({ target: "settings" });
+    expect(createSettingsWindow).toHaveBeenCalledOnce();
+    controller.abort();
+    await expect(deps.windowNavigation?.open({ target: "settings" })).rejects.toMatchObject({ code: "E_PLUGIN_STOPPING" });
+    expect(createSettingsWindow).toHaveBeenCalledOnce();
+  });
+
   it("为每个插件生成完整服务集合，密钥目录按插件隔离", async () => {
     const hostServices = factory();
     const a = hostServices.createForPlugin({ pluginId: "plugin-a", signal: new AbortController().signal, trackResource: undefined as never });

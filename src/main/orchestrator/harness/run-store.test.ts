@@ -40,6 +40,16 @@ afterEach(() => {
 });
 
 describe("HarnessRunStore", () => {
+  it.each(["missing", "corrupt", "incomplete"])("rebuilds a %s index from authoritative run files", (kind) => {
+    const { root, store } = createStore();
+    createRun(store);
+    const indexPath = path.join(root, "cyrene-runs", "index.json");
+    if (kind === "missing") fs.unlinkSync(indexPath);
+    else fs.writeFileSync(indexPath, kind === "corrupt" ? "broken" : "[]");
+    const restarted = new HarnessRunStore(root);
+    expect(restarted.getLatestInterrupted("chat-1")?.runId).toBe("run-1");
+    expect(restarted.get("run-1")?.messages).toEqual([{ role: "user", content: "整理项目结构" }]);
+  });
   it("persists a main-run checkpoint separately from the chat transcript", () => {
     const { root, store, tick } = createStore();
     createRun(store);

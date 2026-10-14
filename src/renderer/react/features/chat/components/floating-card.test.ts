@@ -8,4 +8,14 @@ describe("floating card positioning", () => {
       height: 768,
     })).toEqual({ x: 784, y: 0 });
   });
+  it("keeps cards below the titlebar", () => {
+    expect(clampFloatingCardPosition({ x: 40, y: -10 }, { width: 240, minVisibleHeight: 48, minTop: 92 }, {
+      width: 1024, height: 768,
+    })).toEqual({ x: 40, y: 92 });
+  });
+  it("bounds the titlebar inset in a tiny viewport", () => {
+    expect(clampFloatingCardPosition({ x: 40, y: 100 }, { width: 240, minVisibleHeight: 48, minTop: 92 }, {
+      width: 200, height: 60,
+    })).toEqual({ x: 0, y: 12 });
+  });
 });

@@ -100,6 +100,7 @@ export function scheduleVisualHistoryCaption(sessionId: string, messageId: strin
 }
 
 export function backfillVisualHistoryCaptions(): void {
+  if (chatsStore.getStorageRecoveryIssues().length) return;
   for (const session of chatsStore.listSessions({ mode: "chat" })) {
     for (const message of chatsStore.getSession(session.id)?.messages ?? []) {
       if (message.role === "user" && message.attachments?.some((attachment) => attachment.kind === "image"

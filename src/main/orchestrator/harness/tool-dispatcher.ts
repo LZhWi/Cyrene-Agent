@@ -15,6 +15,7 @@ import type { AgentState, HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs, toolCallFingerprint } from "./types";
 import { isHarnessBuiltin, isInteractiveHarnessBuiltin, TASK_TOOL_ID } from "./builtin-tools";
 import { executeUpdateTodo, executeAskUser, executeTask } from "./builtin-tools";
+import { CONFIRM_UNCERTAIN_EFFECT_TOOL_ID, executeConfirmUncertainEffect } from "./builtin-tools";
 import { ENTER_PLAN_MODE_TOOL_ID, WRITE_PLAN_TOOL_ID, executeEnterPlanMode, executeWritePlan } from "./plan-tools";
 import { executeReadToolResult, READ_TOOL_RESULT_TOOL_ID } from "./tool-output/read-tool-result";
 import { resolveSideEffect } from "./side-effect-resolver";
@@ -25,6 +26,7 @@ import type { ToolExecutionOutcome } from "../types";
 import { executeToolDefinition } from "../tools/registry/tool-executor";
 import type { ToolOutputStore } from "./tool-output/tool-output-store";
 import { ToolOutputPersistenceError } from "./tool-output/file-tool-output-store";
+import { createAbortError } from "../../abort-utils";
 
 // ── 工具输出截断 ─────────────────────────────────────────
 
@@ -71,6 +73,11 @@ export function truncateOutput(
 // ── 工具执行接口 ─────────────────────────────────────────
 
 export interface ToolDispatchContext {
+  /** 通过权限与去重后、真正执行前同步记账；抛错则不得执行。 */
+  beforeExecute?: () => void;
+  signal?: AbortSignal;
+  /** 同步保存授权授予/消费；失败时不得派发工具。 */
+  persistSafetyState?: () => void;
   state: AgentState;
   tools: ToolDefinition[];
   onEvent?: (event: HarnessEvent) => void;
@@ -112,6 +119,8 @@ export async function dispatchToolCall(
         message: "当前渠道不支持交互式工具",
       };
     }
+    if (ctx.signal?.aborted || ctx.toolContext?.signal?.aborted) throw createAbortError();
+    ctx.beforeExecute?.();
     const result = await executeHarnessBuiltin(call, ctx);
     return ctx.deferOutputPersistence ? result : persistToolDispatchResult(call, result, ctx);
   }
@@ -157,13 +166,10 @@ export async function dispatchToolCall(
   }
 
   // 执行工具
-  ctx.onEvent?.({
-    type: "tool_start",
-    toolCallId: call.id,
-    toolName: call.name,
-    args,
-  });
-
+  // 权限等待期间另一并发调用可能已消费授权，必须在派发边界重新判断。
+  if (isBlockedByUncertainEffect(ctx.state, fingerprint)) {
+    return { outcome: "not_executed", category: "runtime_safety", tool: call.name, message: "本次重复操作授权已被消费" };
+  }
   let result: ToolCallResult;
   // 提取 targetRefs 从 args（path / file / url / id 等常见字段）
   const targetRefs = args.path !== undefined ? [String(args.path)]
@@ -171,7 +177,16 @@ export async function dispatchToolCall(
     : args.url !== undefined ? [String(args.url)]
     : [];
 
-  const run = async (): Promise<ToolExecutionOutcome> => executeToolDefinition(tool, args, ctx.toolContext);
+  const run = async (): Promise<ToolExecutionOutcome> => {
+    if (ctx.signal?.aborted || ctx.toolContext?.signal?.aborted) throw createAbortError();
+    if (blockingEffect?.repeatAuthorization) {
+      delete blockingEffect.repeatAuthorization;
+      ctx.persistSafetyState?.();
+    }
+    ctx.beforeExecute?.();
+    ctx.onEvent?.({ type: "tool_start", toolCallId: call.id, toolName: call.name, args });
+    return executeToolDefinition(tool, args, ctx.toolContext);
+  };
   if (ctx.executionLedger) {
     const ledgerResult = await ctx.executionLedger.execute(
       { logicalInvocationId: `${ctx.toolContext?.runId ?? "unknown"}:${call.id}`, capability: tool.id, targetRefs, args },
@@ -300,6 +315,8 @@ async function executeHarnessBuiltin(
   ctx: ToolDispatchContext,
 ): Promise<ToolDispatchResult> {
   switch (call.name) {
+    case CONFIRM_UNCERTAIN_EFFECT_TOOL_ID:
+      return executeConfirmUncertainEffect(call, ctx.state, ctx.requestUserClarification, ctx.persistSafetyState);
     case "update_todo":
       return executeUpdateTodo(call, ctx.state, ctx.onEvent);
 

@@ -9,7 +9,7 @@ function fixture() {
   const off = vi.fn(), review = vi.fn(async (_signal: AbortSignal) => ({ suggested: 1 }));
   const events: PluginEvents = { on: (_event, next: any) => { listener = next; return off; }, emit: async () => undefined };
   const service = createAutoReflection(storage, events, review, () => now);
-  const desktop = { eventId: "e", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
+  const desktop = { eventId: "e", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
   return { service, review, off, emit: (event: PluginTurnFinishedEvent = desktop) => listener?.(event), advance: () => { now += 60_000; } };
 }
 
@@ -25,9 +25,9 @@ describe("后台画像反思", () => {
     let release!: () => void, aborted = false;
     const data = fixture(); data.service.set(true);
     await data.emit({ eventId: "x", timestamp: "", runId: "r", mode: "chat", source: "channel", channel: "x", status: "success" });
-    await data.emit({ eventId: "x", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "runtime_error" });
-    await data.emit({ eventId: "work", timestamp: "", runId: "r", mode: "work", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent);
-    await data.emit({ eventId: "code", timestamp: "", runId: "r", mode: "code", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent);
+    await data.emit({ eventId: "x", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "runtime_error" });
+    await data.emit({ eventId: "work", timestamp: "", runId: "r", mode: "work", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent);
+    await data.emit({ eventId: "code", timestamp: "", runId: "r", mode: "code", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent);
     expect(data.service.view().pendingTurns).toBe(0);
     data.review.mockImplementationOnce(async (signal: AbortSignal) => { await new Promise<void>((resolve) => { release = resolve; signal.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true }); }); return { suggested: 0 }; });
     for (let index = 0; index < 19; index++) await data.emit();

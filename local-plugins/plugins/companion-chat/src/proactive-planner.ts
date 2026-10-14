@@ -50,7 +50,6 @@ const COOLDOWN_MS: Record<ProactiveScene, number> = {
 };
 export const sceneCooldownMs = (scene: ProactiveScene): number => COOLDOWN_MS[scene];
 export const DESIRE_THRESHOLD = 40;
-export const FOLLOWUP_MIN_SCORE = 55;
 const MAX_SAMPLE_MINUTES = 5;
 
 /** 本地版天气场景只在 6:00–22:59 读取天气。 */

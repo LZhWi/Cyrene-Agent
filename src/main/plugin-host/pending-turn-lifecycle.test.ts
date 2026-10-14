@@ -24,6 +24,14 @@ function makeInput(overrides: Partial<PendingTurnInput> = {}): PendingTurnInput 
 }
 
 describe("createPendingTurnLifecycle", () => {
+  it("成功落盘后携带本轮冻结时区", () => {
+    const publisher = makePublisher();
+    const lifecycle = createPendingTurnLifecycle({ publisher, now: () => 0 });
+    lifecycle.beginTurn(makeInput({timezone:"America/New_York"}));
+    lifecycle.settleTerminal("run-1", {status:"success"});
+    lifecycle.confirmPersistence("run-1", {finalMessageId:"msg-assistant-1"});
+    expect(publisher.publishTurnFinished).toHaveBeenCalledWith(expect.objectContaining({timezone:"America/New_York"}));
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });

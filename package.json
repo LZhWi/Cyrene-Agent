@@ -7,10 +7,11 @@
     "cyrene": "./dist/cli/index.js"
   },
   "scripts": {
-    "build:main": "node -e \"require('fs').rmSync('dist/main/plugins',{recursive:true,force:true})\" && tsc -p tsconfig.main.json && node -e \"const fs=require('fs');fs.cpSync('src/plugins','dist/main/plugins',{recursive:true,filter:s=>fs.statSync(s).isDirectory()||s.endsWith('manifest.json')||s.endsWith('manifest.schema.json')||s.endsWith('native-import.cjs')});fs.cpSync('src/main/plugin-panel','dist/main/plugin-panel',{recursive:true})\"",
+    "migration:package": "node scripts/migration/build-chat-package.mjs",
+    "build:main": "node -e \"require('fs').rmSync('dist/main/plugins',{recursive:true,force:true})\" && tsc -p tsconfig.main.json && node -e \"const fs=require('fs');fs.cpSync('src/plugins','dist/main/plugins',{recursive:true,filter:s=>fs.statSync(s).isDirectory()||s.endsWith('manifest.json')||s.endsWith('manifest.schema.json')||s.endsWith('native-import.cjs')});fs.cpSync('src/main/plugin-panel','dist/main/plugin-panel',{recursive:true})\" && node scripts/build/chatgpt-oauth.mjs",
     "generate:plugin-schema": "node scripts/plugin-sdk/generate-schema.mjs",
     "check:plugin-schema": "node scripts/plugin-sdk/generate-schema.mjs --check",
-    "build:preload": "tsc -p tsconfig.preload.json",
+    "build:preload": "tsc -p tsconfig.preload.json && node scripts/build/learn-exam-preload.mjs",
     "build:renderer": "vite build",
     "build:cli": "node scripts/build/cli.mjs",
     "build:screenshot-helper": "node scripts/build/screenshot-helper.mjs",
@@ -84,6 +85,7 @@
     "@node-rs/jieba": "^2.0.1",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@playwright/mcp": "0.0.79",
+    "@tanstack/react-virtual": "3.13.23",
     "@types/ws": "^8.18.1",
     "@xenova/transformers": "^2.17.2",
     "ajv": "^8.20.0",
@@ -129,7 +131,8 @@
     "wink-bm25-text-search": "^3.1.2",
     "word-extractor": "^1.0.4",
     "ws": "^8.21.0",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "jose": "^6.2.3"
   },
   "allowScripts": {
     "protobufjs@7.6.4": true,

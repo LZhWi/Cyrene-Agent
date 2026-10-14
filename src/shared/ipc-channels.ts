@@ -127,6 +127,11 @@ export const IPC = {
   SETTINGS_GET_CONFIG: "settings:get-config",
   SETTINGS_SAVE_CONFIG: "settings:save-config",
   SETTINGS_MODEL_PROFILES_LIST: "settings:model-profiles:list",
+  CHATGPT_OAUTH_STATUS: "settings:chatgpt-oauth:status",
+  CHATGPT_OAUTH_LOGIN: "settings:chatgpt-oauth:login",
+  CHATGPT_OAUTH_CANCEL: "settings:chatgpt-oauth:cancel",
+  CHATGPT_OAUTH_MODELS: "settings:chatgpt-oauth:models",
+  CHATGPT_OAUTH_SAVE: "settings:chatgpt-oauth:save",
   SETTINGS_MODEL_PROFILE_SAVE: "settings:model-profiles:save",
   SETTINGS_MODEL_PROFILE_DELETE: "settings:model-profiles:delete",
   SETTINGS_MODEL_PROFILE_SET_DEFAULT: "settings:model-profiles:set-default",
@@ -181,9 +186,15 @@ export const IPC = {
   CHATS_DELETE: "chats:delete",
   CHATS_DELETE_MESSAGE: "chats:delete-message",
   CHATS_SET_PINNED: "chats:set-pinned",
+  CHATS_SIDEBAR_ORGANIZATION_GET: "chats:sidebar-organization:get",
+  CHATS_SIDEBAR_ORGANIZATION_APPLY: "chats:sidebar-organization:apply",
+  CHATS_SIDEBAR_ORGANIZATION_CHANGED: "chats:sidebar-organization:changed",
   CHATS_SET_MODEL_PROFILE: "chats:set-model-profile",
   CHATS_OPEN_FOLDER: "chats:open-folder",
   CHATS_OPEN_WORKSPACE: "chats:open-workspace",
+  WORKSPACE_INSPECTOR_LIST: "workspace-inspector:list",
+  WORKSPACE_INSPECTOR_READ: "workspace-inspector:read",
+  WORKSPACE_INSPECTOR_TASK: "workspace-inspector:task",
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",
   // 任意会话变动后 main → 所有渲染窗口 broadcast，触发列表/标题刷新
   CHATS_CHANGED: "chats:changed",
@@ -275,6 +286,7 @@ export const IPC = {
 
   // memory panel
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",
+  MEMORY_LIFECYCLE_TRACKING_SET: "memory:lifecycle-tracking-set",
   MEMORY_QUERY_ROUTER_GET: "memory:query-router-get",
   MEMORY_QUERY_ROUTER_SAVE: "memory:query-router-save",
   MEMORY_COLD_RECALL_GET: "memory:cold-recall-get",
@@ -315,6 +327,8 @@ export const IPC = {
   SKILL_CLEAR_MODE_OVERRIDE: "skill:clear-mode-override",
   // skill catalog（skill 页拉取元数据：id/name/description/modes）
   SKILL_GET_CATALOG: "skill:get-catalog",
+  SKILL_GET_SUGGESTIONS: "skill:get-suggestions",
+  WORKSPACE_PASTE_FILE_URIS: "workspace:paste-file-uris",
   // 重新扫描 user skills 目录，安装/删除 skill 后无需重启即可刷新 UI
   SKILL_RESCAN: "skill:rescan",
 
@@ -391,6 +405,25 @@ export const IPC = {
   POP_QUIZ_SKIP: "pop-quiz:skip",
   // main → renderer：结算广播（提交/跳过/run 取消），渲染端据此清卡
   POP_QUIZ_SETTLED: "pop-quiz:settled",
+
+  LEARN_EXAM_LIST: "learn-exam:list",
+  LEARN_STUDY_OVERVIEW: "learn-study:overview",
+  LEARN_STUDY_ANSWER: "learn-study:answer",
+  LEARN_VIDEO_LIST: "learn-video:list",
+  LEARN_VIDEO_CHOOSE: "learn-video:choose",
+  LEARN_VIDEO_NOTE: "learn-video:note",
+  LEARN_VIDEO_SUBTITLES: "learn-video:subtitles",
+  LEARN_EXAM_OPEN: "learn-exam:open",
+  LEARN_EXAM_BEGIN_GRADING: "learn-exam:begin-grading",
+  LEARN_EXAM_FINISH_GRADING: "learn-exam:finish-grading",
+  LEARN_EXAM_CREATED: "learn-exam:created",
+  LEARN_EXAM_CHANGED: "learn-exam:changed",
+  LEARN_EXAM_PAGE_GET: "learn-exam-page:get",
+  LEARN_EXAM_PAGE_SAVE_ANSWER: "learn-exam-page:save-answer",
+  LEARN_EXAM_PAGE_SAVE_NAVIGATION: "learn-exam-page:save-navigation",
+  LEARN_EXAM_PAGE_SUBMIT: "learn-exam-page:submit",
+  LEARN_EXAM_PAGE_RETRY: "learn-exam-page:retry",
+  LEARN_EXAM_PAGE_CHANGED: "learn-exam-page:changed",
 
   // call window (voice call)
   CALL_OPEN: "call:open",                 // sidebar → main：打开通话窗口

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isChatGptOAuth } from "../../shared/chatgpt-oauth";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../orchestrator/model-config";
@@ -133,6 +134,8 @@ export interface ModelSettings {
   stickerSimilarityThreshold: number;
   /** 整个聊天请求的总超时（秒）。30-1800，默认 300。 */
   chatRequestTimeoutSec: number;
+  /** 主模型请求的额外重试次数，0–10，默认 5。 */
+  modelRequestMaxRetries: number;
   /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
   citaRepairBudgetSec: number;
   rerankerMode: "standard" | "none";
@@ -175,6 +178,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   stickerSize: "standard",
   stickerSimilarityThreshold: 0.55,
   chatRequestTimeoutSec: 300,
+  modelRequestMaxRetries: 5,
   citaRepairBudgetSec: 8,
   rerankerMode: "standard",
   embeddingModel: "bgem3",
@@ -327,7 +331,7 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
 
   const defaultModelProfileId = typeof input?.defaultModelProfileId === "string"
     ? input.defaultModelProfileId
-    : modelProfiles[0]?.id;
+    : modelProfiles.find(profile => !isChatGptOAuth(profile))?.id;
   const legacyVisionProfile = resolveDefaultModelProfile(modelProfiles, defaultModelProfileId) ?? profile;
   const legacyChatDirect = legacyVisionProfile.multimodal ?? multimodal;
   const completeVision = Boolean(rawVision?.baseUrl && rawVision.apiKey && rawVision.model);
@@ -362,6 +366,9 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
       && Number.isFinite(input.chatRequestTimeoutSec)
       ? Math.max(30, Math.min(1800, Math.round(input.chatRequestTimeoutSec)))
       : 300,
+    modelRequestMaxRetries: typeof input?.modelRequestMaxRetries === "number" && Number.isFinite(input.modelRequestMaxRetries)
+      ? Math.max(0, Math.min(10, Math.round(input.modelRequestMaxRetries)))
+      : 5,
     citaRepairBudgetSec: typeof input?.citaRepairBudgetSec === "number" && Number.isFinite(input.citaRepairBudgetSec)
       ? Math.max(4, Math.min(30, Math.round(input.citaRepairBudgetSec)))
       : 8,
@@ -395,7 +402,7 @@ export function getDefaultModelProfile(settings = loadModelSettings()): SavedMod
 /**
  * 为单次对话展开已保存的模型。
  * - id 提供 → 展开该档案；档案不存在 → 退回 settings 原样（保持旧行为）。
- * - id 缺省 → 展开**默认档案**（defaultModelProfileId，缺失时第一个档案）；无任何档案 → settings 原样。
+ * - id 缺省 → 展开**默认档案**（缺失时第一个非 OAuth 档案）；无可用默认档案 → settings 原样。
  *
  * 不传 id 不能再退回顶层镜像：顶层镜像 = 当前 provider 的 perProvider 项，可能全空
  * （用户只在档案里配了模型）。channel bot / 定时任务等不带 profileId 的调用方曾因此
@@ -438,6 +445,9 @@ export function saveModelProfile(input: Omit<SavedModelProfile, "id"> & { id?: s
 
   const result = addModelProfile(listSavedModelProfiles(existing), profile);
   if (!result.added) return { settings: existing, added: false };
+  if (isChatGptOAuth(profile)) {
+    return { settings: saveModelSettings({ modelProfiles: result.profiles }), added: true };
+  }
   const settings = saveModelSettings({ modelProfiles: result.profiles, defaultModelProfileId: existing.defaultModelProfileId ?? profile.id });
   return { settings: existing.defaultModelProfileId ? settings : setDefaultModelProfile(profile.id), added: true };
 }

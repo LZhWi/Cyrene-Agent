@@ -1,3 +1,4 @@
+import { withChatModuleRoutes } from "../settings/chat-module-routes";
 // 聊天会话 IPC 桥接：把 chats-store 的纯数据 API 暴露给渲染进程。
 //
 // 写操作成功后会向渲染窗口广播 `chats:changed`，以便：
@@ -19,6 +20,7 @@ import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
+import * as sidebarOrganizationStore from "./sidebar-organization-store";
 import * as fs from "fs";
 import * as path from "path";
 import { ensureVaultStructure, isEmptyDirectory } from "../learn/obsidian/vault-init";
@@ -31,6 +33,8 @@ import { activeChatTargetRegistry } from "../plugin-host/active-chat-target";
 import { callSummarizeModel } from "../orchestrator/context-manager";
 import { buildContextUsageSnapshot } from "../orchestrator/context-usage";
 import { scheduleVisualHistoryCaption } from "../chat/visual-history-caption";
+import { listInspectorFiles, readInspectorFile } from "./workspace-inspector";
+import { readTaskSession } from "../tasks/task-session-store";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -96,16 +100,83 @@ export function registerChatsIpc(
 ): void {
   const ipc = ipcOption ?? createIpcScope();
   chatsStore.initialize();
+  let recoveryDialog: Promise<void> | undefined;
+  function offerStorageRecovery(): Promise<void> {
+    if (recoveryDialog) return recoveryDialog;
+    recoveryDialog = (async () => {
+      for (const issue of chatsStore.getStorageRecoveryIssues()) {
+        const index = path.basename(issue.file) === "index.json";
+        const action = issue.canRestore ? "从有效副本恢复" : index ? "从会话重建索引" : "保留损坏文件并移出列表";
+        const result = await dialog.showMessageBox({ type: "warning", title: "聊天数据需要恢复",
+          message: `无法读取 ${path.basename(issue.file)}`,
+          detail: `确认后将${action}，原文件会保留在 recovery 目录。取消将保持文件不变并暂停聊天存储写入。`,
+          buttons: ["取消", action], defaultId: 0, cancelId: 0 });
+        if (result.response !== 1) return;
+        chatsStore.approveStorageRecovery(issue.file, !index && !issue.canRestore);
+      }
+    })().finally(() => { recoveryDialog = undefined; });
+    return recoveryDialog;
+  }
+
+  function inspectorSession(sessionId: string) {
+    const session = typeof sessionId === "string" ? chatsStore.getSession(sessionId) : null;
+    if (!session || session.mode === "chat") throw new Error("仅工作/学习会话支持此面板");
+    return session;
+  }
+  for (const [channel, read] of [[IPC.WORKSPACE_INSPECTOR_LIST, listInspectorFiles], [IPC.WORKSPACE_INSPECTOR_READ, readInspectorFile]] as const) {
+    ipc.handle(channel, async (_event, input: { sessionId: string; path: string; offset?: number }) => {
+      try {
+        const root = inspectorSession(input?.sessionId).workspaceBinding?.workspaceRoot;
+        if (!root) throw new Error("请先选择工作区");
+        return { ok: true, value: await read(root, input.path, input.offset) };
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    });
+  }
+  ipc.handle(IPC.WORKSPACE_INSPECTOR_TASK, (_event, input: { sessionId: string; taskId: string }) => {
+    try {
+      const parent = inspectorSession(input?.sessionId);
+      const task = readTaskSession(app.getPath("userData"), input?.taskId);
+      if (!task || task.parentConversationId !== parent.id) throw new Error("任务不属于当前会话，或任务记录不存在");
+      return { ok: true, value: task };
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  });
 
   ipc.handle(
     IPC.CHATS_LIST,
-    (_event, options?: { mode?: ConversationMode }) => chatsStore.listSessions(options),
+    async (_event, options?: { mode?: ConversationMode }) => {
+      await offerStorageRecovery();
+      return chatsStore.listSessions(options);
+    },
   );
 
-  ipc.handle(IPC.CHATS_GET, (_event, id: string) => chatsStore.getSession(id));
-  ipc.handle(IPC.CHATS_GET_PAGE, (_event, payload: { id: string; before?: number | null; limit?: number }) => {
+  ipc.handle(IPC.CHATS_SIDEBAR_ORGANIZATION_GET, () => sidebarOrganizationStore.getSnapshot());
+  ipc.handle(IPC.CHATS_SIDEBAR_ORGANIZATION_APPLY, (event, payload: { expectedRevision: number; draft: Parameters<typeof sidebarOrganizationStore.applyDraft>[1] }) => {
+    const result = sidebarOrganizationStore.applyDraft(payload?.expectedRevision, payload?.draft);
+    if (result.ok) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed() || win.webContents === event.sender) continue;
+        try { win.webContents.send(IPC.CHATS_SIDEBAR_ORGANIZATION_CHANGED); } catch { /* window may be closing */ }
+      }
+    }
+    return result;
+  });
+
+  ipc.handle(IPC.CHATS_GET, async (_event, id: string) => {
+    try { return chatsStore.getSession(id); }
+    catch (error) {
+      if (!chatsStore.getStorageRecoveryIssues().length) throw error;
+      await offerStorageRecovery();
+      return chatsStore.getSession(id);
+    }
+  });
+  ipc.handle(IPC.CHATS_GET_PAGE, async (_event, payload: { id: string; before?: number | null; limit?: number }) => {
     if (!payload?.id) return null;
-    return chatsStore.getSessionPage(payload.id, payload.before ?? null, payload.limit ?? 80);
+    try { return chatsStore.getSessionPage(payload.id, payload.before ?? null, payload.limit ?? 80); }
+    catch (error) {
+      if (!chatsStore.getStorageRecoveryIssues().length) throw error;
+      await offerStorageRecovery();
+      return chatsStore.getSessionPage(payload.id, payload.before ?? null, payload.limit ?? 80);
+    }
   });
 
   ipc.handle(
@@ -297,7 +368,7 @@ export function registerChatsIpc(
         });
 
         // 摘要失败直接报错返回，绝不落库、不动原消息（历史安全优先）。
-        const summary = await callSummarizeModel(history, adapter, settings);
+        const summary = await withChatModuleRoutes(session.mode ?? "chat", () => callSummarizeModel(history, adapter, settings));
         const summaryMessage: ChatMessage = {
           id: `compact-${randomUUID().slice(0, 8)}`,
           role: "model",

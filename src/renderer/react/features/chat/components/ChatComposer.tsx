@@ -4,12 +4,18 @@ import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { useTranslation } from "../../../i18n";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import type { ModelFailureInfo } from "../../../../../shared/model-error";
 import { ContextUsageRing } from "./ContextUsageRing";
 import { ReasoningControl } from "./ReasoningControl";
 import { StyleControl } from "./StyleControl";
 import { PermissionControl } from "./PermissionControl";
+import { useCodeExecutorRoute } from "./CodeExecutorSurface";
 import { PlanModeToggle } from "./PlanModeToggle";
 import { ModelSelector } from "./ModelSelector";
+import { PendingQueueDock } from "./PendingQueueDock";
+import { useSlashSkills } from "./useSlashSkills";
+import { workspacePaste } from "./workspace-paste";
+import { FileText, FileCode, File as FileIcon } from "lucide-react";
 import chatWelcomeUrl from "../../../assets/welcome/chat.png?url";
 import codeWelcomeUrl from "../../../assets/welcome/code.png?url";
 import learnWelcomeUrl from "../../../assets/welcome/learn.png?url";
@@ -27,24 +33,27 @@ interface ChatComposerProps {
   attachments: ComposerAttachment[];
   attachmentBusy?: boolean;
   modelBusy?: boolean;
-  pendingQueue?: Array<{ id: string; content: string }>;
+  pendingQueue?: Array<{ id: string; content: string; attachmentNames?: string[] }>;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onCancel?: () => void;
   onQueueMessage?: (value: string) => void;
   onRemoveQueuedMessage?: (id: string) => void;
+  onEditQueuedMessage?: (id: string, content: string) => boolean;
   onChooseWorkspace: () => void;
   onChooseFiles: (files: File[]) => void;
   onRemoveAttachment: (index: number) => void;
   onScreenshot: () => void;
   /** 粘贴图片（Ctrl+V 剪贴板含图片且无文本时触发）；由父级落临时文件并追加附件。 */
   onPasteImage?: (file: File) => void;
+  onPasteFileUris?: (uriList: string) => void;
   onChooseSticker: (id: string) => void;
   activeModelProfileId?: string;
   onSelectModelProfile?: (id: string) => void;
   titlebarControls?: boolean;
   /** 上下文容量快照：运行中实时刷新，空闲时为最近一次终态快照；无快照不渲染圆环。 */
   contextUsage?: ContextUsageSnapshot;
+  mainModelFailure?: ModelFailureInfo;
 }
 
 export interface ComposerAttachment {
@@ -216,23 +225,28 @@ export function ChatComposer({
   onCancel,
   onQueueMessage,
   onRemoveQueuedMessage,
+  onEditQueuedMessage,
   onChooseWorkspace,
   onChooseFiles,
   onRemoveAttachment,
   onScreenshot,
   onPasteImage,
+  onPasteFileUris,
   onChooseSticker,
   activeModelProfileId,
   onSelectModelProfile,
   titlebarControls = false,
   contextUsage,
+  mainModelFailure,
 }: ChatComposerProps) {
   const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
   const supportsWorkFiles = ["work", "code"].includes(mode);
   const supportsObsidianLibrary = mode === "learn";
+  const codeRouteControl = useCodeExecutorRoute();
   const supportsPermission = supportsWorkFiles || supportsObsidianLibrary;
+  const slash = useSlashSkills(mode, value, onChange);
   const supportsPlanToggle = mode === "code";
   const supportsStyle = mode === "chat" || mode === "learn";
   const supportsStickers = mode !== "code";
@@ -286,6 +300,16 @@ export function ChatComposer({
   // 浏览器剪贴板常同时带 text/plain + image/png（复制网页富文本），
   // 粗暴拦截会把用户想粘的文字吃掉。大小/临时文件由父级 handlePastedImage 负责。
   const handlePaste = (event: ClipboardEvent<HTMLElement>) => {
+    if (supportsPermission && event.clipboardData) {
+      const paste = workspacePaste(event.clipboardData);
+      if (paste) {
+        event.preventDefault();
+        if (attachmentBusy) return;
+        if (paste.kind === "files") onChooseFiles(paste.files);
+        else onPasteFileUris?.(paste.uriList);
+        return;
+      }
+    }
     if (!onPasteImage) return;
     const data = event.clipboardData;
     if (!data || Array.from(data.types).includes("text/plain")) return;
@@ -301,7 +325,11 @@ export function ChatComposer({
   return (
     <div className={`cy-composer-stack ${docked ? "is-docked" : "is-centered"}`}>
       {!docked && <img className="cy-composer-welcome" src={welcomeImageUrl} alt="" />}
-      <div className="cy-composer-shell">
+      {mainModelFailure && <ModelFailureNotice failure={mainModelFailure} />}
+      <div className="cy-composer-shell" ref={slash.host} onKeyDownCapture={slash.onKeyDownCapture}
+        onSelectCapture={slash.trackCursor}
+        onCompositionStart={slash.onCompositionStart} onCompositionEnd={slash.onCompositionEnd}>
+        {slash.menu}
         <input
           ref={fileInputRef}
           className="cy-composer__file-input"
@@ -339,7 +367,7 @@ export function ChatComposer({
         }}
         header={hasComposerHeader ? (
           <div className="cy-composer__attachments" aria-label={t("composer.attachmentsLabel")}>
-            {pendingQueue.length > 0 && (
+            {mode !== "chat" ? <PendingQueueDock items={pendingQueue} onRemove={onRemoveQueuedMessage} onEdit={onEditQueuedMessage} /> : pendingQueue.length > 0 && (
               <div className="cy-composer__queue" aria-label={t("composer.queueLabel")}>
                 {pendingQueue.map((item) => (
                   <div className="cy-composer__queue-item" key={item.id}>
@@ -354,7 +382,7 @@ export function ChatComposer({
                 {attachment.kind === "image" && attachment.previewUrl ? (
                   <img src={attachment.previewUrl} alt="" draggable={false} />
                 ) : (
-                  <span title={attachment.name}>{attachment.name}</span>
+                  <>{supportsPermission && <AttachmentIcon name={attachment.name} />}<span title={attachment.name}>{attachment.name}</span></>
                 )}
                 <button type="button" aria-label={t("composer.removeAttachment", { name: attachment.name })} onClick={() => onRemoveAttachment(index)}>×</button>
               </div>
@@ -412,15 +440,55 @@ export function ChatComposer({
         )}
         {supportsPlanToggle && conversationId && <span className="cy-composer__footer-separator" />}
         {supportsPermission && (
-          <PermissionControl />
+          <PermissionControl compact={!!codeRouteControl} />
         )}
+        {codeRouteControl}
         {supportsStyle && !titlebarControls && <StyleControl />}
-        {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
+        {!titlebarControls && onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
         <span className="cy-composer__footer-spacer" />
         <ContextUsageRing usage={contextUsage} sessionId={conversationId} busy={modelBusy} />
         {!titlebarControls && <ReasoningControl sessionId={conversationId} modelProfileId={activeModelProfileId} />}
         </div>
       </div>
     </div>
+  );
+}
+
+function AttachmentIcon({ name }: { name: string }) {
+  const Icon = /\.(ts|tsx|js|jsx|py|java|c|cpp|h|json|html|css|yaml|yml)$/i.test(name) ? FileCode
+    : /\.(txt|md|csv|pdf|docx?|xlsx?)$/i.test(name) ? FileText : FileIcon;
+  return <Icon className="cy-composer__attachment-icon" size={18} aria-hidden="true" />;
+}
+
+const MODEL_ERROR_CATEGORY_KEYS: Record<ModelFailureInfo["category"], string> = {
+  AUTH: "auth", PERMISSION: "permission", BILLING: "billing", QUOTA: "quota",
+  RATE_LIMIT: "rateLimit", INVALID_REQUEST: "invalidRequest", NOT_FOUND: "notFound",
+  CONTEXT_LIMIT: "contextLimit", PAYLOAD_TOO_LARGE: "payloadTooLarge", CONTENT_POLICY: "contentPolicy",
+  CONFLICT: "conflict", TIMEOUT: "timeout", NETWORK: "network", OVERLOADED: "overloaded",
+  SERVER_ERROR: "serverError", UNAVAILABLE: "unavailable", CANCELLED: "cancelled", UNKNOWN: "unknown",
+};
+
+function ModelFailureNotice({ failure }: { failure: ModelFailureInfo }) {
+  const { t } = useTranslation();
+  const categoryKey = MODEL_ERROR_CATEGORY_KEYS[failure.category] ?? "unknown";
+  return (
+    <details className="cy-model-error-item" role="status">
+      <summary>
+        <span aria-hidden="true">⚠️</span>
+        <span>{t(`composer.modelError.categories.${categoryKey}`)}</span>
+        {failure.status !== undefined && <span className="cy-model-error-item__status">HTTP {failure.status}</span>}
+        <span className="cy-model-error-item__action">{t("composer.modelError.viewDetails")}</span>
+      </summary>
+      <dl className="cy-model-error-item__details">
+        <dt>{t("composer.modelError.provider")}</dt><dd>{failure.provider}</dd>
+        <dt>{t("composer.modelError.model")}</dt><dd>{failure.model}</dd>
+        {failure.status !== undefined && <><dt>{t("composer.modelError.status")}</dt><dd>{failure.status}</dd></>}
+        {failure.vendorCode && <><dt>{t("composer.modelError.code")}</dt><dd>{failure.vendorCode}</dd></>}
+        {failure.vendorType && <><dt>{t("composer.modelError.type")}</dt><dd>{failure.vendorType}</dd></>}
+        {failure.requestId && <><dt>{t("composer.modelError.requestId")}</dt><dd>{failure.requestId}</dd></>}
+      </dl>
+      <p>{t(failure.category === "UNKNOWN" ? "composer.modelError.unknownHint" : "composer.modelError.hint")}</p>
+      {failure.docsUrl && <a href={failure.docsUrl} target="_blank" rel="noreferrer">{t("composer.modelError.vendorDocs")}</a>}
+    </details>
   );
 }

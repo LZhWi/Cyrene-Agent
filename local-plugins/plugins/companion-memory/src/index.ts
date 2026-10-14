@@ -1,11 +1,15 @@
 import type { CyrenePlugin, PluginConversationChangedEvent, PluginTurnFinishedEvent } from "@playa0v0/cyrene-plugin-sdk";
 import { CHAT_ID, MEMORY_ID, createPeer } from "../../shared/protocol";
 import { resolveToolTopK } from "../../shared/tool-top-k";
-import { createWindow, registerUi, strictStorage } from "../../shared/runtime";
+import { createWindow, registerUi } from "../../shared/runtime";
+import { createRecoverableMemoryStorage } from "./recoverable-storage";
 import { createMemory, PROFILE_REFLECTION_MIN_CONFIDENCE } from "./memory";
 import type { ExtractionPromptMessage } from "./memory-extraction";
 import { createRetrieval, rankLocalMemoryCandidates } from "./retrieval";
 import { createLegacyImportPlan, defaultLegacyMemoryPath, previewLegacyMemoryFile } from "./legacy-import";
+import { createLegacyContextPlan, commitLegacyContext } from "./legacy-context-import";
+import { LEGACY_CONTEXT_KEY } from "./legacy-context-state";
+import { inspectLegacyMaintenance } from "./legacy-maintenance";
 import { createEmbeddingService } from "./embedding";
 import { createVectorIndex, defaultLegacyVectorPath, previewLegacyVectorFile } from "./vector-index";
 import { createNativeIntegration } from "./native-integration";
@@ -20,12 +24,15 @@ import { createMaintenanceInbox } from "./maintenance-inbox";
 import { runMaintenanceReviewBatch } from "./maintenance-batch";
 import { createAutoMaintenance } from "./auto-maintenance";
 import { createAutoReview } from "./auto-review";
+import { createMaintenanceCycles } from "./maintenance-cycles";
+import { createMaintenanceOrder } from "./maintenance-order";
 import { createAutoCompression } from "./auto-compression";
 import { createAutoReflection } from "./auto-reflection";
 import { createAutoLifecycle } from "./auto-lifecycle";
 import { createAutoDream } from "./auto-dream";
 import { findCompressionClusters } from "./compression-clusters";
 import { createSocialContext } from "./social-context";
+import { createMemoryAudit } from "./audit";
 import { createHistoryRetrieval } from "./history-retrieval";
 import { createHostHistorySource } from "./host-history-source";
 import { findPossibleConflictCandidate, hasCorrectionIntent, impactScope, isExplicitGoalCompletion, scoreMemoryConflict } from "./conflict";
@@ -34,14 +41,16 @@ import { createEntityGraph } from "./entity-graph";
 import { createQueryRouter } from "./query-router";
 import { createRelationshipLog } from "./relationship-context";
 
+import { createSourceInvalidationQueue, findInvalidHostSources, type SourceInvalidation } from "./source-reconciliation";
+
 let openWindow: (() => Promise<void>) | undefined;
 let stop: (() => void) | undefined;
 const plugin: CyrenePlugin = {
-  register(ctx) {
+  async register(ctx) {
     if (ctx.id !== MEMORY_ID) throw new Error("插件 ID 不匹配");
-    const storage = strictStorage(ctx);
+    const storage = createRecoverableMemoryStorage(ctx);
     let reviewController: AbortController | undefined;
-    const generate = async (prompt: string | ExtractionPromptMessage[], signal: AbortSignal, extraction = false): Promise<string> => {
+    const generate = async (prompt: string | ExtractionPromptMessage[], signal: AbortSignal, extraction = false, routingModule: "memory" | "reflection" | "resolver" | "compression" | "social" = "memory"): Promise<string> => {
       if (!ctx.deps.llm) throw new Error("当前宿主模型服务不可用");
       try {
         return await ctx.deps.llm.generateText(typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt, {
@@ -49,6 +58,7 @@ const plugin: CyrenePlugin = {
           maxTokens: extraction ? 32768 : 4096,
           timeoutMs: extraction ? 300000 : 120000,
           purpose: extraction ? "memory-extraction" : "companion-memory",
+          routingModule,
           ...(extraction ? { reasoning: "on" as const } : {}),
         });
       } catch {
@@ -60,13 +70,23 @@ const plugin: CyrenePlugin = {
       entityGraph.ingest([turn.user]);
       entityGraph.ingest([turn.assistant]);
     });
+    const invalidations = createSourceInvalidationQueue(storage);
+    const contextSources = storage.get<any>(LEGACY_CONTEXT_KEY)?.sourceEvidence ?? [];
+    for (const change of await findInvalidHostSources(ctx.deps.conversations, memory.view().turns, [...memory.view().evidence, ...contextSources], ctx.signal)) invalidations.enqueue(change);
+    // Invalidate source facts before registering any prompt/tool/automation consumers.
+    for (const change of invalidations.pending()) memory.invalidateHostSources(change);
     const relationship = createRelationshipLog(storage);
     relationship.reconcile(memory.view().turns);
     const queryRouter = createQueryRouter(ctx);
     const embeddings = createEmbeddingService(ctx);
-    const social = createSocialContext(storage, generate, async (text, signal) => {
+    const observeMemory = createMemoryAudit(storage);
+    const social = createSocialContext(storage, (prompt, signal) => generate(prompt, signal, false, "social"), async (text, signal) => {
       if (!embeddings.config.enabled) throw new Error("Embedding 尚未启用");
       return embeddings.embed(text, signal);
+    }, Date.now, {
+      observe: observeMemory,
+      isCurrent: turn => memory.view().turns.some(t => t.id === turn.id && t.sessionId === turn.sessionId
+        && t.user === turn.user && t.assistant === turn.assistant && t.userAt === turn.userAt && t.assistantAt === turn.assistantAt),
     });
     const vectors = createVectorIndex(storage);
     const reranker = createReranker(storage, generate);
@@ -150,24 +170,33 @@ const plugin: CyrenePlugin = {
       return changed;
     };
     const maintainMemory = async (_runGenerate: Parameters<typeof memory.maintain>[0], signal: AbortSignal, validateSources?: Parameters<typeof memory.maintain>[2]) => {
-      const previousIds = new Set(memory.entryIds());
-      const result = await memory.maintain((prompt) => generate(prompt, signal, true), signal, validateSources);
-      semantic.memoryChanged();
+      const previousContents = new Map(memory.view().entries.map(entry => [entry.id, entry.content]));
+      const previousIds = new Set(previousContents.keys());
+      let result: Awaited<ReturnType<typeof memory.maintain>>;
+      try {
+        result = await memory.maintain((prompt) => generate(prompt, signal, true), signal, validateSources);
+      } finally {
+        // 即使后续批次失败，已提交的正文更新也不能继续使用旧向量。
+        vectors.reconcile(memory.view().entries.filter(entry => !previousContents.has(entry.id)
+          || previousContents.get(entry.id) === entry.content).map(entry => entry.id));
+        semantic.memoryChanged();
+      }
       const conflicts = await processNewConflicts(previousIds, signal);
       return { ...result, conflicts };
     };
     const autoMaintenance = createAutoMaintenance(storage, ctx.events, () => inbox.addAutomatically(memory.view().entries, vectors.relatedPairs(memory.recallableEntryIds()).pairs));
-    const autoReview = createAutoReview(storage, ctx.events, () => {
+    const maintenanceEvents = { on: () => () => {}, emit: ctx.events.emit.bind(ctx.events) };
+    const autoReview = createAutoReview(storage, maintenanceEvents, () => {
       const snapshot = memory.view();
       const reviewedPairs = new Set(snapshot.entryReviews.map((review) => [review.left.id, review.right.id].sort().join("\u0000")));
-      return inbox.view(snapshot.entries).items.filter((item) => item.resolverPriority !== "none" && !reviewedPairs.has([item.leftId, item.rightId].sort().join("\u0000")));
+      return inbox.view(snapshot.entries).items.filter((item) => item.status === "open" && !item.stale && item.resolverPriority !== "none" && !reviewedPairs.has([item.leftId, item.rightId].sort().join("\u0000")));
     }, async (item, autoSignal) => {
       if (reviewController) throw new Error("已有记忆复核正在进行");
       const controller = new AbortController(); reviewController = controller;
       const signal = AbortSignal.any([controller.signal, autoSignal, ctx.signal]);
       try {
         const revision = memory.view().revision;
-        return await memory.reviewEntries({ leftId: item.leftId, rightId: item.rightId, revision }, (prompt) => generate(prompt, signal), signal);
+        return await memory.reviewEntries({ leftId: item.leftId, rightId: item.rightId, revision }, (prompt) => generate(prompt, signal, false, "resolver"), signal);
       } finally { reviewController = undefined; }
     }, Date.now, (review) => {
       const id = (review as { id?: unknown })?.id;
@@ -195,7 +224,7 @@ const plugin: CyrenePlugin = {
           const entryIds = candidate.entryIds.filter((id) => snapshot.entries.some((entry) => entry.id === id && (entry.status === "active" || entry.status === "aging") && (!expectedStatus || (entry.status === expectedStatus && !entry.pinned && !entry.isSummary && !entry.supersededBy && !entry.mergedInto)) && (entry.validFrom === undefined || entry.validFrom <= Date.now()) && (entry.validTo === undefined || entry.validTo > Date.now())));
           const minimum = candidate.kind === "regular" || candidate.kind === "dream" ? 3 : 2;
           if (entryIds.length < minimum) throw new Error("有效来源不足，压缩计划已失效");
-          try { return await memory.reviewCompression({ entryIds, kind: candidate.kind, revision: snapshot.revision }, (prompt) => generate(prompt, signal), signal); }
+          try { return await memory.reviewCompression({ entryIds, kind: candidate.kind, revision: snapshot.revision }, (prompt) => generate(prompt, signal, false, "compression"), signal); }
           catch (error) {
             if (attempt === 0 && error instanceof Error && error.message.includes("记忆已发生变化")) continue;
             throw error;
@@ -225,15 +254,16 @@ const plugin: CyrenePlugin = {
       if (result.memoryChanged) semantic.memoryChanged();
       return retryStaleCompression(result, true);
     };
-    const autoCompression = createAutoCompression(storage, ctx.events, () => compressionCandidates("regular"), reviewCompressionCandidate, Date.now,
-      applyCompressionReview);
-    const autoReflection = createAutoReflection(storage, ctx.events, async (autoSignal) => {
+    const acquireMaintenance = createMaintenanceOrder();
+    const autoCompression = createAutoCompression(storage, maintenanceEvents, () => compressionCandidates("regular"), reviewCompressionCandidate, Date.now,
+      applyCompressionReview, undefined, acquireMaintenance);
+    const autoReflection = createAutoReflection(storage, maintenanceEvents, async (autoSignal) => {
       if (reviewController) throw new Error("已有记忆复核正在进行");
       const controller = new AbortController(); reviewController = controller;
       const signal = AbortSignal.any([controller.signal, autoSignal, ctx.signal]);
       try {
         const before = new Set(memory.view().profileChanges.map((change) => change.id));
-        const result = await memory.reviewProfiles((prompt) => generate(prompt, signal), signal);
+        const result = await memory.reviewProfiles((prompt) => generate(prompt, signal, false, "reflection"), signal);
         let applied = 0;
         // 画像反思候选与自动采用共用同一置信度门槛，并继续通过
         // profileChanges 事务层落盘，因此可追溯、可撤销。
@@ -245,7 +275,11 @@ const plugin: CyrenePlugin = {
         return { ...result, applied };
       }
       finally { reviewController = undefined; }
-    });
+    }, Date.now, acquireMaintenance);
+    const maintenanceCycles = createMaintenanceCycles(storage, ctx.events, createHostHistorySource(ctx.deps.conversations, false).snapshot, ctx.signal, {
+      review: autoReview.runDue, compression: autoCompression.runDue, reflection: autoReflection.runDue,
+    }, message => ctx.log(`[companion-memory] ${message}`));
+    void maintenanceCycles.start();
     const autoLifecycle = createAutoLifecycle(storage, ctx.events, () => {
       const entries = memory.view().entries;
       return {
@@ -357,12 +391,15 @@ const plugin: CyrenePlugin = {
         }
       });
     const history = createHistoryRetrieval({
+      supplementOrdinaryHistory: true,
+      observe: observeMemory,
       turns: () => memory.view().turns,
       hostMessages: createHostHistorySource(ctx.deps.conversations).snapshot,
       service: ctx.deps.memoryRetrieval,
       storage,
       routeQuery: queryRouter.route,
     });
+    void history.prepare(ctx.signal).catch(() => { /* Retried by the next history request. */ });
     const toolMemoryIds = async (query: string, topK: number, signal: AbortSignal): Promise<string[]> => {
       const service = ctx.deps.memoryRetrieval;
       if (!service || vectors.view().entries === 0) return [];
@@ -492,7 +529,7 @@ const plugin: CyrenePlugin = {
     });
     const nativeHistory = createNativeHistory(ctx, memory);
     const offHistoryTurnFinished = ctx.events.on<PluginTurnFinishedEvent>("host:turn:finished", (event) => {
-      if (event.source !== "desktop" || event.mode !== "chat" || event.status !== "success"
+      if (event.source !== "desktop" || event.mode !== "chat" || event.chatBackend !== "companion" || event.status !== "success"
         || !event.finalMessageId || !ctx.deps.conversations || ctx.signal.aborted) return;
       void (async () => {
         const messages = [];
@@ -517,7 +554,8 @@ const plugin: CyrenePlugin = {
         })), ctx.signal);
       })().catch((error) => ctx.log(`[companion-memory] 历史消息索引初始化失败: ${String(error)}`));
     });
-    const offConversationChanged = ctx.events.on<PluginConversationChangedEvent>("host:conversation:changed", (event) => {
+    const applyInvalidation = (event: SourceInvalidation) => {
+      social.invalidate(event.conversationId, event.allMessages, event.invalidatedMessageIds);
       const result = memory.invalidateHostSources(event);
       native.invalidateColdRecall(event.conversationId, event.allMessages, event.invalidatedMessageIds);
       history.invalidateHostMessages(event.conversationId, event.allMessages, event.invalidatedMessageIds);
@@ -526,15 +564,18 @@ const plugin: CyrenePlugin = {
         dmae.remove(id);
         lifecycle.remove(id);
       }
-      if (result.changed) {
-        semantic.memoryChanged();
-        history.clearCache();
-        nativeHistory.clear();
-      }
+      semantic.memoryChanged();
+      history.clearCache();
+      nativeHistory.clear();
+    };
+    invalidations.drain(applyInvalidation);
+    const offConversationChanged = ctx.events.on<PluginConversationChangedEvent>("host:conversation:changed", (event) => {
+      invalidations.enqueue(event);
+      invalidations.drain(applyInvalidation);
     });
     const window = createWindow(ctx, __dirname, "独立记忆档案");
     openWindow = window.open;
-    stop = () => { offChatPreferences(); offHistoryTurnFinished(); offConversationChanged(); reviewController?.abort(); autoDream.stop(); autoLifecycle.stop(); autoReflection.stop(); autoCompression.stop(); autoReview.stop(); autoMaintenance.stop(); semantic.stop(); recentInjections.clear(); history.clearCache(); nativeHistory.clear(); native.stop(); peer.stop(); window.close(); openWindow = undefined; };
+    stop = () => { offChatPreferences(); offHistoryTurnFinished(); offConversationChanged(); reviewController?.abort(); maintenanceCycles.stop(); autoDream.stop(); autoLifecycle.stop(); autoReflection.stop(); autoCompression.stop(); autoReview.stop(); autoMaintenance.stop(); semantic.stop(); recentInjections.clear(); history.clearCache(); nativeHistory.clear(); native.stop(); peer.stop(); window.close(); openWindow = undefined; };
     ctx.onDispose(stop);
     registerUi(ctx, async (action, data) => {
       if (action === "state") return { ...memory.view(), relationshipLog: relationship.view(), entityGraph: entityGraph.view(), queryRouter: await queryRouter.view(), queryExpansion: retrieval.view(), reranker: reranker.view(), dmae: dmae.view(), lifecycle: lifecycle.view(), autoLifecycle: autoLifecycle.view(), dream: dream.view(), autoDream: autoDream.view(), maintenanceInbox: inbox.view(memory.view().entries), autoMaintenance: autoMaintenance.view(), autoReview: autoReview.view(), autoCompression: autoCompression.view(), autoReflection: autoReflection.view(), embedding: await embeddings.view(), vectorIndex: vectors.view(), semanticIndex: semantic.view(), social: social.view(), native: native.view(), defaultLegacyMemoryPath: defaultLegacyMemoryPath(), defaultLegacyVectorPath: defaultLegacyVectorPath() };
@@ -549,10 +590,23 @@ const plugin: CyrenePlugin = {
       if (action === "apply-native-history-selection") return nativeHistory.applySelection(data, ctx.signal);
       if (action === "review-native-history-ambiguity") return nativeHistory.reviewAmbiguity(data, ctx.signal);
       if (action === "preview-legacy-import") return previewLegacyMemoryFile(data?.sourcePath);
+      if (action === "preview-legacy-pending" || action === "restore-legacy-pending") {
+        const sessions = await nativeHistory.readSelectedSessions({ conversationIds: data?.conversationIds ?? [] }, ctx.signal);
+        const plan = inspectLegacyMaintenance(storage.get<any>("legacy-memory-archive")?.raw, sessions);
+        if (action === "preview-legacy-pending") return { ...plan, eligible: plan.eligible.length, revision: memory.view().revision };
+        if (data?.token !== plan.token) throw new Error("旧队列来源在预检后变化");
+        return memory.restoreLegacyPending(plan.eligible, data?.revision);
+      }
+      if (action === "preview-legacy-context" || action === "import-legacy-context") {
+        const sessions = await nativeHistory.readSelectedSessions({ conversationIds: data?.conversationIds ?? [] }, ctx.signal);
+        const plan = createLegacyContextPlan(data?.directory, sessions);
+        if (action === "preview-legacy-context") return { sourceHash: plan.sourceHash, ...plan.summary };
+        return commitLegacyContext(storage, plan, data?.sourceHash);
+      }
       if (action === "import-legacy") {
         const result = memory.importLegacy(createLegacyImportPlan(data?.sourcePath, data?.sourceHash,
           data?.sourceAttested === true, data?.preserveRuntime === true), data);
-        dmae.reload(); lifecycle.reload();
+        dmae.reload(); lifecycle.reload(); dream.reload(); inbox.reload();
         return result;
       }
       if (action === "preview-legacy-vectors") return previewLegacyVectorFile(data?.sourcePath, memory.entryIds());
@@ -561,6 +615,10 @@ const plugin: CyrenePlugin = {
         return vectors.importLegacy(data?.sourcePath, data?.sourceHash, memory.entryIds());
       }
       if (action === "save-embedding") return embeddings.save(data);
+      if (action === "import-legacy-vectors-incremental") {
+        if (!memory.view().legacyImport) throw new Error("请先完成旧记忆导入");
+        return vectors.importLegacyIncremental(data?.sourcePath, data?.sourceHash, memory.view().entries);
+      }
       if (action === "test-embedding") return embeddings.test(ctx.signal);
       if (action === "save-semantic-index") return semantic.configure(data);
       if (action === "retry-semantic-index") return semantic.retry();
@@ -587,7 +645,7 @@ const plugin: CyrenePlugin = {
         try {
           return await runMaintenanceReviewBatch(data, inbox.view(memory.view().entries).items, async (leftId, rightId) => {
             const revision = memory.view().revision;
-            return memory.reviewEntries({ leftId, rightId, revision }, (prompt) => generate(prompt, signal), signal);
+            return memory.reviewEntries({ leftId, rightId, revision }, (prompt) => generate(prompt, signal, false, "resolver"), signal);
           }, signal);
         } finally { reviewController = undefined; }
       }
@@ -669,14 +727,14 @@ const plugin: CyrenePlugin = {
         if (reviewController) throw new Error("L2 复核正在进行");
         const controller = new AbortController(); reviewController = controller;
         const signal = AbortSignal.any([controller.signal, ctx.signal]);
-        try { return await memory.reviewEntries(data, (prompt) => generate(prompt, signal), signal); }
+        try { return await memory.reviewEntries(data, (prompt) => generate(prompt, signal, false, "resolver"), signal); }
         finally { reviewController = undefined; }
       }
       if (action === "review-compression") {
         if (reviewController) throw new Error("已有 L2 复核正在进行");
         const controller = new AbortController(); reviewController = controller;
         const signal = AbortSignal.any([controller.signal, ctx.signal]);
-        try { return await memory.reviewCompression(data, (prompt) => generate(prompt, signal), signal); }
+        try { return await memory.reviewCompression(data, (prompt) => generate(prompt, signal, false, "compression"), signal); }
         finally { reviewController = undefined; }
       }
       if (action === "search") return retrieval.search(data, ctx.signal);

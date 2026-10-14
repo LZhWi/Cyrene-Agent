@@ -209,10 +209,18 @@ async function executeToolCallWithRetry(run: HarnessRun, call: ToolCall): Promis
 
   const { input } = run;
   const toolSideEffect = resolveSideEffect(input.tools.find((tool) => tool.id === call.name), parseToolCallArgs(call));
-  input.onToolLifecycle?.({ toolCallId: call.id, toolName: call.name, toolSideEffect, status: "started" });
-  run.toolCallStartedAt.set(call.id, Date.now());
+  input.onToolLifecycle?.({ toolCallId: call.id, toolName: call.name, toolSideEffect, status: "planned" });
+  const dispatchContext = {
+    ...run.toolDispatchContext,
+    signal: input.signal,
+    beforeExecute: () => {
+      if (run.toolCallStartedAt.has(call.id)) return;
+      input.onToolLifecycle?.({ toolCallId: call.id, toolName: call.name, toolSideEffect, status: "started" });
+      run.toolCallStartedAt.set(call.id, Date.now());
+    },
+  };
 
-  let result = await raceWithSignal(dispatchToolCall(call, run.toolDispatchContext), input.signal);
+  let result = await raceWithSignal(dispatchToolCall(call, dispatchContext), input.signal);
   if (result.outcome === "failure") {
     const category = result.category ?? classifyToolResultError(
       result.rawResult ?? { toolId: call.name, args: {}, output: "", status: "failed" } as ToolCallResult,
@@ -221,7 +229,7 @@ async function executeToolCallWithRetry(run: HarnessRun, call: ToolCall): Promis
       const retryParams = getRetryParams(category);
       for (let attempt = 0; attempt < retryParams.maxRetries; attempt++) {
         await sleepWithJitter(retryParams.backoffMs[attempt] ?? 1000, input.signal);
-        result = await raceWithSignal(dispatchToolCall(call, run.toolDispatchContext), input.signal);
+        result = await raceWithSignal(dispatchToolCall(call, dispatchContext), input.signal);
         if (result.outcome !== "failure") break;
       }
     }

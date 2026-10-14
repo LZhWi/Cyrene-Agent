@@ -116,6 +116,8 @@ export const INITIAL_HARNESS_CACHE_STATE: HarnessCacheState = {
 // ── Harness 配置 ─────────────────────────────────────────
 
 export interface HarnessConfig {
+  modelRequestMaxRetries?: number;
+  modelRequestIdleTimeoutMs?: number;
   /** 已声明为安全的工具最多可同时执行几个；1 表示串行。 */
   maxParallelToolCalls: number;
   /** 工具轮上限；0 表示不限。达到上限后不再发起下一次模型请求。 */
@@ -154,6 +156,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
 // ── Harness 事件（给 UI / 桥层）──────────────────────────
 
 export type HarnessEvent =
+  | { type: "model_retry"; status: import("../../../shared/model-retry").ModelRetryStatus }
   | { type: "round_start"; roundId: string }
   | { type: "round_end"; roundId: string }
   | { type: "progress_text"; content: string }
@@ -176,7 +179,7 @@ export interface HarnessToolLifecycleEvent {
   toolCallId: string;
   toolName: string;
   toolSideEffect: SideEffectKind;
-  status: "started" | "committed" | "unknown" | "not_executed";
+  status: "planned" | "started" | "committed" | "unknown" | "not_executed";
 }
 
 /**
@@ -302,6 +305,7 @@ export interface HarnessInput {
 }
 
 export interface HarnessResult {
+  modelFailure?: import("../../../shared/model-error").ModelFailureInfo;
   /** 最终回复文本 */
   finalAnswer: string;
   /** 最终 Agent State 快照 */

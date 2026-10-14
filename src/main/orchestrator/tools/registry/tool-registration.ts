@@ -18,6 +18,8 @@ import { registerCodeGitTools } from "../git-tools";
 import type { LspManager } from "../../../lsp/manager";
 import { registerLspTool } from "../lsp-tool";
 import { registerAttachedImageTool } from "../attached-image-tool";
+import { registerWorkspaceKnowledgeTools } from "../workspace-knowledge-tools";
+import { registerObsidianTools } from "../../../learn/obsidian/obsidian-tools";
 import "../built-in-tools";
 
 export function syncBuiltInToolToggles(settings: GeneralSettings): void {
@@ -35,6 +37,8 @@ export function registerAllTools(deps: { codeGitService: GitService; lspManager:
   registerRecallHistoryTool();
   registerDocumentTools();
   registerAttachedImageTool();
+  registerWorkspaceKnowledgeTools();
+  registerObsidianTools();
 
   setTranslateConfig(() => {
     const s = loadModelSettings();

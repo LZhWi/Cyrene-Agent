@@ -1,4 +1,22 @@
 {
+  "workspaceUi": {
+    "moreFiles": "Load more files",
+    "toolCalls": "Tool calls",
+    "taskTrace": "Execution trace",
+    "taskStatus": { "running": "Running", "completed": "Completed", "failed": "Failed", "cancelled": "Cancelled", "interrupted": "Interrupted" },
+    "recentSessions": "Recent conversations",
+    "editQueuedMessage": "Edit queued message",
+    "collapseInteraction": "Collapse confirmation",
+    "restoreInteraction": "Show pending confirmation",
+    "files": "Files",
+    "tasks": "Task details",
+    "chooseWorkspace": "Choose a workspace first",
+    "refresh": "Refresh",
+    "back": "Back",
+    "preview": "Preview",
+    "resizePanel": "Resize side panel",
+    "openFolder": "Open folder"
+  },
   "common": {
     "cancel": "Cancel",
     "confirm": "Confirm",
@@ -11,6 +29,9 @@
     "empty": "Nothing here"
   },
   "composer": {
+    "skillSuggestions": "Skill suggestions",
+    "skillSuggestionsEmpty": "No matching enabled skills",
+    "skillSuggestionsError": "Could not load skills. Type / again to retry.",
     "placeholderChat": "I'm ready to chat with you ♪",
     "placeholderTaskNoWorkspace": "Got a question or task? I can help ♪ (Pick a project folder first!)",
     "placeholderTask": "Got a question or task? I can help ♪",
@@ -32,7 +53,24 @@
     "workspaceEnter": "Open project workspace",
     "workspaceChoose": "Choose project folder",
     "obsidianLibrary": "Obsidian vault",
-    "obsidianChoose": "Choose Obsidian vault"
+    "obsidianChoose": "Choose Obsidian vault",
+    "modelError": {
+      "viewDetails": "View details", "provider": "Provider", "model": "Model", "status": "HTTP status",
+      "code": "Provider error code", "type": "Error type", "requestId": "Request ID",
+      "hint": "You can retry later. If the problem continues, check the provider docs or contact support.",
+      "unknownHint": "Unknown error. Check the error code and consult the provider documentation.", "vendorDocs": "Provider documentation",
+      "categories": {
+        "auth": "Authentication failed. Check the API key.", "permission": "Permission denied. Check account or model access.",
+        "billing": "Account balance or billing status needs attention.", "quota": "Account quota is insufficient or exhausted.",
+        "rateLimit": "Request rate limit reached. Try again later.", "invalidRequest": "Request parameters or format are invalid.",
+        "notFound": "The model or endpoint was not found.", "contextLimit": "Input exceeds the model context length.",
+        "payloadTooLarge": "The request payload is too large.", "contentPolicy": "The request was blocked by the provider content policy.",
+        "conflict": "The request conflicts with the current service state.", "timeout": "The connection or model response timed out.",
+        "network": "Network connection failed.", "overloaded": "The provider model service is overloaded.",
+        "serverError": "The provider server returned an error.", "unavailable": "The provider model service is temporarily unavailable.",
+        "cancelled": "The model request was cancelled.", "unknown": "Unknown error. Check the error code and consult the provider documentation."
+      }
+    }
   },
   "chatPage": {
     "scrollToBottom": "Scroll to bottom",
@@ -75,6 +113,8 @@
     "loadingAria": "Loading",
     "modelWaitAria": "Waiting for model response",
     "modelWaitText": "Waiting for the model to respond…",
+    "retryWaiting": "Retrying in {{seconds}}s ({{retryNumber}}/{{maxRetries}})",
+    "retryAttempting": "Retrying ({{retryNumber}}/{{maxRetries}})",
     "thinkingTitle": "Thinking…",
     "thinkingDoneTitle": "Done thinking",
     "assistantStickerAlt": "Cyrene sticker",
@@ -587,7 +627,24 @@
     "searchAction": "Search",
     "searchSessions": "Search chats and projects",
     "noSearchResults": "No matching chats",
-    "scheduledTasks": "Scheduled tasks"
+    "scheduledTasks": "Scheduled tasks",
+    "groupsView": "Groups",
+    "pinned": "Pinned",
+    "uncategorizedProjects": "Uncategorized projects",
+    "createProjectCategory": "New project category",
+    "createGroup": "New group",
+    "projectCategoryTitle": "Project category",
+    "groupTitle": "Chat group",
+    "moveToGroup": "Move to group",
+    "dropToUngroup": "Drop here to ungroup",
+    "hideProject": "Hide project",
+    "hiddenProjects": "Hidden projects",
+    "restoreProject": "Show again",
+    "organizationSaveFailed": "Could not save sidebar organization",
+    "sessionActions": "Chat actions",
+    "projectActions": "Project actions",
+    "categoryActions": "Category actions",
+    "groupActions": "Group actions"
   },
   "ttsPlayback": {
     "playbackFailed": "Speech playback failed",

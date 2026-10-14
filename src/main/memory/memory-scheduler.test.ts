@@ -51,6 +51,24 @@ function createScheduler(overrides: Partial<MemorySchedulerDeps> = {}) {
 }
 
 describe("MemoryScheduler", () => {
+  it("retries failed extraction on the next turn and clears the retry after a valid empty result", async () => {
+    const judgeMemory = vi.fn()
+      .mockRejectedValueOnce(new Error("MODEL_REQUEST_TIMEOUT"))
+      .mockResolvedValue({ candidates: [], entities: [] })
+    const { scheduler, deps } = createScheduler({ judgeMemory })
+    for (let i = 1; i <= 6; i++) scheduler.scheduleMemoryWrite(`user ${i}`, "reply", "chat")
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+    expect(deps.writeMemory).not.toHaveBeenCalled()
+    scheduler.scheduleMemoryWrite("user 7", "reply", "chat")
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 7))
+    expect(judgeMemory).toHaveBeenCalledTimes(2)
+    expect(judgeMemory.mock.calls[1][0].map((t: MemoryJudgeTurn) => t.userInput)).toEqual([
+      "user 1", "user 2", "user 3", "user 4", "user 5", "user 6", "user 7",
+    ])
+    scheduler.scheduleMemoryWrite("user 8", "reply", "chat")
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 8))
+    expect(judgeMemory).toHaveBeenCalledTimes(2)
+  })
   it("defers MemoryJudge until every sixth round", async () => {
     const { scheduler, deps, enqueueLabels } = createScheduler()
 

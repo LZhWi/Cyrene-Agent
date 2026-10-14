@@ -81,8 +81,11 @@
               <span class="profile-list-count" id="profile-list-count"></span>
             </div>
             <div class="profile-list" id="model-profile-list"></div>
+            <button type="button" class="save-btn save-btn--ghost" id="new-api-profile-btn">新建 API 档案</button>
+            <div id="oauth-profile-root" hidden></div>
           </div>
 
+          <fieldset id="api-profile-editor">
           <div class="preset-row">
             <div class="field field--full">
               <span><span data-i18n="panel.api.presetRow.label">新建档案 · 选择厂商预设</span></span>
@@ -282,6 +285,7 @@
             <button type="button" class="save-btn save-btn--ghost" id="test-connection-btn"><span data-i18n="panel.api.testConnectionButton">测试连接</span></button>
             <button type="submit" class="save-btn"><span data-i18n="panel.api.saveButton">保存档案</span></button>
           </div>
+          </fieldset>
         </form>
 
         <form class="settings-panel is-hidden" id="api-runtime-form" data-panel="api-advanced">
@@ -298,8 +302,13 @@
                 <input id="model-request-timeout-sec" type="number" min="10" max="600" step="5" placeholder="60" autocomplete="off" />
                 <button type="button" class="timeout-reset" id="model-request-timeout-sec-reset-btn" title="重置为默认（60秒）">↻</button>
               </div>
-              <span class="field-hint">范围：10~600 秒，默认 60 秒。用于非流式模型请求。</span>
-            </label>
+                <span class="field-hint">范围：10~600 秒，默认 60 秒。用于非流式模型请求。</span>
+              </label>
+              <label class="field field--full">
+                <span>主模型请求重试次数</span>
+                <input id="model-request-max-retries" type="number" min="0" max="10" step="1" value="5" autocomplete="off" />
+                <span class="field-hint">首次请求之外的额外次数，默认 5；0 关闭。仅暂时性错误重试，已输出正文或思考后不自动重发。</span>
+              </label>
             <label class="field field--full">
               <span>询问等待时间（秒）</span>
               <div class="timeout-row">
@@ -752,6 +761,7 @@
             </div>
           </div>
 
+          <div id="chat-module-routes-root"></div>
           <div class="agent-settings-grid">
             <article class="agent-setting-card agent-setting-card--full">
               <div class="agent-setting-card__head">
@@ -926,6 +936,11 @@
               </div>
               <p class="memory-card__hint">模型不支持关闭或所选档位时，会按该模型的能力自动折叠到可用设置。</p>
               <p class="memory-card__hint" id="companion-tool-reasoning-save-status" role="status" aria-live="polite"></p>
+            </div>
+            <div class="memory-card" id="memory-lifecycle-card" hidden>
+              <label><input id="memory-lifecycle-tracking" type="checkbox" disabled /> 生命周期跟踪</label>
+              <p class="memory-card__hint">记录实际召回的使用时间、次数和权重，供老化、归档与重新激活使用。权重衰减还需后台生命周期执行开启；此开关不会删除记忆。</p>
+              <p class="memory-card__hint" id="memory-lifecycle-status" role="status" aria-live="polite"></p>
             </div>
             <!-- L0 -->
             <div class="memory-card">

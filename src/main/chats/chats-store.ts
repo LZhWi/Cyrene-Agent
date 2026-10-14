@@ -23,6 +23,7 @@ import {
   type ChatSessionPurpose,
   type ConversationMode,
 } from "../../shared/chat-types";
+import { createChatStorageRecovery } from "./chat-storage-recovery";
 import type { ContextUsageSnapshot } from "../../shared/context-usage";
 
 const ROOT_DIR_NAME = "cyrene-chats";
@@ -35,6 +36,20 @@ let sessionsDir = "";
 let indexPath = "";
 let indexCache: ChatSessionMeta[] = [];
 let initialized = false;
+const safeId = (id: unknown): id is string => typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id);
+function validStoredValue(file: string, value: unknown): boolean {
+  if (path.basename(file) === INDEX_FILE) return Array.isArray(value) && value.every(item =>
+    item && safeId(item.id) && typeof item.title === "string" && Number.isFinite(item.createdAt)
+    && Number.isFinite(item.updatedAt) && Number.isFinite(item.messageCount))
+    && new Set(value.map(item => item.id)).size === value.length;
+  const session = value as ChatSession;
+  return Boolean(session && safeId(session.id) && path.basename(file) === session.id + ".json"
+    && typeof session.title === "string" && Number.isFinite(session.createdAt) && Number.isFinite(session.updatedAt)
+    && Array.isArray(session.messages) && session.messages.every(message => message && typeof message.id === "string"
+      && typeof message.role === "string" && typeof message.content === "string" && Number.isFinite(message.at))
+    && new Set(session.messages.map(message => message.id)).size === session.messages.length);
+}
+const recovery = createChatStorageRecovery(validStoredValue);
 
 function isConversationMode(value: unknown): value is ConversationMode {
   return value === "chat" || value === "work" || value === "code"
@@ -66,9 +81,7 @@ function ensureDirs(): void {
 }
 
 function atomicWriteJson(filePath: string, data: unknown): void {
-  const tmpPath = filePath + ".tmp";
-  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmpPath, filePath);
+  recovery.write(filePath, data);
 }
 
 function readIndexFromDisk(): ChatSessionMeta[] {
@@ -76,7 +89,7 @@ function readIndexFromDisk(): ChatSessionMeta[] {
   try {
     const raw = fs.readFileSync(indexPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) throw new Error("聊天索引结构损坏");
     let migrated = false;
     const normalized: ChatSessionMeta[] = [];
     for (const item of parsed) {
@@ -90,7 +103,7 @@ function readIndexFromDisk(): ChatSessionMeta[] {
         typeof meta.messageCount === "number" &&
         (meta.purpose === undefined || meta.purpose === "proactive-chat")
       );
-      if (!valid) continue;
+      if (!valid) throw new Error("聊天索引条目损坏");
       const session = readSessionFile(meta.id!);
       const indexedMode = meta.mode;
       const mode = normalizePersistedMode(indexedMode ?? session?.mode, meta.purpose ?? session?.purpose);
@@ -124,8 +137,8 @@ function readIndexFromDisk(): ChatSessionMeta[] {
     if (migrated) atomicWriteJson(indexPath, normalized);
     return normalized;
   } catch (err) {
-    console.warn("[chats-store] index.json 解析失败，重置为空:", err);
-    return [];
+    recovery.inspect(indexPath, true);
+    throw err;
   }
 }
 
@@ -136,24 +149,26 @@ function persistIndex(): void {
 }
 
 function sessionPath(id: string): string {
+  if (!safeId(id)) throw new Error("非法会话 ID");
   return path.join(sessionsDir, id + ".json");
 }
 
 function readSessionFile(id: string): ChatSession | null {
   const filePath = sessionPath(id);
+  recovery.inspect(filePath, indexCache.some(meta => meta.id === id));
+  recovery.requireReady();
   if (!fs.existsSync(filePath)) return null;
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as ChatSession;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.messages)) {
-      return null;
-    }
+    if (!validStoredValue(filePath, parsed)) throw new Error("会话结构损坏");
     parsed.mode = normalizePersistedMode(parsed.mode, parsed.purpose);
     delete (parsed as ChatSession & { codeSession?: unknown }).codeSession;
     return parsed;
   } catch (err) {
     console.warn("[chats-store] session 文件解析失败:", id, err);
-    return null;
+    recovery.inspect(filePath, true);
+    throw err;
   }
 }
 
@@ -257,8 +272,25 @@ export function initialize(): void {
   sessionsDir = path.join(rootDir, SESSIONS_SUBDIR);
   indexPath = path.join(rootDir, INDEX_FILE);
   ensureDirs();
-  migrateLegacySessions();
-  indexCache = readIndexFromDisk();
+  const files = fs.readdirSync(sessionsDir).filter(name => name.endsWith(".json") && !name.endsWith(".last-good.json"));
+  for (const name of files) recovery.inspect(path.join(sessionsDir, name));
+  recovery.inspect(indexPath, files.length > 0);
+  if (!recovery.issues().some(issue => issue.file === indexPath) && fs.existsSync(indexPath)) {
+    const metas = JSON.parse(fs.readFileSync(indexPath, "utf8")) as ChatSessionMeta[];
+    for (const meta of metas) recovery.inspect(sessionPath(meta.id), true);
+  }
+  if (!recovery.issues().length) {
+    migrateLegacySessions();
+    indexCache = readIndexFromDisk();
+    const current = new Map(files.map(name => readSessionFile(name.slice(0, -5))).filter((session): session is ChatSession => Boolean(session)).map(session => [session.id, metaFromSession(session)]));
+    const complete = indexCache.map(meta => current.get(meta.id) ?? meta);
+    const indexed = new Set(indexCache.map(meta => meta.id));
+    complete.push(...[...current.values()].filter(meta => !indexed.has(meta.id)));
+    if (JSON.stringify([...complete].sort((a, b) => a.id.localeCompare(b.id))) !== JSON.stringify([...indexCache].sort((a, b) => a.id.localeCompare(b.id)))) {
+      indexCache = complete;
+      persistIndex();
+    }
+  }
   initialized = true;
 }
 
@@ -267,6 +299,7 @@ export function getRootDir(): string {
 }
 
 export function listSessions(options?: { mode?: ConversationMode }): ChatSessionMeta[] {
+  recovery.requireReady();
   // 返回深拷贝，避免外部修改影响缓存；置顶项优先，其余按 updatedAt 倒序
   const sessions = options?.mode
     ? indexCache.filter((session) => session.mode === options.mode)
@@ -486,9 +519,9 @@ export function deleteMessageRound(id: string, messageId: string): ChatSession |
   let start = index;
   let end = index + 1;
   const target = session.messages[index];
-  if (target.role === "model" && index > 0 && session.messages[index - 1].role === "user") {
+  if (target.role === "model" && index > 0 && session.messages[index - 1].role === "user" && !session.messages[index - 1].musicEvent) {
     start = index - 1;
-  } else if (target.role === "user" && index + 1 < session.messages.length
+  } else if (target.role === "user" && !target.musicEvent && index + 1 < session.messages.length
     && session.messages[index + 1].role === "model") {
     end = index + 2;
   }
@@ -550,11 +583,14 @@ export function setSessionContextUsage(
 }
 
 export function deleteSession(id: string): boolean {
+  recovery.requireReady();
   const filePath = sessionPath(id);
   let fileExisted = false;
   if (fs.existsSync(filePath)) {
     try {
       fs.unlinkSync(filePath);
+      const backup = filePath.replace(/\.json$/, ".last-good.json");
+      if (fs.existsSync(backup)) fs.unlinkSync(backup);
       fileExisted = true;
     } catch (err) {
       console.warn("[chats-store] 删除 session 文件失败:", id, err);
@@ -639,4 +675,26 @@ export function clearWorkspaceBinding(sessionId: string): ChatSession | null {
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
   return session;
+}
+
+export function getStorageRecoveryIssues() { return recovery.issues(); }
+
+export function approveStorageRecovery(file: string, isolate = false): void {
+  if (isolate) {
+    if (file === indexPath) throw new Error("索引必须重建，不能隔离删除");
+    recovery.isolate(file);
+    indexCache = indexCache.filter(meta => sessionPath(meta.id) !== file);
+  } else {
+    const fallback = file === indexPath ? fs.readdirSync(sessionsDir)
+      .filter(name => name.endsWith(".json") && !name.endsWith(".last-good.json"))
+      .map(name => JSON.parse(fs.readFileSync(path.join(sessionsDir, name), "utf8")) as ChatSession)
+      .map(metaFromSession) : undefined;
+    recovery.recover(file, fallback);
+  }
+  if (!recovery.issues().length) {
+    indexCache = readIndexFromDisk().filter(meta => fs.existsSync(sessionPath(meta.id)));
+    persistIndex();
+    migrateLegacySessions();
+    indexCache = readIndexFromDisk();
+  }
 }

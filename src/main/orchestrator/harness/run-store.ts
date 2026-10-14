@@ -250,6 +250,18 @@ export class HarnessRunStore {
     fs.mkdirSync(this.sessionsDir, { recursive: true });
     this.readIndex();
     let changed = false;
+    // 索引是查找缓存；文件才是权威数据，缺失索引不能隐藏可恢复运行。
+    for (const name of fs.readdirSync(this.sessionsDir)) {
+      if (!name.endsWith(".json")) continue;
+      const runId = name.slice(0, -5);
+      const session = this.read(runId);
+      if (!session || session.runId !== runId) continue;
+      const row = this.index.get(runId);
+      if (!row || row.conversationId !== session.conversationId || row.status !== session.status || row.updatedAt !== session.updatedAt) {
+        this.index.set(runId, { conversationId: session.conversationId, runId, status: session.status, updatedAt: session.updatedAt });
+        changed = true;
+      }
+    }
     for (const row of [...this.index.values()]) {
       // 孤儿行：session 文件已不存在（崩溃/手动清理遗留），直接清行
       if (!fs.existsSync(this.sessionPath(row.runId))) {

@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
-import type { PluginContext, PluginLlmMessage } from "@playa0v0/cyrene-plugin-sdk";
+import type { PluginContext, PluginLlmMessage, PluginLlmGenerateOptions } from "@playa0v0/cyrene-plugin-sdk";
 
 export interface ModelConfig {
   mode: "host" | "custom";
@@ -84,14 +84,16 @@ export function createModelService(ctx: PluginContext, fetcher: typeof fetch = f
       ctx.storage.set("model-config", next); config = next;
       return this.view();
     },
-    async generate(messages: PluginLlmMessage[], signal: AbortSignal, limits: { maxTokens?: number; timeoutMs?: number; reasoning?: "inherit" | "on" | "off" } = {}): Promise<string> {
+    async generate(messages: PluginLlmMessage[], signal: AbortSignal, limits: { maxTokens?: number; timeoutMs?: number; reasoning?: "inherit" | "on" | "off"; routingModule?: PluginLlmGenerateOptions["routingModule"] } = {}): Promise<string> {
+      if (signal.aborted || ctx.signal.aborted) throw new Error("请求已取消");
+      const routed = await ctx.deps.llm?.generateTextIfRouted?.(messages, { ...limits, signal });
+      if (routed !== null && routed !== undefined) return routed;
       const snapshot = { ...config };
       const maxTokens = limits.maxTokens ?? 4096;
       const timeoutMs = limits.timeoutMs ?? 120000;
-      if (signal.aborted || ctx.signal.aborted) throw new Error("请求已取消");
       if (snapshot.mode === "host" && snapshot.reuse === "current") {
         if (!ctx.deps.llm) throw new Error("当前宿主模型服务不可用");
-        try { return await ctx.deps.llm.generateText(messages, { signal, maxTokens, timeoutMs, purpose: "companion",
+        try { return await ctx.deps.llm.generateText(messages, { signal, maxTokens, timeoutMs, purpose: "companion", routingModule: limits.routingModule,
           ...(limits.reasoning ? { reasoning: limits.reasoning } : {}) }); }
         catch { throw new Error(signal.aborted ? "请求已取消" : "宿主模型请求失败，请检查主程序模型设置"); }
       }

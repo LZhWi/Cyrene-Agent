@@ -302,20 +302,25 @@ describe("Harness user-wait builtins", () => {
     }, state, request);
 
     expect(result.outcome).toBe("success");
-    expect(state.uncertainEffects).toEqual([]);
+    expect(state.uncertainEffects).toEqual([expect.objectContaining({
+      id: "effect-1", repeatAuthorization: { source: "user", grantedAt: expect.any(Number) },
+    })]);
   });
 
   it("keeps the effect unresolved when the user does not authorize", async () => {
     const state = currentState();
+    state.uncertainEffects[0].repeatAuthorization = { source: "user", grantedAt: 1 };
+    const persist = vi.fn();
     const result = await executeConfirmUncertainEffect({
       id: "confirm-1",
       name: "confirm_uncertain_effect",
       arguments: JSON.stringify({ effectId: "effect-1" }),
     }, state, vi.fn(async () => ({
       answers: [{ field: "decision", selectedValues: ["do_not_repeat"] }],
-    })));
+    })), persist);
 
     expect(result.outcome).toBe("success");
     expect(state.uncertainEffects[0].repeatAuthorization).toBeUndefined();
+    expect(persist).toHaveBeenCalledTimes(1);
   });
 });

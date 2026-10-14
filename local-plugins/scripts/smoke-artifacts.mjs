@@ -79,9 +79,15 @@ for (const id of artifactDirs) {
     : manifest;
   assertValidManifest(sdkManifest);
 
-  const plugin = require(path.join(pluginDir, manifest.entry));
+  const loaded = require(path.join(pluginDir, manifest.entry));
+  const plugin = loaded.default ?? loaded;
   if (typeof plugin?.register !== "function") {
-    throw new Error(`${id} 构建入口未直接导出 register()`);
+    throw new Error(`${id} 构建入口未导出 register()`);
+  }
+
+  if (manifest.id === "cyrene-hud") {
+    console.log(`[smoke] ${id}: manifest 和构建入口通过；窗口注册由 test-cyrene-hud-electron.mjs 验证`);
+    continue;
   }
 
   const allDeps = createMockDeps();

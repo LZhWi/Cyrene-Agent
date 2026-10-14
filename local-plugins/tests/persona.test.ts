@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPersonaService, parsePersonaStyle, personaStyleFromHost, PERSONA_STYLE_IDS } from "../plugins/companion-chat/src/persona";
 
@@ -31,6 +32,21 @@ describe("本地人格稳定提示词", () => {
     expect(prompt).toContain("风格：温柔・和善");
     expect(prompt).not.toContain("# 昔涟 · Identity");
     expect(prompt).not.toContain("## Live2D 与聊天文字的分工");
+  });
+
+  it("日记仅使用独立人格与写作文件，不叠加聊天章节", () => {
+    const prompt = createPersonaService(root).buildDiary();
+    expect(prompt).toBe(readFileSync(path.join(root, "diary-system.md"), "utf8").replace(/\r\n/g, "\n").trim());
+    expect(prompt).toContain("你明亮、可爱、活泼、浪漫");
+    expect(prompt).toContain("超长柔粉色长发");
+    expect(prompt).toContain("平等伴侣");
+    expect(prompt).toContain("## 个人喜好");
+    expect(prompt).toContain("## 私人书写的声音");
+    expect(prompt).toContain("## 事实、时间与资料边界");
+    expect(prompt).toContain("# 昔涟的私人日记");
+    expect(prompt).not.toContain("## Live2D 与聊天文字的分工");
+    expect(prompt).not.toContain("## 回复边界");
+    expect(prompt).not.toContain("不擅自转移话题或收束话题");
   });
 
   it("为独立 Tool 阶段提供不面向用户的严格调度规则", () => {

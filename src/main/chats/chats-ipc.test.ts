@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
   openPath: vi.fn(async () => ""),
   scheduleVisual: vi.fn(),
+  confirmRecovery: vi.fn(async () => ({ response: 0 })),
 }));
 
 vi.mock("../chat/visual-history-caption", () => ({ scheduleVisualHistoryCaption: mocks.scheduleVisual }));
@@ -30,16 +31,53 @@ vi.mock("electron", () => ({
   },
   dialog: {
     showOpenDialog: vi.fn(),
+    showMessageBox: mocks.confirmRecovery,
   },
 }));
 
 describe("chats IPC mode filtering", () => {
+  it("keeps inspector reads scoped to Work/Code/Learn and the task's owning session", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const { TaskSessionStore } = await import("../tasks/task-session-store");
+    registerChatsIpc();
+    const event = { sender: {} };
+    const create = mocks.handlers.get(IPC.CHATS_CREATE)!;
+    const work = await create(event, { mode: "work" }) as { id: string };
+    const other = await create(event, { mode: "code" }) as { id: string };
+    const chat = await create(event, { mode: "chat" }) as { id: string };
+    const tasks = new TaskSessionStore(mocks.userDataDir);
+    const task = tasks.create({ parentConversationId: work.id, parentRunId: "run", description: "fixture", prompt: "synthetic task", mode: "work", subagentType: "general" });
+    const filename = path.join(mocks.userDataDir, "cyrene-tasks", "sessions", `${task.id}.json`);
+    const before = fs.readFileSync(filename, "utf8");
+    const getTask = mocks.handlers.get(IPC.WORKSPACE_INSPECTOR_TASK)!;
+    expect(await getTask(event, { sessionId: work.id, taskId: task.id })).toEqual({ ok: true, value: task });
+    expect(await getTask(event, { sessionId: other.id, taskId: task.id })).toMatchObject({ ok: false });
+    expect(await getTask(event, { sessionId: chat.id, taskId: task.id })).toMatchObject({ ok: false });
+    expect(await getTask(event, { sessionId: work.id, taskId: "../../model-settings" })).toMatchObject({ ok: false });
+    expect(fs.readFileSync(filename, "utf8")).toBe(before);
+    expect(await mocks.handlers.get(IPC.WORKSPACE_INSPECTOR_LIST)!(event, { sessionId: chat.id, path: "" })).toMatchObject({ ok: false });
+  });
   beforeEach(() => {
     vi.resetModules();
     mocks.handlers.clear();
     mocks.openPath.mockClear();
     mocks.scheduleVisual.mockClear();
+    mocks.confirmRecovery.mockReset().mockResolvedValue({ response: 0 });
     mocks.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-chats-ipc-"));
+  });
+
+  it("leaves corrupt data untouched on cancellation and restores only on confirmation", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc"); registerChatsIpc();
+    const store = await import("./chats-store");
+    const session = store.createSession({ mode: "chat" });
+    const file = path.join(store.getRootDir(), "sessions", session.id + ".json");
+    fs.writeFileSync(file, "broken");
+    const get = mocks.handlers.get(IPC.CHATS_GET_PAGE)!;
+    await expect(get({}, { id: session.id })).rejects.toThrow("等待恢复确认");
+    expect(fs.readFileSync(file, "utf8")).toBe("broken");
+    mocks.confirmRecovery.mockResolvedValue({ response: 1 });
+    expect(await get({}, { id: session.id })).toMatchObject({ session: { id: session.id } });
+    expect(store.getStorageRecoveryIssues()).toEqual([]);
   });
 
   it("returns only Code sessions for CHATS_LIST({ mode: \"code\" })", async () => {

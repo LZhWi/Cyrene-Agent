@@ -8,6 +8,8 @@ import { L0_FIELDS, L1_FIELDS, type ProfileFact, type Profiles } from "./profile
 import { normalizeStoredFacets } from "./facets";
 import { deriveSummarySources } from "./summary-sources";
 import { createLegacyRuntimePlan, type LegacyRuntimePlan } from "./legacy-runtime";
+import { createLegacyCompatibility, type LegacyCompatibility } from "./legacy-compatibility";
+import { validateLegacySource, sourceNodes } from "./legacy-source";
 
 export interface LegacyImportPreview {
   sourceHash: string; sourceBytes: number;
@@ -19,13 +21,44 @@ export interface LegacyImportPreview {
   runtime: LegacyRuntimePlan["summary"];
   canImport: boolean; warnings: string[];
 }
-export interface LegacyImportPlan { preview: LegacyImportPreview; entries: Entry[]; evidence: Evidence[]; profiles: Profiles; sourceAttested: boolean; runtime?: LegacyRuntimePlan }
+export interface LegacyImportPlan { preview: LegacyImportPreview; entries: Entry[]; evidence: Evidence[]; profiles: Profiles; sourceAttested: boolean; runtime?: LegacyRuntimePlan; archive?: { version: 1; sourceHash: string; raw: any }; compatibility?: LegacyCompatibility }
 
 export const defaultLegacyMemoryPath = () => path.join(homedir(), "AppData", "Roaming", "live2d-cyrene", "memory.json");
 const knownStatuses = new Set<string>(ENTRY_STATUSES);
 const safeStatus = (value: unknown) => knownStatuses.has(String(value)) ? String(value) : "unknown";
 const arrayLength = (value: unknown) => Array.isArray(value) ? value.length : 0;
 const objectValueCount = (value: unknown) => value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).length : 0;
+
+function legacyConflictIds(item: any, entries: any[]): string[] | undefined {
+  if (item?.conflictWith === undefined) return undefined;
+  const refs = item.conflictWith;
+  if (!Array.isArray(refs) || refs.length > 20 || new Set(refs).size !== refs.length) throw new Error("旧记忆冲突关联损坏");
+  if (!refs.length) return undefined;
+  // 本地保存 RAG ID；插件关系必须使用 L2 条目 ID，不能直接复制。
+  return refs.map((ref: unknown) => {
+    const targets = entries.filter((entry) => typeof ref === "string" && ref && entry?.ragId === ref);
+    if (targets.length !== 1 || typeof targets[0].id !== "string" || !targets[0].id || targets[0].id === item.id) throw new Error("旧记忆冲突目标缺失或不唯一");
+    return targets[0].id;
+  });
+}
+
+/** A resolved log and both persistent back-links must agree before recovering derivation lineage. */
+function legacyParentIds(raw: any): Map<string, string[]> {
+  const result = new Map<string, string[]>(), ambiguous = new Set<string>();
+  const byId = new Map<string, any>(raw.l2.map((entry: any) => [entry.id, entry]));
+  for (const log of raw.conflictLogs ?? []) {
+    const id = log?.resolutionMemoryId, parents = [log?.sourceL2Id, log?.targetL2Id];
+    if (!byId.has(id) || byId.get(id).isSummary || log.status !== "resolved" || log.resolverStatus !== "resolved"
+      || !["context_difference", "preference_evolution", "direct_conflict"].includes(log.resolutionType)
+      || log.shouldAskUser || log.clarificationNeeded || parents[0] === parents[1]
+      || parents.some(parent => parent === id || !byId.has(parent) || (byId.get(parent).mergedInto !== id && byId.get(parent).supersededBy !== id))) continue;
+    const ordered = parents.sort();
+    if (result.has(id) && JSON.stringify(result.get(id)) !== JSON.stringify(ordered)) ambiguous.add(id);
+    result.set(id, ordered);
+  }
+  for (const id of ambiguous) result.delete(id);
+  return result;
+}
 
 function profileStats(raw: any) {
   let l0 = 0, l1 = 0, invalid = 0;
@@ -63,6 +96,10 @@ export function analyzeLegacyMemory(raw: any, sourceHash = "synthetic", sourceBy
   }
   let brokenRelations = 0;
   for (const item of raw.l2) for (const key of ["supersededBy", "mergedInto"] as const) if (item?.[key] !== undefined && (!ids.has(item[key]) || item[key] === item.id)) brokenRelations++;
+  for (const item of raw.l2) {
+    try { legacyConflictIds(item, raw.l2); } catch { brokenRelations++; }
+    try { validateLegacySource({ conversationId: item?.sourceConversationId ?? "", messageIds: item?.sourceMessageIds ?? [], evidence: item?.sourceEvidence ?? [], ...(item?.contentRevision === undefined ? {} : { contentRevision: item.contentRevision }) }); } catch { brokenRelations++; }
+  }
   let summaryLineageIssues = 0;
   if (summaries) {
     try {
@@ -104,7 +141,7 @@ export function analyzeLegacyMemory(raw: any, sourceHash = "synthetic", sourceBy
     orphaned ? "存在无法关联到 L2 的独立证据，正式导入时必须保留为待处理项。" : "",
     profiles.ignoredLegacyFields ? "旧 nickname 不属于记忆画像字段，暂不导入；preferredName 会独立保留。" : "",
     summaryLineageIssues ? "压缩摘要存在缺失子项、未定位叶子或循环，拒绝用摘要自身时间兜底。" : "",
-    excludedTotal ? "Embedding、DMAE、梦境及维护日志等尚无等价插件结构，本阶段不会导入。" : "",
+    excludedTotal ? "原始字段完整留档；向量和 DMAE 分别转换，维护日志不伪造可撤销记录，未核验轮次不自动提取。" : "",
     unsafe ? "检测到结构或关联问题，当前禁止导入。" : "结构检查通过仍不代表来源语义已经验证。",
   ].filter(Boolean);
   return {
@@ -142,22 +179,26 @@ export function createLegacyImportPlan(file: unknown, expectedHash: unknown, sou
   const runtime = preserveRuntime ? createLegacyRuntimePlan(source.raw) : undefined;
   if (runtime && !runtime.summary.valid) throw new Error("旧运行状态未通过无损映射门禁");
   const makeFact = (content: string, sourceAt: number): ProfileFact => ({ content: content.trim(), sourceAt, quote: "", turnId: "", sessionId: "", origin: sourceAttested ? "legacy-user-attested" : "legacy-import" });
-  const profiles: Profiles = { l0: {}, l1: {}, l0Locked: false };
+  const parents = legacyParentIds(source.raw);
+  const profiles: Profiles = { l0: {}, l1: {}, l0Locked: source.raw.l0.isPinned === true };
   for (const field of Object.keys(L0_FIELDS) as Array<keyof typeof L0_FIELDS>) if (source.raw.l0[field]?.trim()) profiles.l0[field] = makeFact(source.raw.l0[field], source.raw.l0.updatedAt);
   for (const field of Object.keys(L1_FIELDS) as Array<keyof typeof L1_FIELDS>) if (source.raw.l1[field]?.trim()) profiles.l1[field] = makeFact(source.raw.l1[field], source.raw.l1.generatedAt);
   const entries: Entry[] = source.raw.l2.map((item: any) => ({
     id: item.id, content: item.content.trim(), quote: typeof item.sourceQuote === "string" ? item.sourceQuote : "", sourceAt: item.sourceAt ?? item.createdAt,
     turnId: "", sessionId: typeof item.sourceConversationId === "string" ? item.sourceConversationId : "", pinned: item.isPinned === true, status: item.status,
     provenance: sourceAttested ? "legacy-user-attested" as const : "legacy-unverified" as const,
+    legacySource: { conversationId: item.sourceConversationId ?? "", messageIds: structuredClone(item.sourceMessageIds ?? []), evidence: structuredClone(item.sourceEvidence ?? []), ...(item.contentRevision === undefined ? {} : { contentRevision: item.contentRevision }), ...(parents.has(item.id) ? { parentEntryIds: [...parents.get(item.id)!] } : {}) },
     ...(typeof item.triggerText === "string" ? { triggerText: item.triggerText } : {}),
     ...(item.facets === undefined ? {} : { facets: normalizeStoredFacets(item.facets) }),
     ...(Number.isFinite(item.sourceEndAt) ? { sourceEndAt: item.sourceEndAt } : {}),
     ...(Number.isFinite(item.validFrom) ? { validFrom: item.validFrom } : {}), ...(Number.isFinite(item.validTo) ? { validTo: item.validTo } : {}),
     ...(typeof item.supersededBy === "string" ? { supersededBy: item.supersededBy } : {}), ...(typeof item.mergedInto === "string" ? { mergedInto: item.mergedInto } : {}),
+    ...(item.conflictWith?.length ? { conflictWith: legacyConflictIds(item, source.raw.l2) } : {}),
     ...(item.isSummary === true ? { isSummary: true, subEntryIds: [...item.subEntryIds] } : {}),
   }));
-  const leafRanges = new Map(entries.filter((entry) => !entry.isSummary).map((entry) => [entry.id, { start: entry.sourceAt, end: entry.sourceEndAt ?? entry.sourceAt }]));
-  const summaryRanges = deriveSummarySources(entries, leafRanges);
+  const leafRanges = new Map(entries.filter((entry) => !entry.isSummary && !entry.legacySource?.parentEntryIds).map((entry) => [entry.id, { start: entry.sourceAt, end: entry.sourceEndAt ?? entry.sourceAt }]));
+  const summaryRanges = deriveSummarySources(sourceNodes(entries), leafRanges);
+  if ([...summaryRanges.values()].some(result => result.status !== "derived")) throw new Error("旧裁决或摘要来源谱系无法推导");
   for (const entry of entries) if (entry.isSummary) {
     const result = summaryRanges.get(entry.id);
     if (!result || result.status !== "derived") throw new Error("压缩摘要来源谱系无法推导");
@@ -165,8 +206,11 @@ export function createLegacyImportPlan(file: unknown, expectedHash: unknown, sou
   }
   const evidence: Evidence[] = source.raw.evidence.map((item: any) => ({
     id: item.id, memoryId: item.memoryId, quoteSnippet: item.quoteSnippet, createdAt: item.createdAt, sourceStatus: item.sourceStatus, provenance: sourceAttested ? "legacy-user-attested" as const : "legacy-unverified" as const,
+    ...(typeof item.previousContent === "string" ? { previousContent: item.previousContent } : {}),
     ...(typeof item.conversationId === "string" ? { conversationId: item.conversationId } : {}), ...(Array.isArray(item.messageIds) ? { messageIds: item.messageIds } : {}),
     ...(typeof item.contextBeforeSnippet === "string" ? { contextBeforeSnippet: item.contextBeforeSnippet } : {}), ...(typeof item.contextAfterSnippet === "string" ? { contextAfterSnippet: item.contextAfterSnippet } : {}),
   }));
-  return { preview, entries, evidence, profiles, sourceAttested, ...(runtime ? { runtime } : {}) };
+  const compatibility = createLegacyCompatibility(source.raw, entries);
+  return { preview, entries, evidence, profiles, sourceAttested, ...(runtime ? { runtime } : {}),
+    archive: { version: 1, sourceHash: source.hash, raw: structuredClone(source.raw) }, compatibility };
 }

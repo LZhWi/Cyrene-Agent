@@ -1,3 +1,4 @@
+import { chatModuleHasOverride } from "./settings/chat-module-routes";
 import { app, dialog, powerMonitor, safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -10,7 +11,7 @@ import { broadcastChatsChanged } from "./chats/chats-ipc";
 import { toolRegistry } from "./orchestrator/tools/registry/tool-registry";
 import { loadGeneralSettings, saveGeneralSettings } from "./settings/settings-facade";
 import { loadUserProfile, resolveUserTimezone } from "./settings-store";
-import { loadModelSettings, resolveModelSettingsProfile } from "./settings/model-settings";
+import { getDefaultModelProfile, loadModelSettings, resolveModelSettingsProfile } from "./settings/model-settings";
 import { pluginGenerateText } from "./plugin-llm";
 import { createPluginAgentRunner } from "./plugin-agent";
 import { createHostServiceFactory } from "./plugin-host/host-services";
@@ -20,6 +21,7 @@ import { createSpeechInputService } from "./plugin-host/speech-input-service";
 import { createSpeechInputCommitBridge } from "./plugin-host/speech-input-commit-bridge";
 import { createSpeechInputCallController } from "./plugin-host/speech-input-call-controller";
 import { createScreenObservationService } from "./plugin-host/screen-observation-service";
+import { callMemoryContext } from "./call/call-memory-context";
 import { formatCallContextEvent, loadCallContextEvents } from "./call/call-context-store";
 import { retryVisualHistoryAfterScreenObservation } from "./chat/visual-history-caption";
 import { createUserPresenceService } from "./plugin-host/user-presence-service";
@@ -41,6 +43,7 @@ import { enqueueLLMTask } from "./llm-queue";
 import type { IpcScope } from "./application/ipc-scope";
 import type { AgentRuntime } from "./orchestrator/agent-runtime";
 import type { NormalizedScreenRegion } from "./plugin-host/screen-observation-diff";
+import type { WindowManager } from "./windows/window-manager";
 
 /** 调度存储视图：插件服务读写任务，卸载清理时按归属批量删除插件任务。 */
 export type PluginRuntimeSchedulerStore = PluginSchedulerStore & {
@@ -48,6 +51,7 @@ export type PluginRuntimeSchedulerStore = PluginSchedulerStore & {
 };
 
 export interface PluginRuntimeDeps {
+  windowManager?: WindowManager;
   llmClient: LlmClient;
   ipc: IpcScope;
   /** 统一人设与提示词管线；供无头插件 Agent 复用。 */
@@ -66,6 +70,8 @@ export interface PluginRuntimeDeps {
 }
 
 export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<PluginManager> {
+  // Source reconciliation runs during plugin registration, before chat IPC is registered.
+  chatsStore.initialize();
   const userPluginRoot = path.join(app.getPath("userData"), "plugins");
   const pluginDataRoot = path.join(app.getPath("userData"), "plugin-data");
   // 插件 IPC 路由器：面板转发与既有 ipcMain 直达共用一套执行路径
@@ -111,6 +117,8 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
         pluginDataRoot,
         channelManager: { has: (channelId) => channelManager.has(channelId as ChannelId) },
         llm: {
+          generateTextIfRouted: (messages, options) => (chatModuleHasOverride(options?.routingModule ?? "plugin") || options?.routingModule === "proactive" && chatModuleHasOverride("proactiveDecision"))
+            ? pluginGenerateText(messages, resolveModelSettingsProfile(loadModelSettings()), deps.llmClient, enqueueLLMTask, options) : Promise.resolve(null),
           generateText: (messages, options) => pluginGenerateText(
             messages,
             resolveModelSettingsProfile(loadModelSettings()),
@@ -127,6 +135,17 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
         }),
         storage: safeStorage,
         chatsReader: chatsStore,
+        ...(deps.windowManager ? {
+          windowNavigation: {
+            listSessions: () => chatsStore.listSessions(),
+            createSession: (mode) => {
+              const session = chatsStore.createSession({ mode, modelProfileId: getDefaultModelProfile()?.id });
+              broadcastChatsChanged();
+              return { id: session.id, title: session.title, mode };
+            },
+            windows: deps.windowManager,
+          },
+        } : {}),
         assistantDeliverySink: {
           canStart: () => {
             const target = loadGeneralSettings().proactiveDeliveryTarget;
@@ -193,6 +212,10 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
           onSnapshotFinished: retryVisualHistoryAfterScreenObservation,
         }),
         companionContext: {
+          memoryContext: async ({ conversationId, inputMessageId, kinds, signal }) => {
+            if (signal?.aborted) throw new Error("通话记忆读取已取消");
+            return kinds.includes("call") ? callMemoryContext(chatsStore.getSession(conversationId)?.messages ?? [], inputMessageId, loadCallContextEvents()) : "";
+          },
           snapshot: async ({ kinds }) => ({
             items: kinds && !kinds.includes("call") ? [] : loadCallContextEvents().slice(-16).map((event) => ({
               kind: "call" as const,

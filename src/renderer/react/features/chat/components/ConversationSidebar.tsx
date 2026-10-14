@@ -4,6 +4,7 @@ import { Input, Menu, Modal, Popover } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "../../../i18n";
 import type { ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
+import { sessionTime } from "./workspace-ui";
 
 interface ConversationSidebarProps {
   mode: ConversationMode;
@@ -202,6 +203,7 @@ export function ConversationSidebar({
         <span className="cy-session-label">
           <span className="cy-session-label__title">{session.title || t("sidebar.defaultSessionTitle")}</span>
           {session.pinned && <PushpinOutlined className="cy-session-label__pin" />}
+          {mode !== "chat" && <time className="cy-session-label__time" dateTime={new Date(session.updatedAt).toISOString()}>{sessionTime(session.updatedAt)}</time>}
         </span>
       ),
     icon: <ConversationIcon />,

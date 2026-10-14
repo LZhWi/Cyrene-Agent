@@ -41,6 +41,7 @@ import {
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "../chat-time-context";
+import { mergeCompanionHistory, type CompanionTimelineEvent } from "../call/external-history-window";
 import { perf } from "../perf-trace";
 import { debugLog } from "../agent-log";
 import { buildResponseContext } from "../cita/context-package";
@@ -79,7 +80,7 @@ export interface BuildOptionsDeps {
   loadVisionConfig?: (modelProfileId?: string) => VisionConfig | null;
   loadGeneralSettings: () => StyleSettingsLite;
   loadUserProfile: () => UserProfileLite;
-  buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
+  buildEnvironmentContext: (model: { provider: string; model: string; multimodal?: boolean }, profile: unknown) => string;
   /** @deprecated 仅保留旧测试/调用方结构兼容；生产不再使用。 */
   buildSystemPrompt?: (styleFile: string) => string;
   buildSkillCatalog: (skills: ReadonlyArray<unknown>) => string;
@@ -172,6 +173,7 @@ export interface BuildOptionsDeps {
    */
   getWorkspaceBinding?: (conversationId: string) => { workspaceRoot: string; displayName: string; boundAt: number } | undefined;
   /** 构建已启用插件贡献的每轮动态提示词；失败时调用方应降级为空内容。 */
+  getCompanionTimelineEvents?: () => CompanionTimelineEvent[];
   buildPluginPromptContext?: (input: {
     source: "conversation" | "plugin-agent";
     mode: ConversationMode;
@@ -182,6 +184,7 @@ export interface BuildOptionsDeps {
     chatBackend?: "native" | "companion";
     timezone?: string;
     referenceContext?: string;
+    visibleCompanionEvents?: CompanionTimelineEvent[];
     target?: "soul" | "tool";
   }) => Promise<string>;
   /** 插件后端的人格稳定层；不接收本轮用户正文，空结果时回退上游原生人格。 */
@@ -234,6 +237,7 @@ export interface OnRunFinishedDeps {
 }
 
 export interface ModelSettingsLite {
+  modelRequestMaxRetries?: number;
   provider: string;
   baseUrl: string;
   model: string;
@@ -491,7 +495,7 @@ function buildStylePromptBlock(markdown: string): string {
 export async function buildAgentRunOptions(
   input: AguiRunInput,
   deps: BuildOptionsDeps,
-): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
+): Promise<{ options: CyreneRunOptions; latestUserText: string; timezone: string }> {
   const settings = deps.loadModelSettings(input.modelProfileId);
   const directVisionOk = settings.multimodal !== false;
   const styleSettings = deps.loadGeneralSettings();
@@ -547,12 +551,19 @@ export async function buildAgentRunOptions(
     && styleSettings.chatMomentsContextEnabled === true
     && styleSettings.momentsEnabled === true
     && Boolean(deps.buildMomentsContext);
-  const messagesForSoul = socialContextEnabled ? messages.slice(-12) : messages;
+  let companionEvents: CompanionTimelineEvent[] = [];
+  if (useCompanionDesktopChat) {
+    try { companionEvents = deps.getCompanionTimelineEvents?.() ?? []; }
+    catch (error) { console.warn("[Cyrene] companion timeline unavailable:", error); }
+  }
+  const companionWindow = useCompanionDesktopChat
+    ? mergeCompanionHistory(messages as unknown as ChatContextMessage[], companionEvents) : undefined;
+  const messagesForSoul = companionWindow?.messages ?? (socialContextEnabled ? messages.slice(-12) : messages);
   const profile = deps.loadUserProfile();
   const resolvedProfileTimezone = profile.timezoneMode === "manual" ? profile.timezone : "";
   const resolvedDefaultCity = profile.weatherLocationMode === "off" ? "" : profile.defaultCity;
   const contextTimezone = resolveChatContextTimezone(resolvedProfileTimezone);
-  const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
+  const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext, timestampRule, gapNotice } = buildConversationTimeContext(
     messagesForSoul as unknown as ChatContextMessage[],
     contextTimezone,
     useCompanionDesktopChat ? "local-visible" : "private",
@@ -581,7 +592,7 @@ export async function buildAgentRunOptions(
   const envTimer = perf.begin("build_environment_context");
   try {
     environmentContext = deps.buildEnvironmentContext(
-      { provider: settings.provider, model: settings.model },
+      { provider: settings.provider, model: settings.model, multimodal: directVisionOk },
       {
         nickname: profile.nickname,
         callPreference: profile.callPreference,
@@ -732,6 +743,7 @@ export async function buildAgentRunOptions(
         chatBackend: useNativeChatSystems ? "native" as const : "companion" as const,
         timezone: contextTimezone,
         referenceContext: useCompanionDesktopChat ? referenceContext : undefined,
+        visibleCompanionEvents: companionWindow?.events,
       }),
     }) ?? "";
   } catch (error) {
@@ -975,7 +987,7 @@ export async function buildAgentRunOptions(
     baseSoulSystemPrompt;
   const companionSoulSystemContent = useCompanionDesktopChat
     ? (environmentContext ? `${environmentContext}\n\n${COMPANION_SOUL_TOOL_CORRECTION}\n\n` : "")
-      + (conversationTimeContext ? `${conversationTimeContext}\n\n---\n\n` : "")
+      + (timestampRule ? `${timestampRule}\n\n---\n\n` : "")
       + (channelSystem ? `${channelSystem}\n\n` : "")
       + baseSoulSystemPrompt
       + (stylePromptBlock ? `\n\n---\n\n${stylePromptBlock}` : "")
@@ -984,6 +996,7 @@ export async function buildAgentRunOptions(
       + (autoInjectedSoulContext ? `\n\n---\n\n${autoInjectedSoulContext}` : "")
       + skillActivation
       + toneInjection
+      + (gapNotice ? `\n\n${gapNotice}\n\n` : "")
       + (pluginPromptContext ? `${pluginPromptContext}\n\n` : "")
       + (chatSocialContextBlock ? `${chatSocialContextBlock}\n\n` : "")
       + (momentsContextBlock ? `${momentsContextBlock}\n\n` : "")
@@ -1083,6 +1096,7 @@ export async function buildAgentRunOptions(
         explicitTransport: settings.explicitTransport,
         reasoning: settings.reasoning,
         contextWindowTokens: settings.contextWindowTokens ?? 256000,
+        modelRequestMaxRetries: settings.modelRequestMaxRetries ?? 5,
       },
       toolReasoning: generalSettings.companionToolReasoning ?? { mode: "off" },
       maxParallelToolCalls: typeof generalSettings.maxParallelToolCalls === "number"
@@ -1129,6 +1143,7 @@ export async function buildAgentRunOptions(
       resolvedWorkspaceRoot,
     },
     latestUserText,
+    timezone: contextTimezone,
   };
 }
 

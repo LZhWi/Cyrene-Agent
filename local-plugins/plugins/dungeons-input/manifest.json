@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "id": "dungeons-input",
+  "name": "昔涟地下城输入测试",
+  "version": "0.2.0",
+  "description": "初代地下城本地双人独立输入、角色观察与营地短距离跟随",
+  "author": "Cyrene local integration",
+  "entry": "index.cjs",
+  "settingsPanel": "settings.html",
+  "settingsSection": "plugins",
+  "defaultEnabled": false
+}

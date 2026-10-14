@@ -4,9 +4,10 @@ export interface LifeEventRef { id: string; revision: number }
 export type LifeGoalStatus = "active" | "paused" | "completed" | "cancelled";
 export interface LifeGoal {
   id: string; title: string; activity: string; dueDate: string | null; remind: boolean;
-  status: LifeGoalStatus; source: "user"; revision: number;
+  status: LifeGoalStatus; source: "user" | "model"; revision: number;
   createdAt: number; updatedAt: number; activeSince: number; eventRefs: LifeEventRef[];
 }
+export interface ModelLifeIntention { id: string | null; title: string; activity: string; targetDate: string }
 export interface LifeDiary {
   id: string; date: string; summary: string; eventRefs: LifeEventRef[]; revision: number;
   status: "active" | "revoked"; createdAt: number; updatedAt: number;
@@ -23,8 +24,8 @@ function dateKey(value: unknown): value is string {
 }
 const sameRefs = (left: LifeEventRef[], right: LifeEventRef[]) => JSON.stringify(left) === JSON.stringify(right);
 const refsOf = (events: LifeEvent[]) => events.map(({ id, revision }) => ({ id, revision }));
-const goalEvidence = (event: LifeEvent, activity: string) => event.status === "materialized"
-  && event.source === "runtime_schedule" && event.text.includes(activity);
+const goalEvidence = (event: LifeEvent, goal: Pick<LifeGoal, "id" | "activity">) => event.status === "materialized"
+  && event.source === "runtime_schedule" && (event.goalIds ? event.goalIds.includes(goal.id) : event.text.includes(goal.activity));
 const diarySummary = (events: LifeEvent[]) => events.map((event) => `${event.source === "legacy_schedule" ? "旧版模拟记录（来源未细分）"
   : event.status === "inferred" ? "离线推演" : "模拟活动"}：${event.text}`).join("\n").slice(0, 8_000);
 
@@ -32,7 +33,7 @@ export function validateJournal(value: unknown, events: LifeEvent[], maxAt: numb
   if (value === undefined) return { goals: [], diaries: [] };
   const journal = value as LifeJournal;
   const bad = () => new Error("生活日记或目标损坏，拒绝覆盖");
-  if (!journal || !Array.isArray(journal.goals) || journal.goals.length > 100
+  if (!journal || !Array.isArray(journal.goals) || journal.goals.length > 103
     || !Array.isArray(journal.diaries) || journal.diaries.length > 10_000) throw bad();
   const byId = new Map(events.map((event) => [event.id, event]));
   function validRefs(refs: LifeEventRef[], allowRevoked = false): boolean {
@@ -41,15 +42,18 @@ export function validateJournal(value: unknown, events: LifeEvent[], maxAt: numb
         && ref.revision === byId.get(ref.id)!.revision && (allowRevoked || byId.get(ref.id)!.status !== "revoked"));
   }
   if (new Set(journal.goals.map((goal) => goal?.id)).size !== journal.goals.length
-    || journal.goals.filter((goal) => goal?.status === "active").length > 3) throw bad();
+    || journal.goals.filter((goal) => goal?.status === "active" && goal.source === "user").length > 3
+    || journal.goals.filter((goal) => goal?.status === "active" && goal.source === "model").length > 3) throw bad();
   for (const goal of journal.goals) {
     if (!goal || typeof goal.id !== "string" || !goal.id || typeof goal.title !== "string" || !goal.title.trim() || goal.title.length > 160
       || typeof goal.activity !== "string" || !goal.activity.trim() || goal.activity.length > 200
       || (goal.dueDate !== null && !dateKey(goal.dueDate)) || typeof goal.remind !== "boolean"
-      || !statuses.includes(goal.status) || goal.source !== "user" || !timestamp(goal.revision, revision)
+      || !statuses.includes(goal.status) || !["user", "model"].includes(goal.source)
+      || (goal.source === "model" && (goal.status !== "active" || goal.dueDate === null || goal.remind))
+      || !timestamp(goal.revision, revision)
       || !timestamp(goal.createdAt, maxAt) || !timestamp(goal.updatedAt, maxAt) || goal.updatedAt < goal.createdAt
       || !timestamp(goal.activeSince, maxAt) || goal.activeSince < goal.createdAt || !validRefs(goal.eventRefs)
-      || goal.eventRefs.some((ref) => !goalEvidence(byId.get(ref.id)!, goal.activity)
+      || goal.eventRefs.some((ref) => !goalEvidence(byId.get(ref.id)!, goal)
         || byId.get(ref.id)!.startAt < goal.createdAt || byId.get(ref.id)!.endAt > goal.updatedAt)) throw bad();
   }
   if (new Set(journal.diaries.map((diary) => diary?.date)).size !== journal.diaries.length) throw bad();
@@ -57,7 +61,8 @@ export function validateJournal(value: unknown, events: LifeEvent[], maxAt: numb
     if (!diary || !dateKey(diary.date) || diary.id !== `diary:${diary.date}` || typeof diary.summary !== "string" || diary.summary.length > 8_000
       || !["active", "revoked"].includes(diary.status) || !timestamp(diary.revision, revision)
       || !timestamp(diary.createdAt, maxAt) || !timestamp(diary.updatedAt, maxAt) || diary.updatedAt < diary.createdAt
-      || !validRefs(diary.eventRefs) || (diary.status === "active") !== (diary.eventRefs.length > 0)
+      || !validRefs(diary.eventRefs) || (diary.source === "model" ? diary.status !== "active"
+        : (diary.status === "active") !== (diary.eventRefs.length > 0))
       || diary.eventRefs.some((ref) => byId.get(ref.id)!.date !== diary.date || byId.get(ref.id)!.endAt > diary.updatedAt)
       || (diary.source === "model" ? diary.status !== "active" || !diary.summary.trim() || diary.summary.length > 2_000
         : diary.source !== undefined || diary.summary !== diarySummary(diary.eventRefs.map((ref) => byId.get(ref.id)!)))) throw bad();
@@ -71,13 +76,14 @@ export function saveLifeGoal(goals: LifeGoal[], input: unknown, at: number, revi
   if (data.id !== undefined && (typeof data.id !== "string" || !data.id)) throw new Error("生活目标 ID 无效");
   const previous = data.id === undefined ? undefined : goals.find((goal) => goal.id === data.id);
   if (data.id !== undefined && !previous) throw new Error("生活目标不存在");
+  if (previous?.source === "model") throw new Error("模型意向只能由生活决策更新");
   const dueDate = data.dueDate === "" || data.dueDate == null ? null : data.dueDate;
   const status = data.status ?? previous?.status ?? "active";
   const remind = data.remind ?? previous?.remind ?? true;
   if (typeof data.title !== "string" || !data.title.trim() || data.title.trim().length > 160
     || typeof data.activity !== "string" || !activities.includes(data.activity)
     || (dueDate !== null && !dateKey(dueDate)) || !statuses.includes(status as LifeGoalStatus) || typeof remind !== "boolean") throw new Error("生活目标字段无效");
-  if (!previous && goals.length >= 100) throw new Error("生活目标记录已达上限");
+  if (!previous && goals.filter((goal) => goal.source === "user").length >= 100) throw new Error("生活目标记录已达上限");
   const changedContent = previous && (previous.title !== data.title.trim() || previous.activity !== data.activity);
   const goal: LifeGoal = { id: previous?.id ?? `goal:${revision}`, title: data.title.trim(), activity: data.activity,
     dueDate, remind, status: status as LifeGoalStatus, source: "user", revision,
@@ -85,8 +91,25 @@ export function saveLifeGoal(goals: LifeGoal[], input: unknown, at: number, revi
     activeSince: !previous || changedContent || previous.status !== "active" ? at : previous.activeSince,
     eventRefs: changedContent ? [] : structuredClone(previous?.eventRefs ?? []) };
   const next = previous ? goals.map((item) => item.id === goal.id ? goal : structuredClone(item)) : [...structuredClone(goals), goal];
-  if (next.filter((item) => item.status === "active").length > 3) throw new Error("最多同时保留 3 个活跃生活目标");
+  if (next.filter((item) => item.status === "active" && item.source === "user").length > 3) throw new Error("最多同时保留 3 个活跃生活目标");
   return next;
+}
+
+/** 模型只替换自己的未来意向；用户目标及其进展不由模型改写。 */
+export function applyModelIntentions(goals: LifeGoal[], proposals: ModelLifeIntention[], at: number, revision: number): {
+  goals: LifeGoal[]; ids: string[];
+} {
+  const existing = new Map(goals.filter((goal) => goal.source === "model").map((goal) => [goal.id, goal]));
+  const ids = proposals.map((item, index) => item.id ?? `intent:${revision}:${index}`);
+  const model = proposals.map((item, index): LifeGoal => {
+    const previous = item.id ? existing.get(item.id) : undefined;
+    const changed = previous && previous.activity !== item.activity;
+    return { id: ids[index], title: item.title, activity: item.activity, dueDate: item.targetDate,
+      remind: false, status: "active", source: "model", revision, createdAt: previous?.createdAt ?? at,
+      updatedAt: at, activeSince: changed ? at : previous?.activeSince ?? at,
+      eventRefs: changed ? [] : structuredClone(previous?.eventRefs ?? []) };
+  });
+  return { goals: [...goals.filter((goal) => goal.source === "user"), ...model], ids };
 }
 
 export function setLifeGoalStatus(goals: LifeGoal[], id: string, status: LifeGoalStatus, at: number, revision: number): LifeGoal[] {
@@ -119,10 +142,10 @@ export function rebuildLifeDiary(journal: LifeJournal, date: string, events: Lif
 }
 
 export function applyModelDiary(journal: LifeJournal, date: string, summary: string, eventIds: string[],
-  events: LifeEvent[], at: number, revision: number): LifeJournal {
-  const selected = events.filter((event) => event.date === date && event.status !== "revoked" && event.endAt <= at)
+  events: LifeEvent[], at: number, revision: number, eventCutoffAt = at): LifeJournal {
+  const selected = events.filter((event) => event.date === date && event.status !== "revoked" && event.endAt <= eventCutoffAt)
     .sort((a, b) => a.endAt - b.endAt).slice(-24);
-  if (!selected.length || JSON.stringify(selected.map((event) => event.id)) !== JSON.stringify(eventIds)) {
+  if (JSON.stringify(selected.map((event) => event.id)) !== JSON.stringify(eventIds)) {
     throw new Error("模型日记引用已变化");
   }
   const previous = journal.diaries.find((diary) => diary.date === date);
@@ -144,11 +167,11 @@ export function reconcileLifeJournal(journal: LifeJournal, events: LifeEvent[], 
   const goals = journal.goals.map((goal) => {
     const kept = goal.eventRefs.flatMap((ref) => {
       const event = byId.get(ref.id);
-      return event && goalEvidence(event, goal.activity) ? [event] : [];
+      return event && goalEvidence(event, goal) ? [event] : [];
     });
     const seen = new Set(kept.map((event) => event.id));
     if (goal.status === "active") for (const event of events) {
-      if (!seen.has(event.id) && event.startAt >= goal.activeSince && event.endAt <= at && goalEvidence(event, goal.activity)) {
+      if (!seen.has(event.id) && event.startAt >= goal.activeSince && event.endAt <= at && goalEvidence(event, goal)) {
         kept.push(event); seen.add(event.id);
       }
     }

@@ -22,6 +22,12 @@ vi.mock("@ant-design/x", async () => {
 vi.mock("@ant-design/x-markdown", () => ({ XMarkdown: ({ content }: { content?: string }) => content ?? null }));
 vi.mock("@ant-design/x-markdown/plugins/Latex", () => ({ default: () => ({}) }));
 vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
+vi.mock("./VirtualChatMessageList", async () => {
+  const { Bubble } = await import("@ant-design/x");
+  const React = await import("react");
+  return { VirtualChatMessageList: ({ items, roles }: { items: never[]; roles: never }) =>
+    React.createElement(Bubble.List, { items, role: roles }) };
+});
 
 import { ChatMessageList, type ChatMessageItem } from "./ChatMessageList";
 

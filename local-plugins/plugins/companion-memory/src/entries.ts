@@ -1,6 +1,8 @@
 import { normalizeStoredFacets, type MemoryFacets } from "./facets";
+import { validateLegacySource, type LegacySource } from "./legacy-source";
 export const ENTRY_STATUSES = ["active", "aging", "archived", "superseded", "merged"] as const;
 export interface Entry {
+  legacySource?: LegacySource;
   id: string; content: string; quote: string; sourceAt: number; turnId: string; sessionId: string;
   pinned: boolean; status: typeof ENTRY_STATUSES[number]; editedAt?: number;
   validFrom?: number; validTo?: number; supersededBy?: string; mergedInto?: string;
@@ -20,8 +22,13 @@ export interface Entry {
   confidence?: number;
   reason?: string;
   facets?: MemoryFacets;
+  sourceEvidence?: Array<{ turnId: string; quote: string }>;
+  incrementalChanges?: Array<{ action: "supplement" | "correct"; previousContent: string; at: number }>;
 }
 export function validateEntry(e: any): asserts e is Entry {
+  if (e?.legacySource !== undefined) validateLegacySource(e.legacySource);
+  if (e.sourceEvidence !== undefined && (!Array.isArray(e.sourceEvidence) || e.sourceEvidence.some((item: any) => !item || typeof item.turnId !== "string" || !item.turnId || typeof item.quote !== "string" || !item.quote))) throw new Error("记忆来源证据损坏");
+  if (e.incrementalChanges !== undefined && (!Array.isArray(e.incrementalChanges) || e.incrementalChanges.some((item: any) => !item || !["supplement", "correct"].includes(item.action) || typeof item.previousContent !== "string" || !Number.isFinite(item.at)))) throw new Error("记忆增量审计损坏");
   if (!e || ![e.id, e.content, e.quote, e.turnId, e.sessionId].every((s) => typeof s === "string") || !e.id || !Number.isFinite(e.sourceAt) || typeof e.pinned !== "boolean" || !ENTRY_STATUSES.includes(e.status)) throw new Error("记忆条目损坏，拒绝覆盖");
   for (const key of ["validFrom", "validTo", "editedAt", "sourceEndAt"]) {
     if (e[key] !== undefined && (!Number.isFinite(e[key]) || e[key] < 0)) throw new Error("记忆时间字段损坏");
@@ -58,6 +65,6 @@ export function quoteLabel(e: Entry): string {
   if (e.provenance === "derived-source-verified") return "证据提示：子记忆来源时间已核对，但总结语义仍需结合各来源判断。";
   if (e.provenance === "legacy-unverified") return e.quote.trim() ? `旧系统来源片段（未核对原始对话）：${e.quote}` : "证据提示：旧系统未保存可核对的逐字原话。";
   if (e.provenance === "legacy-user-attested") return e.quote.trim() ? `用户确认已核验的旧库来源片段（未保存消息 ID）：${e.quote}` : "证据提示：用户确认旧库已核验，但本条未保存逐字原话或消息 ID。";
-  const quote = e.sourceQuote?.trim() || e.triggerText?.trim() || e.quote.trim();
+  const quote = (e.turnId.startsWith("host-message:") ? e.quote.trim() : "") || e.sourceQuote?.trim() || e.triggerText?.trim() || e.quote.trim();
   return quote ? `用户原话：${quote}` : "证据提示：未保存逐字原话，摘要需核对，不能视为用户原话。";
 }

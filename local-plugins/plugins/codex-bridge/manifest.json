@@ -1,0 +1,11 @@
+{
+  "apiVersion": 1,
+  "id": "codex-bridge",
+  "name": "Codex 任务工作台",
+  "version": "0.2.0",
+  "description": "直接向本机 Codex 提交原文与技能配置，查看进度、回答提问并接收回执。测试版。",
+  "author": "Cyrene local development",
+  "entry": "index.cjs",
+  "defaultEnabled": false,
+  "deps": ["llm"]
+}

@@ -48,4 +48,19 @@ describe("生活日记与事件索引", () => {
     expect(index.search("旧书阅读")[0].events[0].source).toBe("legacy_schedule");
     expect(index.search("未来")).toEqual([]);
   });
+
+  it("较早日程只召回相关且实际发生的运行时事件", () => {
+    const index = createLifeDiaryIndex([], [
+      event("older", "2026-09-26", "读《星灯游记》", { modelDetail: "记下海边的段落" }),
+      event("inferred", "2026-09-25", "读《星灯游记》", { status: "inferred", source: "offline_inference" }),
+      event("legacy", "2026-09-24", "读《星灯游记》", { source: "legacy_schedule" }),
+      event("revoked", "2026-09-23", "读《星灯游记》", { status: "revoked" }),
+      event("yesterday", "2026-09-28", "读《星灯游记》"),
+      event("today", "2026-09-29", "读《星灯游记》"),
+      event("future", "2026-09-22", "读《星灯游记》", { endAt: at + 60_000 }),
+    ], at);
+    expect(index.recallEvents("星灯游记", "2026-09-28")).toMatchObject([{ date: "2026-09-26",
+      events: [{ id: "older", status: "materialized", source: "runtime_schedule", modelDetail: "记下海边的段落" }] }]);
+    expect(index.recallEvents("陌生话题", "2026-09-28")).toEqual([]);
+  });
 });

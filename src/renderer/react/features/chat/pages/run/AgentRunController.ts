@@ -10,8 +10,10 @@ import type {
   ToolExecutionRecord,
 } from "../../../../../../shared/chat-types";
 import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../../shared/context-usage";
+import { isModelFailureInfo, type ModelFailureInfo } from "../../../../../../shared/model-error";
 import type { TodoItem } from "../../../../../../shared/todo-types";
 import type { ChatMessageItem } from "../../components/ChatMessageList";
+import { isModelRetryStatus } from "../../../../../../shared/model-retry";
 import type { ComposerAttachment } from "../../components/ChatComposer";
 import {
   isFormalAnswerCommitted,
@@ -108,6 +110,7 @@ export interface AgentRunHost {
   updateTodos(sessionId: string, updater: (current: TodoStateBySession) => TodoStateBySession): void;
   /** 会话级上下文容量快照更新（环形图优先读取点）。 */
   updateContextUsage(sessionId: string, snapshot: ContextUsageSnapshot): void;
+  setMainModelFailure?(sessionId: string, failure: ModelFailureInfo | null): void;
   /** 上下文压缩中提示。sessionId 供宿主未来按会话映射，当前实现为全局单值。 */
   setCompressingContext(sessionId: string, value: boolean): void;
   /** 模式级 busy 标记（ref 与渲染状态由宿主同步维护）。 */
@@ -205,6 +208,7 @@ export class AgentRunController {
 
   /** 启动并完整跑完一轮 run（从派发请求到终态落盘）。 */
   async start(): Promise<void> {
+    this.deps.host.setMainModelFailure?.(this.input.sessionId, null);
     const { api, store } = this.deps;
     if (!api || !store) {
       const visibleError = t("chatPage.errorModelServiceNotReady");
@@ -315,6 +319,7 @@ export class AgentRunController {
       this.persistedFinalContent = finalContent;
       this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, {
         content: finalContent,
+        modelRetry: undefined,
         loading: false,
         waitingForFirstEvent: false,
         streaming: false,
@@ -373,6 +378,7 @@ export class AgentRunController {
         return;
       }
       const visibleError = t("chatPage.errorModelRequestFailedWith", { message: errorMessage });
+      this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, { modelRetry: undefined });
       this.processMessages = [...this.processMessages, createRoundProcessMessage(
         `process-${this.processMessageSequence++}`,
         visibleError,
@@ -568,7 +574,14 @@ export class AgentRunController {
 
   /** AG-UI 事件归约：流式内容、推理、工具、交互卡与终态全部在此处理。 */
   private handleEvent(event: AguiEvent) {
-    if (event.type === "CUSTOM" && event.name === "cyrene.round") {
+    if (event.type === "CUSTOM" && event.name === "cyrene.model.retry") {
+      if (isModelRetryStatus(event.value)) {
+        this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, {
+          modelRetry: event.value.phase === "cleared" ? undefined : event.value,
+        });
+      }
+      return;
+    } else if (event.type === "CUSTOM" && event.name === "cyrene.round") {
       const value = event.value as { action?: unknown; roundId?: unknown } | null | undefined;
       if ((value?.action === "start" || value?.action === "end") && typeof value.roundId === "string") {
         const next = applyAgentRoundBoundary(
@@ -818,6 +831,8 @@ export class AgentRunController {
     } else if (event.type === "RUN_ERROR") {
       this.revealCancelled = true;
       this.completeRunActivity(true);
+      const modelFailure = event.metadata?.cyreneModelFailure;
+      if (isModelFailureInfo(modelFailure)) this.deps.host.setMainModelFailure?.(this.input.sessionId, modelFailure);
       this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, { runStage: { kind: "failed" } });
       const activeRunId = this.deps.registries.activeRuns.current[this.input.sessionId]?.runId;
       if (shouldClearComposerInteractionForTerminal(activeRunId, event.runId)) {

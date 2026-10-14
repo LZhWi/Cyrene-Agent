@@ -1,15 +1,17 @@
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 import type { Turn } from "../../companion-chat/src/chat";
+import { legacyContextState } from "./legacy-context-state";
 
 const MAX_ENTRIES = 500;
 const MAX_DAILY_SUMMARIES = 90;
 const STORAGE_KEY = "relationship-log";
 
 interface RelationshipEntry {
+  origin?: "legacy"; channel?: "desktop" | "wechat" | "feishu" | "mobile"; cyreneFeeling?: string;
   turnId: string; userText: string; assistantText: string; date: string; createdAt: number;
   userMood: string; relationshipSignal: string; importantMoment?: string; nextCareCue: string;
 }
-interface RelationshipDailySummary { date: string; updatedAt: number; summary: string; nextCareCue: string }
+interface RelationshipDailySummary { date: string; updatedAt: number; summary: string; nextCareCue: string; origin?: "legacy" }
 interface RelationshipState { version: 1; entries: RelationshipEntry[]; dailySummaries: RelationshipDailySummary[] }
 
 function localDate(timestamp: number): string {
@@ -120,7 +122,12 @@ function buildState(turns: Turn[]): RelationshipState {
 function validateState(value: unknown): RelationshipState {
   if (!value || typeof value !== "object" || (value as RelationshipState).version !== 1
     || !Array.isArray((value as RelationshipState).entries) || !Array.isArray((value as RelationshipState).dailySummaries)) throw new Error("关系日志损坏");
-  return structuredClone(value as RelationshipState);
+  const state = value as RelationshipState;
+  if (state.entries.length > MAX_ENTRIES || state.dailySummaries.length > MAX_DAILY_SUMMARIES
+    || state.entries.some(e => !e || ![e.turnId, e.userText, e.assistantText, e.date, e.userMood, e.relationshipSignal, e.nextCareCue].every(v => typeof v === "string") || !Number.isFinite(e.createdAt)
+      || (e.origin !== undefined && e.origin !== "legacy") || (e.channel !== undefined && !["desktop", "wechat", "feishu", "mobile"].includes(e.channel)) || (e.cyreneFeeling !== undefined && typeof e.cyreneFeeling !== "string"))
+    || state.dailySummaries.some(s => !s || ![s.date, s.summary, s.nextCareCue].every(v => typeof v === "string") || !Number.isFinite(s.updatedAt))) throw new Error("关系日志损坏");
+  return structuredClone(state);
 }
 
 function contextFromState(state: RelationshipState): string {
@@ -138,12 +145,17 @@ function contextFromState(state: RelationshipState): string {
 }
 
 export function createRelationshipLog(storage: PluginStorage) {
-  let state = storage.get<unknown>(STORAGE_KEY) === undefined
+  const stored = storage.get<unknown>(STORAGE_KEY) ?? legacyContextState(storage, STORAGE_KEY);
+  let state = stored === undefined
     ? { version: 1 as const, entries: [], dailySummaries: [] }
-    : validateState(storage.get<unknown>(STORAGE_KEY));
+    : validateState(stored);
   return {
     reconcile(turns: Turn[]) {
       const next = buildState(turns);
+      const legacy = state.entries.filter(e => e.origin === "legacy");
+      next.entries = [...legacy, ...next.entries].sort((a, b) => a.createdAt - b.createdAt).slice(-MAX_ENTRIES);
+      const dates = new Set(next.dailySummaries.map(s => s.date));
+      next.dailySummaries = [...state.dailySummaries.filter(s => s.origin === "legacy" && !dates.has(s.date)), ...next.dailySummaries].sort((a, b) => a.date.localeCompare(b.date)).slice(-MAX_DAILY_SUMMARIES);
       if (JSON.stringify(next.entries) !== JSON.stringify(state.entries)) {
         state = next;
         storage.set(STORAGE_KEY, state);

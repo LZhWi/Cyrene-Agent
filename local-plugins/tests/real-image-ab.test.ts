@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { env, pipeline } from "@xenova/transformers";
-import { JsonVectorStore } from "../../../../Cyrene-Agent/src/main/rag/vectorstore";
-import { HybridRetriever } from "../../../../Cyrene-Agent/src/main/rag/retriever";
 import { rankDetachedMemoryCandidates } from "../../src/main/rag/retriever";
 import { historyIndexText } from "../../src/main/chats/history-index-text";
 import { createHistoryRetrieval } from "../plugins/companion-memory/src/history-retrieval";
@@ -15,6 +13,8 @@ const nRecallState = "E:/Philia093 demo/Cyrene-Agent-N/AppData/Roaming/live2d-cy
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 it.skipIf(process.env.CYRENE_REAL_DATA_AB !== "1")("real-data image retrieval A/B is read-only and measures positive and unrelated queries", async () => {
+  const { JsonVectorStore } = await import("../../../Cyrene-Agent/src/main/rag/vectorstore");
+  const { HybridRetriever } = await import("../../../Cyrene-Agent/src/main/rag/retriever");
   const before = [hash(localRag), hash(nSession), hash(nRecallState)];
   const entries = JSON.parse(fs.readFileSync(localRag, "utf8")) as Array<{ id: string; source: string; text: string; lastRecalledAt: number; metadata?: { turnId?: string; summary?: string } }>;
   const session = JSON.parse(fs.readFileSync(nSession, "utf8")) as { id: string; messages: Array<any> };

@@ -5,6 +5,7 @@ import { resolveRetrievalPlan, type QueryRouteDecision } from "./facets";
 import { rerankHistoryV2 } from "./history-v2-ranking";
 import { resolveToolTopK } from "../../shared/tool-top-k";
 import type { HostHistoryMessage } from "./host-history-source";
+import { presentHistoryWindow, type WindowShadowEvidence } from "./history-window-shadow";
 
 const HISTORY_AUTO_PROBE_CUE = /还记得|记不记得|记得吗|想起|回忆|印象|来着|记不清|上次|之前|以前|前几天|当时|我们说过|提过|答应过/u;
 const HISTORY_AUTO_INJECT_BM25_MIN_SCORE = 6;
@@ -221,8 +222,18 @@ export function createHistoryRetrieval(input: {
   service?: PluginMemoryRetrievalService;
   storage?: PluginStorage;
   now?: () => number;
+  supplementOrdinaryHistory?: boolean;
   routeQuery?: (query: string, signal: AbortSignal) => Promise<QueryRouteDecision>;
+  observe?: (event: Record<string, unknown>) => void;
 }) {
+  function observe(hits: HistoryCandidate[], evidence: WindowShadowEvidence, query: string, finalK: number, source: string) {
+    try {
+      input.observe?.({ type: "history-window-shadow", version: "v62", query, finalK, source, actualResultUnchanged: true,
+        rows: [...hits].sort((a,b)=>a.at-b.at).map(h=>({id:h.id,turnId:h.turnId,sessionId:h.sessionId,role:h.role,at:h.at,
+          official:h.text.length>300?h.text.slice(0,300)+"...":h.text,
+          shadow:presentHistoryWindow({text:h.text,metadata:{turnId:h.turnId,sessionId:h.sessionId}},evidence)})) });
+    } catch { /* Best-effort local shadow only. */ }
+  }
   const storedVectors = input.storage?.get<unknown>(HISTORY_VECTOR_INDEX_KEY);
   if (storedVectors !== undefined && (!storedVectors || typeof storedVectors !== "object" || (storedVectors as any).version !== 1
     || !(storedVectors as any).entries || typeof (storedVectors as any).entries !== "object"
@@ -234,6 +245,12 @@ export function createHistoryRetrieval(input: {
   let vectorState: { version: 1; entries: Record<string, { text: string; embedding: number[] }> } = storedVectors as any
     ?? { version: 1, entries: {} };
   const vectorCache = new Map(Object.entries(vectorState.entries));
+  let indexEpoch = 0;
+  let preparationSignal: AbortSignal | undefined;
+  let preparation: Promise<void> | undefined;
+  let foregroundRequests = 0;
+  let foregroundIdle: Promise<void> | undefined;
+  let releaseForeground: (() => void) | undefined;
   const now = input.now ?? Date.now;
   const stored = input.storage?.get<unknown>(HISTORY_RECALL_STATE_KEY);
   if (stored !== undefined && (!stored || typeof stored !== "object" || (stored as any).version !== 1
@@ -252,6 +269,7 @@ export function createHistoryRetrieval(input: {
   }
 
   function invalidateHostMessages(conversationId: string, allMessages: boolean, messageIds: string[]) {
+    indexEpoch += 1;
     const prefix = `host-message:${conversationId}:`;
     const imagePrefix = `host-image:${conversationId}:`;
     const ids = new Set(messageIds.map((id) => prefix + id));
@@ -306,28 +324,46 @@ export function createHistoryRetrieval(input: {
     return timeline;
   }
 
-  async function attachEmbeddings(candidates: HistoryCandidate[], signal: AbortSignal): Promise<HistoryCandidate[]> {
+  async function attachEmbeddings(candidates: HistoryCandidate[], signal: AbortSignal, background = false): Promise<HistoryCandidate[]> {
     if (!input.service) return candidates;
+    const epoch = indexEpoch;
     const missing = candidates.filter((item) => vectorCache.get(item.id)?.text !== item.text);
-    for (let offset = 0; offset < missing.length; offset += 100) {
-      if (signal.aborted) throw new Error("历史检索已取消");
-      const batch = missing.slice(offset, offset + 100);
+    for (let offset = 0; offset < missing.length; offset += 32) {
+      while (background && foregroundIdle) await foregroundIdle;
+      if (signal.aborted || epoch !== indexEpoch) throw new Error("历史检索已取消");
+      const batch = missing.slice(offset, offset + 32);
       const result = await input.service.embed(batch.map((item) => item.text), { signal });
+      if (signal.aborted || epoch !== indexEpoch) throw new Error("历史索引来源已失效");
       batch.forEach((item, index) => vectorCache.set(item.id, { text: item.text, embedding: result.vectors[index] }));
+      persistVectors();
+      await new Promise<void>(resolve => setImmediate(resolve));
     }
-    if (missing.length) persistVectors();
     return candidates.map((item) => ({ ...item, embedding: vectorCache.get(item.id)?.embedding }));
+  }
+
+  function prepare(signal: AbortSignal): Promise<void> {
+    preparationSignal = signal;
+    if (!preparation) {
+      preparation = (async () => {
+        const epoch = indexEpoch;
+        const candidates = materialize(await loadTimeline(0, signal));
+        if (epoch !== indexEpoch || signal.aborted) throw new Error("历史索引来源已失效");
+        await attachEmbeddings(candidates, signal, true);
+      })().finally(() => { preparation = undefined; });
+    }
+    return preparation;
   }
 
   async function indexPersistedHostMessages(messages: HostHistoryMessage[], signal: AbortSignal) {
     if (!input.service || !input.storage) return;
+    const epoch = indexEpoch;
     const candidates = messages.flatMap((message) => {
       const text = message.role === "assistant" ? stripAssistantHiddenText(message.text).trim() : message.text.trim();
       return text ? [{ id: `host-message:${message.sessionId}:${message.id}`, turnId: message.id,
         sessionId: message.sessionId, role: message.role, text, at: message.at }] : [];
     });
     if (candidates.length) await attachEmbeddings(candidates, signal);
-    if (signal.aborted) return;
+    if (signal.aborted || epoch !== indexEpoch) return;
     const indexedAt = now(), entries = { ...recallState.entries };
     let changed = false;
     for (const item of candidates) {
@@ -349,15 +385,17 @@ export function createHistoryRetrieval(input: {
   }
 
   async function rank(query: string, candidates: HistoryCandidate[], signal: AbortSignal, mode: "hybrid" | "semantic" = "hybrid", topK = 12,
-    recordRecall = false): Promise<RankedHistoryCandidate[]> {
+    recordRecall = false, lexical = false): Promise<RankedHistoryCandidate[]> {
     if (!input.service) {
       const queryTokens = new Set(tokens(query));
       return candidates.map((item) => ({ ...item, score: tokens(item.text).filter((token) => queryTokens.has(token)).length }))
         .filter((item) => item.score > 0).sort((left, right) => right.score - left.score || right.at - left.at).slice(0, topK);
     }
-    const embedded = await attachEmbeddings(candidates, signal), byId = new Map(embedded.map((item) => [item.id, item]));
+    const embedded = lexical ? candidates.map(item => ({ ...item, embedding: [] as number[] }))
+      : await attachEmbeddings(candidates, signal);
+    const byId = new Map(embedded.map((item) => [item.id, item]));
     const result = await input.service.rank({
-      query, topK: Math.min(topK, embedded.length), mode, rerank: false, signal,
+      query, topK: Math.min(topK, embedded.length), mode: lexical ? "lexical" : mode, rerank: false, signal,
       candidates: embedded.filter((item) => item.embedding).map((item) => {
         const state = recallState.entries[item.parentId ?? item.id];
         return { id: item.id, text: item.text, embedding: item.embedding!, weight: state?.weight ?? 1,
@@ -389,24 +427,48 @@ export function createHistoryRetrieval(input: {
     });
   }
 
-  async function retrieve(userQuery: string, toolQuery: string, days: number, finalK: number, signal: AbortSignal, baselineK = 5,
-    suppliedTimeline?: HistoryCandidate[], recordBaselineRecall = false): Promise<HistoryCandidate[]> {
+  async function retrieve(...args: Parameters<typeof retrievePrepared>): Promise<HistoryCandidate[]> {
+    if (foregroundRequests++ === 0) foregroundIdle = new Promise(resolve => { releaseForeground = resolve; });
+    try { return await retrievePrepared(...args); }
+    finally {
+      if (--foregroundRequests === 0) {
+        releaseForeground?.();
+        foregroundIdle = undefined;
+      }
+    }
+  }
+
+  async function retrievePrepared(userQuery: string, toolQuery: string, days: number, finalK: number, signal: AbortSignal, baselineK = 5,
+    suppliedTimeline?: HistoryCandidate[], recordBaselineRecall = false, evidence: WindowShadowEvidence = {}, supplementK: 0 | 3 = 0): Promise<HistoryCandidate[]> {
     const cutoff = now() - days * 24 * 60 * 60 * 1_000;
     const timeline = suppliedTimeline ?? await loadTimeline(cutoff, signal), candidates = materialize(timeline);
     if (!candidates.length) return [];
+    // Finish a small incremental backlog before selecting the retrieval mode.
+    // A large cold index still uses the non-blocking lexical path below.
+    const missing = candidates.filter(item => vectorCache.get(item.id)?.text !== item.text);
+    if (preparationSignal && missing.length > 0 && missing.length <= 32) {
+      try { await attachEmbeddings(missing, signal); }
+      catch (error) {
+        if (signal.aborted) throw error;
+        console.warn("[history] 增量向量准备失败，保留词法回退", error);
+      }
+    }
+    // Freeze the mode for this request: partial indexes must not silently omit candidates.
+    const lexical = !!preparationSignal && candidates.some(item => vectorCache.get(item.id)?.text !== item.text);
+    if (lexical && !preparationSignal!.aborted) void prepare(preparationSignal!).catch(() => {});
     const cleanUser = sanitizeHistoryRetrievalQuery(userQuery), cleanTool = sanitizeHistoryRetrievalQuery(toolQuery);
-    const baseline = await rank(cleanTool || toolQuery, candidates, signal, "hybrid", baselineK, recordBaselineRecall);
+    const baseline = await rank(cleanTool || toolQuery, candidates, signal, "hybrid", baselineK, recordBaselineRecall, lexical);
     try {
     const expanded = expandHistoryRetrievalQuery(cleanUser), intent = buildHistoryRetrievalIntentQuery(cleanUser);
       const variants = [...new Set([cleanUser, cleanTool, expanded, intent].filter(Boolean))];
       const searches = [
         ...variants.map((query) => ({ query, mode: "hybrid" as const })),
-        ...(expanded ? [{ query: expanded, mode: "semantic" as const }] : []),
-        ...(intent && intent !== expanded ? [{ query: intent, mode: "semantic" as const }] : []),
+        ...(!lexical && expanded ? [{ query: expanded, mode: "semantic" as const }] : []),
+        ...(!lexical && intent && intent !== expanded ? [{ query: intent, mode: "semantic" as const }] : []),
       ];
       const groups: RankedHistoryCandidate[][] = [];
       for (const search of searches) {
-        groups.push((await rank(search.query, candidates, signal, search.mode)).filter((item) =>
+        groups.push((await rank(search.query, candidates, signal, search.mode, 12, false, lexical)).filter((item) =>
           sanitizeHistoryRetrievalQuery(item.text) !== cleanUser));
       }
       const fused = new Map<string, RankedHistoryCandidate>();
@@ -426,6 +488,8 @@ export function createHistoryRetrieval(input: {
       });
       const expandedCandidates = expandSentenceWindows(expandAdjacentCandidates(ordered, timeline));
       const parentText = new Map(expandedCandidates.map((item) => [item.id, item.text]));
+      evidence.candidates = expandedCandidates.map(h=>({text:h.text,metadata:{turnId:h.turnId,sessionId:h.sessionId,
+        retrievalExpansion:h.sentenceWindow?"sentence_window":undefined,retrievalParentText:h.parentId?parentText.get(h.parentId):undefined}}));
       for (const item of expandedCandidates) {
         const semantic = semanticRank.get(normalize(item.text))
           ?? (item.parentId ? semanticRank.get(normalize(parentText.get(item.parentId) ?? "")) : undefined);
@@ -435,8 +499,9 @@ export function createHistoryRetrieval(input: {
       if (input.service?.rerankDocuments) {
         try {
           selected = await rerankHistoryV2({
-            candidates: expandedCandidates, cleanUserQuery: cleanUser, expandedQuery: expanded, intentQuery: intent, finalK,
+            candidates: expandedCandidates, cleanUserQuery: cleanUser, expandedQuery: expanded, intentQuery: intent, finalK, supplementK,
             rerank: (query, documents) => input.service!.rerankDocuments!({ query, documents, signal }),
+            onScored: rows => { evidence.ranked = rows; },
           });
         } catch (error) {
           if (signal.aborted) throw error;
@@ -486,7 +551,9 @@ export function createHistoryRetrieval(input: {
       if (typeof query !== "string" || !query.trim() || query.length > 20_000) throw new Error("历史查询无效");
       const contextQuery = typeof userQuery === "string" && userQuery.trim() ? userQuery.trim() : query;
       const limit = resolveToolTopK(topK);
-      const hits = await retrieve(contextQuery, query, days, limit, signal, limit, undefined, true);
+      const evidence: WindowShadowEvidence = {};
+      const hits = await retrieve(contextQuery, query, days, limit, signal, limit, undefined, true, evidence);
+      observe(hits, evidence, contextQuery, limit, "tool");
       return hits.length ? format(hits, "tool") : `[recall_history] 没有找到关于 "${query.trim()}" 的历史记录`;
     },
     async searchForAuto(query: unknown, signal: AbortSignal, days = 90, suppliedRoute?: QueryRouteDecision) {
@@ -505,14 +572,19 @@ export function createHistoryRetrieval(input: {
       const route = suppliedRoute ?? (input.routeQuery ? await input.routeQuery(query, signal) : undefined);
       const plan = resolveRetrievalPlan(query, route);
       const limit = !plan.queryKind ? 5 : plan.scope === "exhaustive_list" ? 12 : plan.scope === "scoped_list" ? 10 : 8;
-      const hits = await retrieve(query, query, days, limit, signal, 5, timeline);
+      const evidence: WindowShadowEvidence = {};
+      const supplementK = !plan.queryKind && input.supplementOrdinaryHistory ? 3 : 0;
+      const hits = await retrieve(query, query, days, limit, signal, 5, timeline, false, evidence, supplementK);
+      observe(hits, evidence, query, limit + supplementK, "auto");
       return hits.length ? format(hits, "auto") : "";
     },
     clearCache() {
+      indexEpoch += 1;
       vectorCache.clear();
       for (const [id, value] of Object.entries(vectorState.entries)) vectorCache.set(id, value);
     },
     indexPersistedHostMessages,
+    prepare,
     invalidateHostMessages,
   };
 }

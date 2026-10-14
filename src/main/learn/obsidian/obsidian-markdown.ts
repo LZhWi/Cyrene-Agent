@@ -26,9 +26,26 @@ export function extractHeadings(content: string): MarkdownHeading[] {
   const headings: MarkdownHeading[] = [];
   const stack: Array<{ level: number; text: string }> = [];
   let offset = 0;
+  let fence: { marker: string; length: number } | undefined;
 
   for (const line of lines) {
-    const match = line.match(HEADING_RE);
+    const logicalLine = line.replace(/\r$/, "");
+    const fenceMatch = logicalLine.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (!fence) {
+        fence = { marker, length: fenceMatch[1].length };
+      } else if (marker === fence.marker && fenceMatch[1].length >= fence.length && !fenceMatch[2].trim()) {
+        fence = undefined;
+      }
+      offset += line.length + 1;
+      continue;
+    }
+    if (fence) {
+      offset += line.length + 1;
+      continue;
+    }
+    const match = logicalLine.match(HEADING_RE);
     if (match) {
       const level = match[1].length;
       const text = match[2].trim();
@@ -56,10 +73,9 @@ export function extractHeadings(content: string): MarkdownHeading[] {
 }
 
 function findMatches(
-  content: string,
+  headings: MarkdownHeading[],
   headingPath: string[],
 ): MarkdownHeading[] | SectionLocateError {
-  const headings = extractHeadings(content);
   const matches = headings.filter(
     (h) =>
       h.path.length === headingPath.length &&
@@ -105,7 +121,7 @@ export function readSection(
   includeChildren: boolean,
 ): string | SectionLocateError {
   const headings = extractHeadings(content);
-  const matches = findMatches(content, headingPath);
+  const matches = findMatches(headings, headingPath);
   if ("kind" in matches) return matches;
 
   const startHeading = matches[0];
@@ -122,7 +138,7 @@ export function replaceSection(
   includeChildren: boolean,
 ): string | SectionLocateError {
   const headings = extractHeadings(content);
-  const matches = findMatches(content, headingPath);
+  const matches = findMatches(headings, headingPath);
   if ("kind" in matches) return matches;
 
   const startHeading = matches[0];
@@ -140,7 +156,7 @@ export function appendToSection(
   newContent: string,
 ): string | SectionLocateError {
   const headings = extractHeadings(content);
-  const matches = findMatches(content, headingPath);
+  const matches = findMatches(headings, headingPath);
   if ("kind" in matches) return matches;
 
   const startHeading = matches[0];

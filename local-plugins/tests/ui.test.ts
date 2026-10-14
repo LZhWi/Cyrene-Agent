@@ -47,7 +47,7 @@ describe("聊天界面的模型来源入口", () => {
     expect(confirmations).toHaveLength(5);
     expect(confirmations[0]).toContain("复制到插件私有存储");
     expect(confirmations[1]).toContain("发送给主程序当前模型");
-    expect(confirmations[1]).toContain("10 个待处理轮次");
+    expect(confirmations[1]).toContain("6 个待处理轮次");
     expect(confirmations[1]).toContain("最多 2 轮前置上下文");
     expect(confirmations[2]).toContain("命中结果作为参考资料");
     expect(confirmations[3]).toContain("每个成功落盘");

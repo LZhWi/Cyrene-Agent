@@ -69,8 +69,30 @@ export function createVectorIndex(storage: PluginStorage) {
       storage.set("vector-index", next); state = next;
       return this.view();
     },
+    importLegacyIncremental(file: unknown, expectedHash: unknown, entries: Array<{ id: string; content: string }>) {
+      if (!state) throw new Error("请先建立向量索引");
+      const source = readVectorFile(file);
+      if (source.hash !== expectedHash) throw new Error("向量源文件自预检后已变化，请重新预检");
+      const missing = entries.filter((entry) => !state!.entries.some((record) => record.l2Id === entry.id));
+      if (new Set(entries.map((entry) => entry.id)).size !== entries.length) throw new Error("记忆 ID 重复");
+      const plan = analyze(source, new Set(missing.map((entry) => entry.id)));
+      if (plan.preview.invalid || plan.preview.duplicateL2Ids || plan.preview.dimensions.some((dimension) => dimension !== state!.dimensions)) throw new Error("增量向量源未通过校验");
+      const records = plan.entries.map((record) => {
+        const entry = missing.find((entry) => entry.id === record.l2Id)!;
+        const original = source.raw.find((item: any) => item?.source === "user_memory" && item.metadata?.l2Id === entry.id);
+        if (original.text !== entry.content) throw new Error("向量正文与当前记忆不一致，拒绝复用");
+        return { ...record, origin: "legacy" as const, contentHash: createHash("sha256").update(entry.content, "utf8").digest("hex") };
+      });
+      if (records.length) {
+        const next = { ...state, entries: [...state.entries, ...records] };
+        validateState(next);
+        storage.set("vector-index", next); state = next;
+      }
+      return { added: records.length, missingSource: missing.length - records.length, sourceHash: source.hash, ...this.view() };
+    },
     generatedHash(l2Id: string) {
-      const record = state?.entries.find((entry) => entry.l2Id === l2Id && entry.origin === "generated");
+      // 增量复用也有经正文校验的 hash；可避免随后重新生成相同向量。
+      const record = state?.entries.find((entry) => entry.l2Id === l2Id);
       return record?.contentHash;
     },
     hasRecord(l2Id: string) { return Boolean(state?.entries.some((entry) => entry.l2Id === l2Id)); },

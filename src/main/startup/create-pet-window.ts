@@ -15,6 +15,8 @@ export interface PetWindowSettingsSlice {
   petWindowY?: number;
   /** 桌宠缩放因子；离屏判定需按缩放后的实际窗口尺寸计算。 */
   petZoom?: number;
+  /** 窗口隐藏释放后重建时恢复置顶状态。 */
+  petAlwaysOnTop?: boolean;
 }
 
 export interface CreatePetWindowContext {

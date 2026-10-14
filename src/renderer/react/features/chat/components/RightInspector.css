@@ -1,6 +1,7 @@
 /* RightInspector — 统一右侧挤出式面板（diff / 计划清单 tab 切换） */
 
 .cy-right-inspector {
+  position: relative;
   flex-shrink: 0;
   width: 620px;
   min-width: 0;
@@ -123,4 +124,14 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+.cy-right-inspector.is-resizable { z-index: 1002; max-width: calc(100vw - 800px); min-width: 280px; }
+.cy-right-inspector__resize { position: absolute; z-index: 4; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
+.cy-right-inspector__resize:hover, .cy-right-inspector__resize:focus { background: var(--cy-accent); outline: none; }
+.cy-right-inspector__tabs { overflow-x: auto; }
+.cy-right-inspector__tab-item { display: flex; flex: none; }
+.cy-right-inspector__tab-close { border: 0; background: transparent; color: var(--cy-text-muted); cursor: pointer; padding: 0 5px; }
+.cy-right-inspector__tab-close:hover { color: var(--cy-accent); }
+@media (max-width: 1100px) {
+  .is-workspace-window .cy-right-inspector.is-resizable { position: absolute; right: 10px; top: 50px; bottom: 10px; height: auto; max-width: calc(100vw - 280px); }
 }

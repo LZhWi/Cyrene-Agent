@@ -1,5 +1,6 @@
 export interface SingleInstanceApp {
   requestSingleInstanceLock(): boolean;
+  hasSingleInstanceLock?(): boolean;
   quit(): void;
   on(event: "second-instance", listener: () => void): void;
 }
@@ -13,7 +14,7 @@ export function installSingleInstanceGuard(
   app: SingleInstanceApp,
   focusExistingWindow: () => void,
 ): boolean {
-  if (!app.requestSingleInstanceLock()) {
+  if (!(app.hasSingleInstanceLock?.() || app.requestSingleInstanceLock())) {
     app.quit();
     return false;
   }

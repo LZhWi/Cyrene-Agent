@@ -15,6 +15,8 @@ import { getMomentsMediaRootDir } from "../moments/moments-store";
  */
 export function registerPrivilegedSchemes(): void {
   protocol.registerSchemesAsPrivileged([
+    { scheme: "cyrene-learn", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+    { scheme: "cyrene-exam", privileges: { standard: true, secure: true, supportFetchAPI: true } },
     { scheme: "local-sticker", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
     { scheme: "local-font", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
     { scheme: "moment-media", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },

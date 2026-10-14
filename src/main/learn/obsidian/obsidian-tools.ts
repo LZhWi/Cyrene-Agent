@@ -9,13 +9,22 @@
  * - obsidian_edit
  * - obsidian_open_note
  *
- * 仅在 mode === "learn" && obsidian.enabled && vaultPath 有效时注册。
+ * 启动时注册；仅 Learn 可见，执行时从可信 ToolContext 绑定 Vault。
  */
 
 import { toolRegistry } from "../../orchestrator/tools/registry/tool-registry";
-import { obsidianWorkspace } from "./obsidian-workspace-service";
+import { createObsidianWorkspace } from "./obsidian-workspace-service";
+import type { ToolContext } from "../../orchestrator/tools/registry/tool-context";
+import { ToolExecutionError } from "../../orchestrator/tools/registry/tool-execution-error";
 import { openNote } from "./obsidian-open";
 import * as path from "path";
+
+function workspaceForContext(ctx?: ToolContext) {
+  if (ctx?.mode !== "learn") throw new ToolExecutionError("LEARN_MODE_REQUIRED", "Obsidian 工具仅用于 Learn。", "permission_denied");
+  if (!ctx.resolvedWorkspaceRoot) throw new ToolExecutionError("LEARN_WORKSPACE_REQUIRED", "Learn 会话尚未绑定工作区。", "invalid_arguments");
+  ctx.signal?.throwIfAborted();
+  return createObsidianWorkspace(ctx.resolvedWorkspaceRoot);
+}
 
 // ── 注册所有 Obsidian 工具 ──────────────────────────────────
 
@@ -33,7 +42,9 @@ export function registerObsidianTools(): void {
       "参数：relativeDir（可选，目录相对路径），recursive（可选，是否递归，默认 true）",
     enabled: true,
     modes: ["learn"],
+    needsContext: true,
     effectKind: "read",
+    ledgerPolicy: "bypass",
     verificationPolicy: "none",
     inputSchema: {
       type: "object",
@@ -49,8 +60,8 @@ export function registerObsidianTools(): void {
       },
       required: [],
     },
-    execute: async (args) => {
-      const result = await obsidianWorkspace.listFiles({
+    execute: async (args, ctx) => {
+      const result = await workspaceForContext(ctx).listFiles({
         relativeDir: typeof args.relativeDir === "string" ? args.relativeDir : undefined,
         recursive: args.recursive !== false,
       });
@@ -77,7 +88,9 @@ export function registerObsidianTools(): void {
       "参数：query（必填，搜索关键词），relativeDir（可选，限制目录），limit（可选，默认 20）",
     enabled: true,
     modes: ["learn"],
+    needsContext: true,
     effectKind: "read",
+    ledgerPolicy: "bypass",
     verificationPolicy: "none",
     inputSchema: {
       type: "object",
@@ -97,8 +110,8 @@ export function registerObsidianTools(): void {
       },
       required: ["query"],
     },
-    execute: async (args) => {
-      const result = await obsidianWorkspace.search({
+    execute: async (args, ctx) => {
+      const result = await workspaceForContext(ctx).search({
         query: String(args.query),
         relativeDir: typeof args.relativeDir === "string" ? args.relativeDir : undefined,
         limit: typeof args.limit === "number" ? args.limit : undefined,
@@ -131,7 +144,9 @@ export function registerObsidianTools(): void {
       "非必须时优先用 obsidian_read_section 精准读取章节，避免返回过长内容。",
     enabled: true,
     modes: ["learn"],
+    needsContext: true,
     effectKind: "read",
+    ledgerPolicy: "bypass",
     verificationPolicy: "none",
     inputSchema: {
       type: "object",
@@ -143,8 +158,8 @@ export function registerObsidianTools(): void {
       },
       required: ["path"],
     },
-    execute: async (args) => {
-      const result = await obsidianWorkspace.readFile({
+    execute: async (args, ctx) => {
+      const result = await workspaceForContext(ctx).readFile({
         path: String(args.path),
       });
       const headingList =
@@ -155,7 +170,7 @@ export function registerObsidianTools(): void {
       return (
         result.content +
         headingList +
-        `\n\n---\ncontentHash: ${result.contentHash.slice(0, 12)}...`
+        `\n\n---\ncontentHash: ${result.contentHash}`
       );
     },
   });
@@ -173,7 +188,9 @@ export function registerObsidianTools(): void {
       "参数：path（笔记路径），headingPath（标题路径数组，如 ['Transformer', 'Self-Attention', 'QKV']），includeChildren（可选，是否包含子章节，默认 false）",
     enabled: true,
     modes: ["learn"],
+    needsContext: true,
     effectKind: "read",
+    ledgerPolicy: "bypass",
     verificationPolicy: "none",
     inputSchema: {
       type: "object",
@@ -194,11 +211,11 @@ export function registerObsidianTools(): void {
       },
       required: ["path", "headingPath"],
     },
-    execute: async (args) => {
+    execute: async (args, ctx) => {
       const headingPath = Array.isArray(args.headingPath)
         ? args.headingPath.map(String)
         : [];
-      const result = await obsidianWorkspace.readSection({
+      const result = await workspaceForContext(ctx).readSection({
         path: String(args.path),
         headingPath,
         includeChildren: args.includeChildren === true,
@@ -222,6 +239,8 @@ export function registerObsidianTools(): void {
       "参数：operation（操作类型）、path（笔记路径）、content（内容）、headingPath（replace_section/append_to_section 时需要）、expectedContentHash（修改已有文件时建议提供，防冲突）、includeChildren（replace_section 时）",
     enabled: true,
     modes: ["learn"],
+    needsContext: true,
+    risk: "fs-write",
     effectKind: "mutation",
     verificationPolicy: "artifact",
     inputSchema: {
@@ -260,9 +279,9 @@ export function registerObsidianTools(): void {
       },
       required: ["operation", "path", "content"],
     },
-    execute: async (args) => {
+    execute: async (args, ctx) => {
       const operation = String(args.operation);
-      const result = await obsidianWorkspace.edit({
+      const result = await workspaceForContext(ctx).edit({
         operation,
         path: String(args.path),
         content: String(args.content ?? ""),
@@ -277,7 +296,7 @@ export function registerObsidianTools(): void {
         `操作成功 [${result.operation}]\n` +
         `文件: ${result.path}\n` +
         `写入: ${result.bytesWritten} 字节\n` +
-        `contentHash: ${result.newContentHash.slice(0, 12)}...`
+        `contentHash: ${result.newContentHash}`
       );
     },
   });
@@ -295,6 +314,7 @@ export function registerObsidianTools(): void {
       "参数：path（笔记路径）、headingPath（可选，定位到具体章节）",
     enabled: true,
     modes: ["learn"],
+    needsContext: true,
     effectKind: "external_side_effect",
     verificationPolicy: "none",
     inputSchema: {
@@ -312,10 +332,9 @@ export function registerObsidianTools(): void {
       },
       required: ["path"],
     },
-    execute: async (args) => {
-      const vaultName = path.basename(
-        obsidianWorkspace["settings"]?.vaultPath ?? "",
-      );
+    execute: async (args, ctx) => {
+      workspaceForContext(ctx);
+      const vaultName = path.basename(ctx!.resolvedWorkspaceRoot!);
       await openNote({
         vaultName,
         filePath: String(args.path),
@@ -330,21 +349,4 @@ export function registerObsidianTools(): void {
       return `已在 Obsidian 中打开: ${args.path}${headingSuffix}`;
     },
   });
-}
-
-/**
- * 注销所有 Obsidian 工具（Vault 路径变更或模式切换时调用）。
- */
-export function unregisterObsidianTools(): void {
-  const toolIds = [
-    "obsidian_list_files",
-    "obsidian_search",
-    "obsidian_read_file",
-    "obsidian_read_section",
-    "obsidian_edit",
-    "obsidian_open_note",
-  ];
-  for (const id of toolIds) {
-    toolRegistry.unregister(id);
-  }
 }

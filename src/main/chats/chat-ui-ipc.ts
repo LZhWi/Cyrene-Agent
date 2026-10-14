@@ -1,3 +1,4 @@
+import { withChatModuleRoutes } from "../settings/chat-module-routes";
 import { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
@@ -16,6 +17,7 @@ import { resolveVendorRuntimeSettings } from "../orchestrator/vendors/runtime-se
 import { resolveTransport } from "../orchestrator/vendors/transport-detector";
 import { getSession } from "./chats-store";
 import { describePendingAttachment } from "../rag/file-ingest";
+import { describeClipboardFileUris } from "./clipboard-file-uris";
 import { processDocumentIndexRequest } from "../rag/document-index-ipc";
 import {
   enqueueDocumentIndexJob,
@@ -170,7 +172,15 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     return typeof jobId === "string" && cancelDocumentIndexJob(jobId);
   });
 
-  ipc.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
+  ipc.handle(IPC.WORKSPACE_PASTE_FILE_URIS, async (event, mode: unknown, uriList: unknown) => {
+    if (!reactWorkspaceWindow || reactWorkspaceWindow.isDestroyed()
+      || event.sender !== reactWorkspaceWindow.webContents || event.senderFrame !== event.sender.mainFrame
+      || !["work", "code", "learn"].includes(String(mode))) throw new Error("仅工作区可粘贴文件");
+    if (typeof uriList !== "string") throw new Error("无效文件列表");
+    return describeClipboardFileUris(uriList);
+  });
+
+  ipc.handle(IPC.CHAT_CAPTION_IMAGE, async (event, payload: unknown) => {
     const filePath = payload && typeof payload === "object"
       ? (payload as { filePath?: unknown }).filePath
       : undefined;
@@ -187,11 +197,11 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
 
     try {
       const { captionImageWithRetryAndFallback } = await import("../orchestrator/vision-captioner");
-      const caption = await captionImageWithRetryAndFallback(
+      const caption = await withChatModuleRoutes(new URL(event.sender.getURL()).searchParams.get("windowKind") === "chat" ? "chat" : "work", () => captionImageWithRetryAndFallback(
         { base64: validated.buffer.toString("base64"), mime: validated.mime },
         buildImageCaptionPrompt(hasAnnotations),
         visionCfg,
-      );
+      ));
       if (caption.startsWith("[错误")) {
         return { ok: false, error: caption };
       }

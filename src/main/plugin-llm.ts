@@ -1,6 +1,9 @@
+import { runProactiveStages, sameProactiveModel } from "./proactive/proactive-stages";
+import { resolveChatModuleModel } from "./settings/chat-module-routes";
 import type { PluginLlmGenerateOptions, PluginLlmMessage } from "../plugins/api";
 import type { LlmClient } from "./services/llm/llm-client";
 import type { ModelSettings } from "./settings/model-settings";
+import { runModelRequestWithRetry } from "./orchestrator/vendors/model-retry-runner";
 
 export type EnqueuePluginLlmTask = <T>(
   label: string,
@@ -34,6 +37,19 @@ export async function pluginGenerateText(
   enqueueTask: EnqueuePluginLlmTask,
   options: PluginLlmGenerateOptions = {},
 ): Promise<string> {
+  const content = resolveChatModuleModel(options.routingModule ?? "plugin", settings);
+  if (options.routingModule === "proactive") {
+    const decision = resolveChatModuleModel("proactiveDecision", settings);
+    return runProactiveStages(sameProactiveModel(content, decision), (stage, instruction) => requestPluginText(
+      instruction ? [...messages, { role: "system", content: instruction }] : messages,
+      stage === "decision" ? decision : content, llmClient, enqueueTask, options,
+    ), options.signal);
+  }
+  return requestPluginText(messages, content, llmClient, enqueueTask, options);
+}
+
+async function requestPluginText(messages: PluginLlmMessage[], settings: ModelSettings, llmClient: LlmClient,
+  enqueueTask: EnqueuePluginLlmTask, options: PluginLlmGenerateOptions): Promise<string> {
   if (!settings.apiKey.trim()) {
     throw new Error("未配置 API Key，请先在设置页配置主聊天模型");
   }
@@ -50,12 +66,14 @@ export async function pluginGenerateText(
     120_000,
   );
   const timeoutMs = clampInteger(options.timeoutMs, defaultTimeout, 1000, 300_000, "timeoutMs");
+  const maxRetries = clampInteger(options.maxRetries, settings.modelRequestMaxRetries ?? 5, 0, 10, "maxRetries");
   const label = `plugin:${safePurpose(options.purpose)}`;
 
   return enqueueTask(
     label,
     async () => {
-      const result = await llmClient.chatNonStream(
+      const startedAt = Date.now();
+      const result = await runModelRequestWithRetry(({ signal }) => llmClient.chatNonStream(
         settings,
         messages,
         undefined,
@@ -67,12 +85,24 @@ export async function pluginGenerateText(
             ? { mode: "off" }
             : undefined,
         { maxTokens },
-        options.signal,
-      );
+        signal,
+      ), {
+        provider: settings.provider,
+        model: settings.model,
+        maxRetries,
+        idleTimeoutMs: timeoutMs,
+        signal: options.signal,
+        getRemainingBudgetMs: () => timeoutMs - (Date.now() - startedAt),
+        onStatus: (status) => {
+          if (status.phase === "waiting") {
+            console.log(`[ModelRetry] ${label} retry=${status.retryNumber}/${status.maxRetries} category=${status.category} delay=${status.delayMs}ms`);
+          }
+        },
+      });
       const text = result.text?.trim();
       if (!text) throw new Error("主聊天模型没有返回文本");
       return text;
     },
-    { retryRateLimit: true },
+    { retryRateLimit: false },
   );
 }

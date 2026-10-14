@@ -1,8 +1,10 @@
-import React from "react";
+import React, { createContext, useContext } from "react";
 import { useTranslation } from "../../../i18n";
 import type { TaskDelegationDisplayRecord } from "../../../../../shared/chat-types";
 import { getCharacterPortraitByAssetFileName } from "../../../character-portraits";
 import "./RunExperience.css";
+
+export const TaskInspectorContext = createContext<((taskId: string) => void) | undefined>(undefined);
 
 // 状态标记符号（非文案）与 i18n key（t() 不能出现在模块顶层常量里），展示文案在组件内求值。
 const STATUS_MARKERS: Record<TaskDelegationDisplayRecord["status"], string> = {
@@ -21,6 +23,7 @@ const STATUS_TEXT_KEYS: Record<TaskDelegationDisplayRecord["status"], string> = 
 
 export function TaskDelegationRow({ delegation }: { delegation: TaskDelegationDisplayRecord }) {
   const { t } = useTranslation();
+  const onOpen = useContext(TaskInspectorContext);
   const portraitUrl = getCharacterPortraitByAssetFileName(delegation.assetFileName);
   return (
     <div className={`cy-task-delegation is-${delegation.status}`}>
@@ -30,6 +33,7 @@ export function TaskDelegationRow({ delegation }: { delegation: TaskDelegationDi
       <span className="cy-task-delegation__nickname">{delegation.nickname}</span>
       <span className="cy-task-delegation__description">{delegation.description}</span>
       <span className="cy-task-delegation__status">{t(STATUS_TEXT_KEYS[delegation.status])}</span>
+      {onOpen && <button type="button" className="cy-task-delegation__inspect" onClick={() => onOpen(delegation.taskId)}>{t("workspaceUi.tasks")}</button>}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { resolveChatGptEndpoint } from "../../chatgpt-oauth/runtime";
 // OpenAI Responses transport —— 第三协议（docs/responses-transport-construction-plan.md）
 // 请求体协议：POST {baseUrl}/responses，input items + instructions
 //
@@ -190,6 +191,7 @@ export class ResponsesAdapter implements ChatVendorAdapter {
   constructor(public readonly id: string, public capability: ProviderCapability) {}
 
   buildRequest(req: ChatRequest, cfg: VendorConfig): HttpRequest {
+    cfg = resolveChatGptEndpoint(cfg);
     const includeEncryptedReasoning = shouldIncludeEncryptedReasoning(cfg, this.capability);
     const { instructions, input } = toWireInput(req.messages, includeEncryptedReasoning);
 

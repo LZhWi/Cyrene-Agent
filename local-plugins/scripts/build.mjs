@@ -1,16 +1,15 @@
-import { cp, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { zipSync } from "fflate";
-import {
-  CURRENT_PLUGIN_API_VERSION,
-  validateManifestData,
-} from "@playa0v0/cyrene-plugin-sdk";
+import { CURRENT_PLUGIN_API_VERSION } from "../../packages/plugin-sdk/dist/api.js";
+import { validateManifestData } from "../../packages/plugin-sdk/dist/validate-manifest.js";
+import { getArtifactRoot } from "./artifact-root.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const pluginsRoot = path.join(workspaceRoot, "plugins");
-const artifactsRoot = path.join(workspaceRoot, "artifacts");
+const DEDICATED_BUILDERS = new Set(["codex-bridge", "cyrene-hud", "dungeons-decision", "dungeons-input", "furina-file-tools", "minecraft-body"]);
 const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 const ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".svg"]);
@@ -42,7 +41,7 @@ async function collectFiles(root, current = root) {
   return result;
 }
 
-async function packagePlugin(pluginDirName) {
+async function packagePlugin(pluginDirName, pluginsRoot, artifactsRoot) {
   const sourceDir = path.join(pluginsRoot, pluginDirName);
   const manifestPath = path.join(sourceDir, "manifest.json");
   const readmePath = path.join(sourceDir, "README.md");
@@ -148,21 +147,82 @@ async function packagePlugin(pluginDirName) {
   console.log(`[build] ${manifest.id}: ${files.length} 个文件，ZIP ${archive.byteLength} bytes`);
 }
 
-// 删除前确认真实路径未通过目录联接逃离本开发目录。
-const { realpath } = await import("node:fs/promises");
-const rootReal = await realpath(workspaceRoot);
-const existingArtifacts = await lstat(artifactsRoot).catch(() => null);
-if (existingArtifacts) {
-  const relative = path.relative(rootReal, await realpath(artifactsRoot));
-  if (existingArtifacts.isSymbolicLink() || relative !== "artifacts") throw new Error("artifacts 路径越界，拒绝删除");
+async function publishArtifacts(staged, artifactsRoot) {
+  const names = await readdir(staged);
+  // 在移动任何旧产物前检查所有替换目标，拒绝目录联接和文件链接。
+  for (const name of names) {
+    const destination = path.join(artifactsRoot, name);
+    const existing = await lstat(destination).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+      return null;
+    });
+    if (existing && (existing.isSymbolicLink() || await realpath(destination) !== destination)) {
+      throw new Error(`产物目标不能是链接: ${destination}`);
+    }
+  }
+  const backup = path.join(staged, ".previous");
+  await mkdir(backup);
+  const moved = [];
+  try {
+    for (const name of names) {
+      const entry = { name, backedUp: false, installed: false };
+      moved.push(entry);
+      try {
+        await rename(path.join(artifactsRoot, name), path.join(backup, name));
+        entry.backedUp = true;
+      } catch (error) { if (error.code !== "ENOENT") throw error; }
+      await rename(path.join(staged, name), path.join(artifactsRoot, name));
+      entry.installed = true;
+    }
+  } catch (error) {
+    try {
+      for (const entry of moved.reverse()) {
+        if (entry.installed) await rename(path.join(artifactsRoot, entry.name), path.join(staged, entry.name));
+        if (entry.backedUp) await rename(path.join(backup, entry.name), path.join(artifactsRoot, entry.name));
+      }
+    } catch (rollbackError) {
+      const failure = new AggregateError([error, rollbackError], `恢复失败，旧产物保留在 ${backup}`);
+      failure.recoveryDirectory = staged;
+      throw failure;
+    }
+    throw error;
+  }
 }
-await rm(artifactsRoot, { recursive: true, force: true });
-await mkdir(artifactsRoot, { recursive: true });
 
-const pluginDirs = (await readdir(pluginsRoot, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory() && entry.name !== "shared")
-  .map((entry) => entry.name)
-  .sort();
+export async function buildPlugins({ root = workspaceRoot, dependencySource } = {}) {
+  const pluginsRoot = path.join(root, "plugins");
+  const artifactsRoot = await getArtifactRoot(root);
+  const pluginDirs = (await readdir(pluginsRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && entry.name !== "shared")
+    .map((entry) => entry.name)
+    .sort();
+  if (pluginDirs.length === 0) throw new Error("plugins/ 中没有可构建的插件");
+  const staged = await mkdtemp(path.join(artifactsRoot, ".build-"));
+  let preserveRecovery = false;
+  try {
+    for (const pluginDir of pluginDirs) {
+      if (DEDICATED_BUILDERS.has(pluginDir)) {
+        const args = [path.join(root, "scripts", `build-${pluginDir}.mjs`)];
+        if (pluginDir === "minecraft-body" && dependencySource) args.push("--dependency-source", path.resolve(dependencySource));
+        execFileSync(process.execPath, args, {
+          cwd: root, windowsHide: true, stdio: "inherit",
+          env: { ...process.env, CYRENE_PLUGIN_ARTIFACTS_ROOT: staged },
+        });
+      } else await packagePlugin(pluginDir, pluginsRoot, staged);
+    }
+    await publishArtifacts(staged, artifactsRoot);
+  } catch (error) {
+    preserveRecovery = Boolean(error.recoveryDirectory);
+    throw error;
+  } finally {
+    // 仅删除本次新建且边界已确认的暂存目录；不清空 artifacts。
+    if (path.dirname(staged) !== artifactsRoot || await realpath(staged) !== staged) throw new Error("暂存目录边界校验失败");
+    if (!preserveRecovery) await rm(staged, { recursive: true, force: true });
+  }
+}
 
-if (pluginDirs.length === 0) throw new Error("plugins/ 中没有可构建的插件");
-for (const pluginDir of pluginDirs) await packagePlugin(pluginDir);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== "--dependency-source")) throw new Error("使用 --dependency-source <Minecraft node_modules目录>");
+  await buildPlugins({ dependencySource: args[1] });
+}

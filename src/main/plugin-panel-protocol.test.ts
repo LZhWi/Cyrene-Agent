@@ -14,6 +14,7 @@ import { protocol } from "electron";
 import {
   installPluginPanelProtocol,
   registerPluginPanelScheme,
+  resolvePluginPanelAssetsRoot,
   resolvePluginPanelRequest,
   type PluginPanelAccessQuery,
 } from "./plugin-panel-protocol";
@@ -167,6 +168,11 @@ describe("registerPluginPanelScheme", () => {
 });
 
 describe("installPluginPanelProtocol", () => {
+  it("从编译模块目录定位同级的宿主资产目录", () => {
+    const moduleDir = path.resolve("dist/main/main");
+    expect(resolvePluginPanelAssetsRoot(moduleDir)).toBe(path.resolve("dist/main/plugin-panel"));
+  });
+
   it("把 handler 装到 cyrene-plugin 并包装响应头", async () => {
     installPluginPanelProtocol(query);
     const handler = vi.mocked(protocol.handle).mock.calls[0][1];

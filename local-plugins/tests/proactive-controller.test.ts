@@ -103,7 +103,10 @@ describe("陪伴插件自动主动消息控制器", () => {
   });
 
   it("执行静默期、三小时冷却和最多两条未回复限制", async () => {
-    const { controller, generate, deliver, advance } = fixture();
+    let attempts = 0;
+    const { controller, generate, deliver, advance } = fixture(storage(), undefined, undefined, () => ({
+      scene: ++attempts <= 2 ? "idle_daze" : "morning", score: 100,
+    }));
     controller.configure(true);
     controller.noteConversationEnded();
     await expect(controller.evaluate()).resolves.toEqual({ kind: "skipped" });
@@ -115,7 +118,6 @@ describe("陪伴插件自动主动消息控制器", () => {
     await expect(controller.evaluate()).resolves.toEqual({ kind: "skipped" });
     advance(PROACTIVE_FOLLOWUP_COOLDOWN_MS);
     generate.mockResolvedValueOnce('{"decision":"send","text":"今天也别忘了喝点水。"}');
-    await expect(controller.evaluate()).resolves.toEqual({ kind: "skipped" });
     await expect(controller.evaluate()).resolves.toMatchObject({ kind: "committed" });
     expect(controller.view().unansweredCount).toBe(MAX_UNANSWERED_PROACTIVE);
     advance(PROACTIVE_FOLLOWUP_COOLDOWN_MS);
@@ -301,26 +303,24 @@ describe("陪伴插件自动主动消息控制器", () => {
     expect(on.controller.ignoreMessage("message-1")).toBe(false);
   });
 
-  it("第二条未回复消息必须换场景，且评分至少五十五", async () => {
-    const candidates = [
-      { scene: "morning" as const, score: 90 },
-      { scene: "evening_checkin" as const, score: 54 },
-      { scene: "morning" as const, score: 90 },
-      { scene: "evening_checkin" as const, score: 55 },
-    ];
-    const f = fixture(storage(), undefined, undefined, (input) => input.allowAttempt ? candidates.shift() ?? null : null);
+  it.each([
+    ["idle_daze" as const, 90, false],
+    ["evening_checkin" as const, 54, false],
+    ["evening_checkin" as const, 55, true],
+  ])("第二条保留换场景和55分门槛：%s / %s", async (scene, score, allowed) => {
+    const candidates = [{ scene: "idle_daze" as const, score: 90 }, { scene, score }];
+    const f = fixture(storage(), undefined, undefined, input => input.allowAttempt ? candidates.shift() ?? null : null);
     f.controller.configure(true, true); f.advance(PROACTIVE_QUIET_MS);
     await expect(f.controller.evaluate()).resolves.toMatchObject({ kind: "committed" });
     f.advance(PROACTIVE_FOLLOWUP_COOLDOWN_MS);
-    await expect(f.controller.evaluate()).resolves.toEqual({ kind: "skipped" });
-    expect(f.controller.view().planner!.affinity.morning).toBeCloseTo(0.85);
-    await expect(f.controller.evaluate()).resolves.toEqual({ kind: "skipped" });
-    f.generate.mockResolvedValueOnce('{"decision":"send","text":"早上的事处理得还顺利吗？"}');
-    await expect(f.controller.evaluate()).resolves.toMatchObject({ kind: "committed" });
-    expect(f.controller.view().planner!.affinity.morning).toBeCloseTo(0.85);
+    f.generate.mockResolvedValueOnce('{"decision":"send","text":"之前那件事处理得还顺利吗？"}');
+    const result = await f.controller.evaluate();
+    expect(result.kind === "committed").toBe(allowed);
+    expect(f.generate).toHaveBeenCalledTimes(allowed ? 2 : 1);
   });
 
-  it("锁屏时始终不生成；深夜仅允许仍活跃的用户", async () => {
+  it("锁屏时始终不生成；深夜保留5分钟活跃窗口", async () => {
+    expect(NIGHT_ACTIVE_IDLE_LIMIT_SECONDS).toBe(300);
     const locked = fixture(storage(), undefined, async () => ({ at: new Date().toISOString(), idleSeconds: 0, screenLocked: true }));
     locked.controller.configure(true); locked.advance(PROACTIVE_QUIET_MS);
     await expect(locked.controller.evaluate()).resolves.toEqual({ kind: "skipped" });

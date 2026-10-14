@@ -17,7 +17,7 @@ function createWatcherHarness() {
 }
 
 describe("GitWorkspaceWatcher", () => {
-  it("shares one watcher and broadcasts one debounced change to every session in a workspace", async () => {
+  it("shares one watcher and refreshes after a quiet minute", async () => {
     vi.useFakeTimers();
     const harness = createWatcherHarness();
     const createWatcher = vi.fn(() => harness.watcher);
@@ -30,11 +30,53 @@ describe("GitWorkspaceWatcher", () => {
     harness.emit("change", "C:\\repo\\.git\\index");
 
     expect(createWatcher).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(299);
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(30_000);
+    harness.emit("change", "C:\\repo\\src\\b.ts");
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(changed).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(changed).toHaveBeenCalledWith(["s1", "s2"]);
+    await watcher.dispose();
     vi.useRealTimers();
+  });
+
+  it("batches file events before scheduling the Git refresh", async () => {
+    vi.useFakeTimers();
+    const harness = createWatcherHarness();
+    const changed = vi.fn();
+    const watcher = createGitWorkspaceWatcher({
+      createWatcher: () => harness.watcher,
+      onWorkspaceChanged: changed,
+      onError: vi.fn(),
+      eventDebounceMs: 150,
+      debounceMs: 1_000,
+    });
+    await watcher.subscribe({ sessionId: "s1", workspaceRoot: "C:\\repo", gitDir: "C:\\repo\\.git" });
+    harness.emit("change", "C:\\repo\\src\\a.ts");
+    await vi.advanceTimersByTimeAsync(100);
+    harness.emit("change", "C:\\repo\\src\\b.ts");
+    await vi.advanceTimersByTimeAsync(149);
+    expect(changed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(changed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(changed).toHaveBeenCalledWith(["s1"]);
+    await watcher.dispose();
+    vi.useRealTimers();
+  });
+
+  it("normalizes only the candidate during hot ignore checks", () => {
+    const normalized: string[] = [];
+    const normalize = (value: string) => {
+      normalized.push(value);
+      return path.resolve(value).replace(/\\/g, "/").toLowerCase();
+    };
+    const ignored = createCodeGitIgnoredPredicate({ workspaceRoot: "C:\\repo", gitDir: "C:\\repo\\.git" }, normalize);
+    normalized.length = 0;
+    expect(ignored("C:\\repo\\node_modules\\pkg\\index.js")).toBe(true);
+    expect(normalized).toEqual(["C:\\repo\\node_modules\\pkg\\index.js"]);
   });
 
   it("keeps the shared watcher until the last session leaves", async () => {
@@ -94,7 +136,7 @@ describe("GitWorkspaceWatcher 原生递归监视（真实文件系统）", () =>
     mkdirSync(path.join(gitDir, "refs", "heads"), { recursive: true });
     writeFileSync(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n");
     const changed = vi.fn();
-    const watcher = createGitWorkspaceWatcher({ onWorkspaceChanged: changed, onError: vi.fn(), debounceMs: 80 });
+    const watcher = createGitWorkspaceWatcher({ onWorkspaceChanged: changed, onError: vi.fn(), eventDebounceMs: 20, debounceMs: 80 });
 
     try {
       await watcher.subscribe({ sessionId: "s1", workspaceRoot: root, gitDir });
@@ -136,7 +178,7 @@ describe("GitWorkspaceWatcher 原生递归监视（真实文件系统）", () =>
     mkdirSync(path.join(gitDir, "refs", "heads"), { recursive: true });
     writeFileSync(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n");
     const changed = vi.fn();
-    const watcher = createGitWorkspaceWatcher({ onWorkspaceChanged: changed, onError: vi.fn(), debounceMs: 80 });
+    const watcher = createGitWorkspaceWatcher({ onWorkspaceChanged: changed, onError: vi.fn(), eventDebounceMs: 20, debounceMs: 80 });
 
     try {
       await watcher.subscribe({ sessionId: "s1", workspaceRoot: root, gitDir });
@@ -162,7 +204,7 @@ describe("GitWorkspaceWatcher 原生递归监视（真实文件系统）", () =>
     const gitDir = path.join(root, ".git");
     mkdirSync(gitDir, { recursive: true });
     const changed = vi.fn();
-    const watcher = createGitWorkspaceWatcher({ onWorkspaceChanged: changed, onError: vi.fn(), debounceMs: 80 });
+    const watcher = createGitWorkspaceWatcher({ onWorkspaceChanged: changed, onError: vi.fn(), eventDebounceMs: 20, debounceMs: 80 });
 
     await watcher.subscribe({ sessionId: "s1", workspaceRoot: root, gitDir });
     await watcher.dispose();

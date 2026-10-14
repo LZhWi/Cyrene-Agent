@@ -7,6 +7,7 @@ import { normalizeModelMarkdown } from "./markdown-normalize";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { AgentRoundRecord, ChatColdRecallRecord, ChatMessageChannelSource, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import type { ModelRetryStatus } from "../../../../../shared/model-retry";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
@@ -34,11 +35,15 @@ import { WeatherCard } from "./weather/WeatherCard";
 import { countRoundChangedFiles, describeToolExecution, resolveAgentRoundTitle } from "./agent-rounds";
 import type { SegmentedOutputMode } from "../../../../../shared/preferences";
 import { getAssistantReplyBubbleTexts } from "./message-segmentation";
-import { TaskDelegationRow } from "./TaskDelegationRow";
+import { TaskDelegationRow, TaskInspectorContext } from "./TaskDelegationRow";
 import { extractFileChanges, FileChangeCard } from "./FileChangeCard";
 import { ReviewPanel } from "./ReviewPanel";
 import { MermaidBlock } from "./MermaidBlock";
 import { SvgCardBlock } from "./SvgCardBlock";
+import { MusicEventCard } from "./MusicEventCard";
+import { CallEventCard } from "./CallEventCard";
+import type { ChatMessage } from "../../../../../shared/chat-types";
+import { VirtualChatMessageList } from "./VirtualChatMessageList";
 
 export interface ChatMessageItem {
   id: string;
@@ -56,6 +61,7 @@ export interface ChatMessageItem {
   loading?: boolean;
   /** 请求已发出但尚未收到 Think、工具或正文等首个可视事件。 */
   waitingForFirstEvent?: boolean;
+  modelRetry?: ModelRetryStatus;
   ttsCacheKey?: string;
   ttsCacheVersion?: string;
   sticker?: string | null;
@@ -67,6 +73,8 @@ export interface ChatMessageItem {
   taskPlan?: TaskPlanPresentation;
   attachments?: ChatMessageAttachment[];
   weather?: WeatherData;
+  callEvent?: ChatMessage["callEvent"];
+  musicEvent?: ChatMessage["musicEvent"];
   /** 上下文容量快照：运行中为每轮 preRequest 实时值，run 结束后为终态快照。 */
   contextUsage?: ContextUsageSnapshot;
   /** 渠道群聊的发送者/引用等隐藏模型上下文；不直接渲染。 */
@@ -108,6 +116,7 @@ interface ChatMessageListProps {
   onRegisterScrollToBottom?: (scroll: () => void) => void;
   /** 点击 Review 文件项时打开右侧检查面板 */
   onOpenReviewInspector?: (runId: string, fileIndex: number) => void;
+  onOpenTaskInspector?: (taskId: string) => void;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -393,7 +402,15 @@ function DotSpinner() {
   );
 }
 
-function ModelWaitContent() {
+function RetryStatusContent({ status }: { status?: ModelRetryStatus }) {
+  const { t } = useTranslation();
+  if (!status || status.phase === "cleared") return null;
+  return <span className="cy-model-retry" role="status">{status.phase === "waiting"
+    ? t("messageList.retryWaiting", { retryNumber: status.retryNumber, maxRetries: status.maxRetries, seconds: Math.ceil((status.delayMs ?? 0) / 1000) })
+    : t("messageList.retryAttempting", { retryNumber: status.retryNumber, maxRetries: status.maxRetries })}</span>;
+}
+
+function ModelWaitContent({ modelRetry }: { modelRetry?: ModelRetryStatus }) {
   const { t } = useTranslation();
   return (
     <section className="cy-model-wait" aria-label={t("messageList.modelWaitAria")}>
@@ -402,8 +419,14 @@ function ModelWaitContent() {
         <DotSpinner />
       </span>
       <span>{t("messageList.modelWaitText")}</span>
+      <RetryStatusContent status={modelRetry} />
     </section>
   );
+}
+
+export function reasoningPreview(content: string): string {
+  const lastLine = content.trim().split(/\r?\n/).filter((line) => line.trim()).at(-1)?.trim() ?? "";
+  return Array.from(lastLine).slice(0, 80).join("");
 }
 
 function ReasoningContent({
@@ -418,10 +441,14 @@ function ReasoningContent({
   onExpand: (expanded: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const preview = loading && !expanded ? reasoningPreview(content) : "";
   return (
     <Think
       rootClassName="cy-message-reasoning"
-      title={loading ? t("messageList.thinkingTitle") : t("messageList.thinkingDoneTitle")}
+      title={<span className="cy-message-reasoning__title">
+        <span>{loading ? t("messageList.thinkingTitle") : t("messageList.thinkingDoneTitle")}</span>
+        {preview && <span className="cy-message-reasoning__preview">{preview}</span>}
+      </span>}
       icon={
         <span className={`cy-reasoning-status-art${loading ? " is-thinking" : " is-complete"}`} aria-hidden="true">
           <img src={thinkingMoodUrl} alt="" draggable={false} />
@@ -626,6 +653,7 @@ function RunActivityContent({
   tools,
   stage,
   taskPlan,
+  modelRetry,
   expanded,
   onExpand,
 }: {
@@ -638,6 +666,7 @@ function RunActivityContent({
   tools: ToolExecutionRecord[];
   stage?: AgentRunStage;
   taskPlan?: TaskPlanPresentation;
+  modelRetry?: ModelRetryStatus;
   expanded: boolean;
   onExpand: (expanded: boolean) => void;
 }) {
@@ -664,6 +693,7 @@ function RunActivityContent({
         aria-expanded={expanded}
         aria-controls={`${activityId}-details`}
       >
+        <RetryStatusContent status={modelRetry} />
         <span className="cy-run-activity__title">
             <span className="cy-run-activity__art" aria-hidden="true">
               <img src={image} alt="" draggable={false} />
@@ -808,17 +838,23 @@ function UserContent({
   attachments = [],
   chatLayout,
   channelSource,
+  callEvent,
+  musicEvent,
 }: {
   content: string;
   stickerUrl?: string;
   attachments?: ChatMessageAttachment[];
   chatLayout: boolean;
   channelSource?: ChatMessageChannelSource;
+  callEvent?: ChatMessage["callEvent"];
+  musicEvent?: ChatMessage["musicEvent"];
 }) {
   const { t } = useTranslation();
   return (
     <div className="cy-message__user-body">
       {channelSource && <ChannelSourceLabel source={channelSource} direction="incoming" />}
+      {callEvent && <CallEventCard event={callEvent} />}
+      {musicEvent && <MusicEventCard event={musicEvent} />}
       <UserAttachments attachments={attachments} />
       {content && (chatLayout
         ? <div className="cy-message__user-bubble"><MarkdownContent content={content} /></div>
@@ -911,7 +947,7 @@ function createRoles(
     variant: "filled" as const,
     rootClassName: "cy-message cy-message--user",
     avatar: <UserMessageAvatar src={userAvatarUrl} />,
-    contentRender: (content: string, info: { extraInfo?: { messageId?: string; stickerUrl?: string; attachments?: ChatMessageAttachment[]; channelSource?: ChatMessageChannelSource } }) => (
+    contentRender: (content: string, info: { extraInfo?: { messageId?: string; stickerUrl?: string; attachments?: ChatMessageAttachment[]; channelSource?: ChatMessageChannelSource; callEvent?: ChatMessage["callEvent"]; musicEvent?: ChatMessage["musicEvent"] } }) => (
       info.extraInfo?.messageId === editingMessageId
         ? <LastUserMessageEditor
             value={editDraft}
@@ -926,6 +962,8 @@ function createRoles(
             attachments={info.extraInfo?.attachments}
             chatLayout={mode === "chat"}
             channelSource={info.extraInfo?.channelSource}
+            callEvent={info.extraInfo?.callEvent}
+            musicEvent={info.extraInfo?.musicEvent}
           />
     ),
     footer: (content: string, info: { extraInfo?: { messageId?: string; at?: number } }) => {
@@ -1034,6 +1072,7 @@ function createRoles(
         tools?: ToolExecutionRecord[];
         runStage?: AgentRunStage;
         taskPlan?: TaskPlanPresentation;
+        modelRetry?: ModelRetryStatus;
       };
     }) => {
       const activityId = info.extraInfo?.activityId;
@@ -1050,6 +1089,7 @@ function createRoles(
           tools={info.extraInfo?.tools ?? []}
           stage={info.extraInfo?.runStage}
           taskPlan={info.extraInfo?.taskPlan}
+          modelRetry={info.extraInfo?.modelRetry}
           expanded={resolveRunActivityExpanded(reasoningExpanded, activityId, activity)}
           onExpand={(expanded) => onReasoningExpand(activityId, expanded)}
         />
@@ -1070,7 +1110,7 @@ function createRoles(
     variant: "borderless" as const,
     avatar: null,
     rootClassName: "cy-message cy-message--waiting",
-    contentRender: () => <ModelWaitContent />,
+    contentRender: (_content: string, info: { extraInfo?: { modelRetry?: ModelRetryStatus } }) => <ModelWaitContent modelRetry={info.extraInfo?.modelRetry} />,
   },
   weather: {
     placement: "start" as const,
@@ -1124,6 +1164,8 @@ function createMessageItemsForMessage(
         extraInfo: {
           stickerUrl: stickerId ? resolveStickerUrl(stickerId, enabledStickers) : undefined,
           attachments: message.attachments,
+          callEvent: message.callEvent,
+          musicEvent: message.musicEvent,
           messageId: message.id,
           at: message.at,
           channelSource: message.channelSource,
@@ -1138,6 +1180,7 @@ function createMessageItemsForMessage(
         key: `${message.id}-waiting`,
         role: "waiting",
         content: "",
+        extraInfo: { modelRetry: message.modelRetry },
       });
     }
     const reasoningBlocks = message.reasoningBlocks?.length
@@ -1171,6 +1214,7 @@ function createMessageItemsForMessage(
           tools,
           runStage: message.runStage,
           taskPlan: message.taskPlan,
+          modelRetry: message.modelRetry,
         },
       });
     } else {
@@ -1245,6 +1289,7 @@ export function ChatMessageList({
   onScrollToBottomVisibilityChange,
   onRegisterScrollToBottom,
   onOpenReviewInspector,
+  onOpenTaskInspector,
 }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -1479,8 +1524,11 @@ export function ChatMessageList({
   }, [visibleMessages, enabledStickers, mode, segmentedOutputMode]);
   const channelConversationLabel = useMemo(() => resolveChannelConversationLabel(messages), [messages]);
   const bubbleList = useMemo(
-    () => <Bubble.List items={items} role={roles} autoScroll onScroll={mode === "chat" ? updateScrollState : undefined} />,
-    [items, mode, roles, updateScrollState],
+    () => mode === "chat"
+      ? <Bubble.List items={items} role={roles} autoScroll onScroll={updateScrollState} />
+      : <VirtualChatMessageList key={conversationId ?? mode} items={items} roles={roles}
+          scrollRef={containerRef} nearBottomRef={isNearBottomRef} layoutKey={conversationId ?? mode} />,
+    [conversationId, items, mode, roles, updateScrollState],
   );
 
   const firstVisibleMessageId = visibleMessages[0]?.id;
@@ -1513,7 +1561,7 @@ export function ChatMessageList({
           <span>{channelConversationLabel}</span>
         </div>
       )}
-      {bubbleList}
+      <TaskInspectorContext.Provider value={mode === "chat" ? undefined : onOpenTaskInspector}>{bubbleList}</TaskInspectorContext.Provider>
     </div>
   );
 }

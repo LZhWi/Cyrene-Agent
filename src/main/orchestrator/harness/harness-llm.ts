@@ -21,6 +21,11 @@ import type {
 import type { HarnessConfig } from "./types";
 import { AGENT_COMPACTION_PROMPT } from "./compaction";
 import { isExplicitStreamUnsupported } from "../vendors/stream-support";
+import { AgentRuntimeError } from "../agent-runtime-error";
+import { classifyModelFailure } from "../vendors/model-error-classifier";
+import { runModelRequestWithRetry } from "../vendors/model-retry-runner";
+import { readRetryAfterMs } from "../vendors/model-retry-policy";
+import type { ModelRetryStatus } from "../../../shared/model-retry";
 import {
   composePromptLayers,
   normalizeToolSpecsForCache,
@@ -57,6 +62,8 @@ export async function callLLM(
   config: HarnessConfig,
   signal?: AbortSignal,
   onReasoningDelta?: (delta: string) => void,
+  onRetryStatus?: (status: ModelRetryStatus) => void,
+  getRemainingBudgetMs?: () => number,
 ): Promise<ChatResponse> {
   const adapter = getAdapterForConfig(vendorConfig);
   const composed = composePromptLayers(promptLayers, messages);
@@ -74,7 +81,6 @@ export async function callLLM(
   const chatRequest = adapter.applyCacheHints?.(baseRequest, vendorConfig) ?? baseRequest;
   logPromptCacheRequest("tool", chatRequest);
 
-  let receivedStreamDelta = false;
   const recordResponseUsage = (response: ChatResponse): ChatResponse => {
     recordRequest(vendorConfig.model);
     if (!response.usage) return response;
@@ -88,39 +94,66 @@ export async function callLLM(
     );
     return response;
   };
-  try {
-    return recordResponseUsage(await streamChatWithSdk({
-      adapter,
-      request: chatRequest,
-      config: vendorConfig,
-      timeoutMs: config.totalTimeoutMs,
-      signal,
-      onDelta: (delta) => {
-        receivedStreamDelta = true;
-        if (delta.type === "reasoning_delta" && delta.delta) onReasoningDelta?.(delta.delta);
-      },
-    }));
-  } catch (error) {
-    if (receivedStreamDelta || !isExplicitStreamUnsupported(error)) throw error;
-  }
+  let forceNonStreaming = false;
+  const response = await runModelRequestWithRetry(async (attempt) => {
+    let receivedStreamDelta = false;
+    if (!forceNonStreaming) {
+      try {
+        return await streamChatWithSdk({
+          adapter,
+          request: chatRequest,
+          config: vendorConfig,
+          timeoutMs: config.totalTimeoutMs,
+          signal: attempt.signal,
+          onDelta: (delta) => {
+            receivedStreamDelta = true;
+            attempt.onStreamActivity();
+            if ((delta.type === "text_delta" || delta.type === "reasoning_delta") && delta.delta) attempt.onVisibleDelta();
+            if (delta.type === "reasoning_delta" && delta.delta) onReasoningDelta?.(delta.delta);
+          },
+        });
+      } catch (error) {
+        if (receivedStreamDelta || !isExplicitStreamUnsupported(error)) throw error;
+        forceNonStreaming = true;
+      }
+    }
 
-  // 非流式兜底
-  const fallbackRequest: ChatRequest = { ...chatRequest, stream: false };
-  const http = adapter.buildRequest(fallbackRequest, vendorConfig);
-  const response = await fetch(http.url, {
-    method: "POST",
-    headers: http.headers,
-    body: http.body,
-    signal,
+    // 非流式兜底
+    const fallbackRequest: ChatRequest = { ...chatRequest, stream: false };
+    const http = adapter.buildRequest(fallbackRequest, vendorConfig);
+    let response: Response;
+    try {
+      response = await fetch(http.url, {
+        method: "POST", headers: http.headers, body: http.body, signal: attempt.signal,
+      });
+    } catch (error) {
+      if (attempt.signal.aborted) throw error;
+      const failure = classifyModelFailure({ provider: adapter.id, model: vendorConfig.model, error });
+      throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", "模型服务请求失败。", {
+        cause: error,
+        retryAfterMs: readRetryAfterMs(error),
+        modelFailure: { ...failure, category: failure.category === "UNKNOWN" ? "NETWORK" : failure.category },
+      });
+    }
+    if (!response.ok) {
+      // [image-send] 链路日志④：服务端拒绝时打印完整错误体（Anthropic 400 会带具体 reason）。
+      const rawBody = await response.text().catch(() => "");
+      console.error(`[image-send] LLM 请求被拒 HTTP ${response.status}:`, rawBody.slice(0, 500) || "(无响应体)");
+      let errorData: unknown;
+      try { errorData = JSON.parse(rawBody || "{}"); } catch { errorData = undefined; }
+      throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", `模型请求失败：HTTP ${response.status}`, {
+        retryAfterMs: readRetryAfterMs(response.headers),
+        modelFailure: classifyModelFailure({ provider: adapter.id, model: vendorConfig.model, status: response.status, error: errorData }),
+      });
+    }
+    return adapter.parseResponse(await response.json());
+  }, {
+    provider: adapter.id, model: vendorConfig.model,
+    maxRetries: config.modelRequestMaxRetries ?? 5,
+    idleTimeoutMs: config.modelRequestIdleTimeoutMs ?? 60_000,
+    signal, onStatus: onRetryStatus, getRemainingBudgetMs,
   });
-  if (!response.ok) {
-    // [image-send] 链路日志④：服务端拒绝时打印完整错误体（Anthropic 400 会带具体 reason）。
-    const rawBody = await response.text().catch(() => "");
-    console.error(`[image-send] LLM 请求被拒 HTTP ${response.status}:`, rawBody.slice(0, 500) || "(无响应体)");
-    const errorData = JSON.parse(rawBody || "{}") as { error?: { message?: string } };
-    throw new Error(errorData.error?.message || `模型请求失败：HTTP ${response.status}`);
-  }
-  return recordResponseUsage(adapter.parseResponse(await response.json()));
+  return recordResponseUsage(response);
 }
 
 /** 历史摘要（用于 mid-loop compaction）。 */
@@ -130,6 +163,7 @@ export async function summarizeHistory(
   history: ChatMessage[],
   tools: ToolSpec[],
   signal?: AbortSignal,
+  retryOptions: { maxRetries?: number; idleTimeoutMs?: number; onStatus?: (status: ModelRetryStatus) => void; getRemainingBudgetMs?: () => number } = {},
 ): Promise<string> {
   const adapter = getAdapterForConfig(vendorConfig);
 
@@ -149,19 +183,36 @@ export async function summarizeHistory(
   };
 
   const http = adapter.buildRequest(chatRequest, vendorConfig);
-  const response = await fetch(http.url, {
-    method: "POST",
-    headers: http.headers,
-    body: http.body,
-    signal,
+  return runModelRequestWithRetry(async (attempt) => {
+    let response: Response;
+    try {
+      response = await fetch(http.url, { method: "POST", headers: http.headers, body: http.body, signal: attempt.signal });
+    } catch (error) {
+      if (attempt.signal.aborted) throw error;
+      const failure = classifyModelFailure({ provider: adapter.id, model: vendorConfig.model, error });
+      throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", "摘要请求失败。", {
+        cause: error, retryAfterMs: readRetryAfterMs(error),
+        modelFailure: { ...failure, category: failure.category === "UNKNOWN" ? "NETWORK" : failure.category },
+      });
+    }
+
+    if (!response.ok) {
+      const rawBody = await response.text().catch(() => "");
+      console.error(`[image-send] 摘要请求被拒 HTTP ${response.status}:`, rawBody.slice(0, 500) || "(无响应体)");
+      let errorData: unknown;
+      try { errorData = JSON.parse(rawBody); } catch { errorData = undefined; }
+      throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", `摘要请求失败：HTTP ${response.status}`, {
+        modelFailure: classifyModelFailure({ provider: adapter.id, model: vendorConfig.model, status: response.status, error: errorData }),
+        retryAfterMs: readRetryAfterMs(response.headers),
+      });
+    }
+
+    const result = adapter.parseResponse(await response.json());
+    return result.text;
+  }, {
+    provider: adapter.id, model: vendorConfig.model,
+    maxRetries: retryOptions.maxRetries ?? 5,
+    idleTimeoutMs: retryOptions.idleTimeoutMs ?? 60_000,
+    signal, onStatus: retryOptions.onStatus, getRemainingBudgetMs: retryOptions.getRemainingBudgetMs,
   });
-
-  if (!response.ok) {
-    const rawBody = await response.text().catch(() => "");
-    console.error(`[image-send] 摘要请求被拒 HTTP ${response.status}:`, rawBody.slice(0, 500) || "(无响应体)");
-    throw new Error(`摘要请求失败：HTTP ${response.status}`);
-  }
-
-  const result = adapter.parseResponse(await response.json());
-  return result.text;
 }

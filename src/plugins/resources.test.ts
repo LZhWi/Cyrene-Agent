@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginResourceTracker } from "./resources";
+import { PLUGIN_CLEANUP_TIMEOUT_MS } from "./cleanup";
 
 function recorder(events: string[], mode: "ok" | "never" | "throw" = "ok") {
   return () => {
@@ -62,7 +63,7 @@ describe("createPluginResourceTracker", () => {
     tracker.track("tool", "c", () => order.push("c"));
 
     const disposing = tracker.dispose();
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(PLUGIN_CLEANUP_TIMEOUT_MS);
     await disposing;
 
     expect(order).toEqual(["c", "b", "never", "a"]);

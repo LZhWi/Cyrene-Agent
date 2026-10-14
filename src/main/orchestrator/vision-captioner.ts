@@ -7,6 +7,8 @@
 // 用框架指令让视觉模型自己理解任务。
 
 import { resolveTimeoutPolicy } from "../runtime-policy";
+import { chatModuleHasOverride, resolveChatModuleModel } from "../settings/chat-module-routes";
+import { getAdapterForConfig } from "./vendors";
 
 /** 视觉模型配置（OpenAI 兼容）。 */
 export interface VisionConfig {
@@ -73,6 +75,19 @@ export async function captionImage(
   maxTokens = 512,
 ): Promise<string> {
   const instruction = buildInstruction(userQuery);
+  if (chatModuleHasOverride("vision")) {
+    const target = resolveChatModuleModel("vision", { ...config, provider: "自定义" });
+    const adapter = getAdapterForConfig(target);
+    const url = "url" in image ? image.url : `data:${image.mime};base64,${image.base64}`;
+    const request = adapter.buildRequest({ model: target.model, stream: false, maxTokens,
+      messages: [{ role: "user", content: [{ type: "text", text: instruction }, { type: "image_url", image_url: { url } }] }] }, target);
+    const signal = externalSignal ? AbortSignal.any([externalSignal, AbortSignal.timeout(VISION_TIMEOUT_MS)]) : AbortSignal.timeout(VISION_TIMEOUT_MS);
+    const response = await fetch(request.url, { method: "POST", headers: request.headers, body: request.body, signal });
+    if (!response.ok) throw new Error(`OAuth 图片理解失败：HTTP ${response.status}`);
+    const text = adapter.parseResponse(await response.json()).text.trim();
+    if (!text) throw new Error("OAuth 图片理解返回空内容");
+    return text;
+  }
   // base64 本地数据拼 data URL；公网 URL 原样直传，厂商服务器自行拉图
   const imageUrl = "url" in image ? image.url : "data:" + image.mime + ";base64," + image.base64;
 

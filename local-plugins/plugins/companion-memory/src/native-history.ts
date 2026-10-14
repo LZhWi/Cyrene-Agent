@@ -4,6 +4,7 @@ import type { Entry } from "./entries";
 import { matchTrigger, type SourceCandidate, type SourceSession } from "./source-matcher";
 import { locateAndVerifySource } from "./source-review";
 import { stripAssistantHiddenText } from "./derived-text";
+import { explicitLegacySources, excerptLegacySources } from "./legacy-source";
 
 const MAX_CONVERSATIONS = 20;
 const MAX_LISTED_CONVERSATIONS = 500;
@@ -43,7 +44,7 @@ function parseConversationIds(value: unknown): string[] {
 
 function toSourceMessage(message: PluginConversationMessage) {
   const at = Date.parse(message.at);
-  if (!Number.isFinite(at) || at < 0 || !message.id || !message.text) throw new Error("历史消息结构无效");
+  if (!Number.isFinite(at) || at < 0 || !message.id || typeof message.text !== "string") throw new Error("历史消息结构无效");
   return { id: message.id, role: message.role, content: message.role === "assistant" ? stripAssistantHiddenText(message.text) : message.text, at };
 }
 
@@ -102,11 +103,19 @@ export function createNativeHistory(ctx: PluginContext, memory: HistoricalMemory
 
   function buildResults(entries: Entry[], sessions: SourceSession[]): PreviewResult[] {
     return entries
-      .filter((entry) => entry.provenance === "legacy-unverified" && !entry.isSummary)
+      .filter((entry) => ["legacy-unverified", "legacy-user-attested"].includes(entry.provenance ?? "") && !entry.isSummary && !entry.legacySource?.parentEntryIds)
       .slice(0, MAX_MEMORY_RESULTS)
       .map((entry) => {
         const trigger = entry.triggerText?.trim() || entry.quote.trim();
-        const match = matchTrigger(trigger, sessions);
+        let match = matchTrigger(trigger, sessions);
+        try {
+          const explicit = explicitLegacySources(entry, sessions);
+          if (explicit) match = { method: "exact", candidates: [{ sessionId: explicit[0].session.id, message: explicit[0].message }] };
+          else if (!["exact", "normalized-exact", "ambiguous"].includes(match.method)) {
+            const excerpts = excerptLegacySources(entry, sessions);
+            if (excerpts) match = { method: "exact", candidates: [{ sessionId: excerpts[0].session.id, message: excerpts[0].message }] };
+          }
+        } catch { match = { method: "no-match", candidates: [] }; }
         return { entryId: entry.id, content: entry.content, trigger, method: match.method, candidates: match.candidates };
       });
   }
@@ -144,18 +153,21 @@ export function createNativeHistory(ctx: PluginContext, memory: HistoricalMemory
   async function refreshPreview(preview: CurrentPreview, signal: AbortSignal) {
     if (memory.view().revision !== preview.revision) throw new Error("记忆已变化，请重新预检历史来源");
     const sessions = await readSessions(preview.conversationIds, signal);
+    const checked = await readSessions(preview.conversationIds, signal);
+    if (JSON.stringify(checked) !== JSON.stringify(sessions)) throw new Error("历史来源在核验期间变化");
     const state = memory.view();
     if (state.revision !== preview.revision) throw new Error("记忆已变化，请重新预检历史来源");
     return { state, sessions, results: buildResults(state.entries, sessions) };
   }
 
-  function binding(entryId: string, candidate: SourceCandidate) {
+  function binding(entryId: string, candidate: SourceCandidate, sessions: SourceSession[]) {
     return {
       entryId,
       conversationId: candidate.sessionId,
       messageId: candidate.message.id,
       text: candidate.message.content,
       at: candidate.message.at,
+      sessions,
       ...(candidate.previous ? { before: candidate.previous.content } : {}),
       ...(candidate.next ? { after: candidate.next.content } : {}),
     };
@@ -167,6 +179,14 @@ export function createNativeHistory(ctx: PluginContext, memory: HistoricalMemory
   }
 
   return {
+    async readSelectedSessions(value: unknown, signal: AbortSignal) {
+      const ids = (value as any)?.conversationIds;
+      if (Array.isArray(ids) && !ids.length) return [];
+      const before = await readSessions(parseConversationIds(ids), signal);
+      const after = await readSessions(parseConversationIds(ids), signal);
+      if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("来源在读取期间变化");
+      return after;
+    },
     async list(signal: AbortSignal) {
       return (await listConversations(signal)).map((item) => ({
         id: item.id,
@@ -184,7 +204,7 @@ export function createNativeHistory(ctx: PluginContext, memory: HistoricalMemory
         id: randomUUID(),
         revision: state.revision,
         conversationIds,
-        totalEligible: state.entries.filter((entry) => entry.provenance === "legacy-unverified" && !entry.isSummary).length,
+        totalEligible: state.entries.filter((entry) => ["legacy-unverified", "legacy-user-attested"].includes(entry.provenance ?? "") && !entry.isSummary && !entry.legacySource?.parentEntryIds).length,
         results: buildResults(state.entries, sessions),
       };
       return publicPreview(current);
@@ -196,7 +216,7 @@ export function createNativeHistory(ctx: PluginContext, memory: HistoricalMemory
       const bindings = refreshed.results
         .filter((result) => ["exact", "normalized-exact"].includes(result.method) && result.candidates.length === 1)
         .slice(0, 100)
-        .map((result) => binding(result.entryId, result.candidates[0]));
+        .map((result) => binding(result.entryId, result.candidates[0], refreshed.sessions));
       if (!bindings.length) throw new Error("没有可自动绑定的唯一来源");
       const next = memory.bindHistoricalSources({ revision: refreshed.state.revision, bindings });
       current = undefined;
@@ -213,7 +233,7 @@ export function createNativeHistory(ctx: PluginContext, memory: HistoricalMemory
       const result = refreshed.results.find((item) => item.entryId === entryId);
       const candidate = result?.candidates.find((item) => item.sessionId === conversationId && item.message.id === messageId);
       if (!result || result.method !== "ambiguous" || !candidate) throw new Error("所选消息不再属于当前歧义候选");
-      const next = memory.bindHistoricalSources({ revision: refreshed.state.revision, bindings: [binding(entryId, candidate)] });
+      const next = memory.bindHistoricalSources({ revision: refreshed.state.revision, bindings: [binding(entryId, candidate, refreshed.sessions)] });
       current = {
         ...preview,
         revision: next.revision,

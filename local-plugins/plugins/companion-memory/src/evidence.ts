@@ -1,4 +1,6 @@
 export interface Evidence {
+  previousContent?: string;
+  messageVersions?: Array<{ id: string; hash: string }>;
   id: string; memoryId: string; quoteSnippet: string; createdAt: number;
   sourceStatus: "active" | "archived" | "deleted";
   conversationId?: string; messageIds?: string[];
@@ -9,6 +11,8 @@ export function validateEvidence(records: unknown): asserts records is Evidence[
   if (!Array.isArray(records)) throw new Error("证据记录格式无效");
   const ids = new Set<string>();
   for (const e of records) {
+    if (e?.previousContent !== undefined && typeof e.previousContent !== "string") throw new Error("证据旧正文损坏");
+    if (e?.messageVersions !== undefined && (!Array.isArray(e.messageVersions) || e.messageVersions.some((v: any) => !v || typeof v.id !== "string" || !v.id || !/^[a-f0-9]{64}$/.test(v.hash)))) throw new Error("证据消息版本损坏");
     if (!e || ![e.id, e.memoryId, e.quoteSnippet].every((v) => typeof v === "string") || !e.id || !e.memoryId || ids.has(e.id) || !Number.isFinite(e.createdAt) || !["active", "archived", "deleted"].includes(e.sourceStatus)) throw new Error("证据记录损坏");
     ids.add(e.id);
     for (const key of ["conversationId", "contextBeforeSnippet", "contextAfterSnippet"]) if (e[key] !== undefined && typeof e[key] !== "string") throw new Error("证据来源字段损坏");

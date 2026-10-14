@@ -72,27 +72,73 @@ describe("自由生活决策协议", () => {
     change(item);
     expect(() => parseLifeDecision(JSON.stringify(item), input)).toThrow("生活决策输出无效");
   });
+
+  it("模型意向只接受有效日期和已知模型 ID，日程只引用清单内 ID", () => {
+    const proposed = { ...decision(input), diary: null,
+      intentions: [{ id: null, title: "把手边的书读完", activity: "读书：《星灯游记》", targetDate: "2026-09-05" }] };
+    proposed.windows[0].segments[0] = { ...proposed.windows[0].segments[0], goalRef: "new:0" } as any;
+    expect(parseLifeDecision(JSON.stringify(proposed), input).plan?.windows[0].goalRefs).toEqual(["new:0"]);
+    for (const targetDate of ["2026-09-31", "2026-08-31", "2026-09-09"]) {
+      expect(() => parseLifeDecision(JSON.stringify({ ...proposed,
+        intentions: [{ ...proposed.intentions[0], targetDate }] }), input)).toThrow();
+    }
+    expect(() => parseLifeDecision(JSON.stringify({ ...proposed,
+      intentions: [{ ...proposed.intentions[0], id: "goal:user" }] }), input)).toThrow();
+    expect(() => parseLifeDecision(JSON.stringify({ ...proposed,
+      windows: [{ ...proposed.windows[0], segments: [{ ...proposed.windows[0].segments[0], goalRef: "unknown" }] }] }), input)).toThrow();
+  });
 });
 
 describe("早中晚模拟运行", () => {
+  it("早上创建未来意向并由程序分配 ID，实际活动才关联进展", async () => {
+    let clock = time(6, 45), saved: unknown;
+    const storage: PluginStorage = { get: <T>(key: string) => key === "life-state" ? structuredClone(saved) as T : undefined,
+      set: (_key, value) => { saved = structuredClone(value); }, rootDir: () => "memory-only" };
+    const life = createLifeContext(storage, () => clock, { generate: async (messages) => {
+      const current = JSON.parse(messages.at(-1)!.content) as LifePlanningInput;
+      const output = { ...decision(current, "读书：《星灯游记》"), diary: null,
+        intentions: [{ id: null, title: "读完星灯游记", activity: "读书：《星灯游记》", targetDate: "2026-09-04" }] };
+      output.windows[0].segments[0] = { ...output.windows[0].segments[0], goalRef: "new:0" } as any;
+      output.windows[1].segments[0] = { ...output.windows[1].segments[0], activity: "细读《星灯游记》",
+        goalRef: current.goals?.find((goal) => goal.source === "user")?.id } as any;
+      return JSON.stringify(output);
+    } });
+    life.configurePlanning(true);
+    const userGoal = life.saveGoal({ title: "每天读书", activity: "读书" }).journal.goals[0];
+    expect((await life.plan("daily")).status).toBe("applied");
+    const intention = life.view().journal.goals.find((goal) => goal.source === "model")!;
+    expect(intention).toMatchObject({ id: expect.stringMatching(/^intent:/), dueDate: "2026-09-04", eventRefs: [] });
+    expect(life.view().planning.plans[0].windows[0].goalRefs).toEqual([intention.id]);
+    while (clock < time(18, 15)) { clock += 15 * 60_000; life.build(); }
+    expect(life.view().continuity.events.some((event) => event.goalIds?.includes(intention.id))).toBe(true);
+    expect(life.view().journal.goals.find((goal) => goal.id === intention.id)?.eventRefs.length).toBeGreaterThan(0);
+    expect(life.view().continuity.events.some((event) => event.goalIds?.includes(userGoal.id))).toBe(true);
+    expect(life.view().journal.goals.find((goal) => goal.id === userGoal.id)?.eventRefs.length).toBeGreaterThan(0);
+  });
   it("模型耗时跨过一分钟后仍能原子保存有来源的日记", async () => {
     let clock = time(6, 45), saved: unknown;
     const storage: PluginStorage = { get: <T>(key: string) => key === "life-state" ? structuredClone(saved) as T : undefined,
       set: (_key, value) => { saved = structuredClone(value); }, rootDir: () => "memory-only" };
     const generate = async (messages: PluginLlmMessage[]) => {
-      const current = JSON.parse(messages.at(-1)!.content) as LifePlanningInput;
-      if (current.phase === "afternoon") {
+      const current = JSON.parse(messages.at(-1)!.content) as LifePlanningInput & { events?: Array<{ id: string }> };
+      if (current.events) {
         clock += 60_000;
-        return JSON.stringify({ kind: current.kind, date: current.date, revision: current.revision,
-          decision: "keep", windows: [], diary: { date: current.diaryTarget!.date,
-            summary: "上午有一段模拟活动。", eventIds: current.diaryTarget!.eventIds }, details: [] });
+        return JSON.stringify({ date: current.date, summary: "今天有一段模拟活动，我把它认真记下了。",
+          eventIds: current.events.map((event) => event.id), details: [] });
       }
-      return JSON.stringify(decision(current));
+      if (current.phase === "afternoon") {
+        return JSON.stringify({ kind: current.kind, date: current.date, revision: current.revision,
+          decision: "keep", windows: [], diary: null, details: [] });
+      }
+      return JSON.stringify({ ...decision(current), diary: null });
     };
-    const life = createLifeContext(storage, () => clock, { generate });
+    const life = createLifeContext(storage, () => clock, { generate, diaryPrompt: "日记写作规则" });
     expect((await life.plan("daily")).status).toBe("applied");
-    clock = time(12);
+    while (clock < time(12)) { clock += 15 * 60_000; life.build(); }
     expect((await life.plan("refine")).status).toBe("applied");
+    while (clock < new Date(2026, 8, 2, 2).getTime()) { clock += 15 * 60_000; life.build(); }
+    life.configurePlanning(true);
+    expect((await life.writeDiary()).status).toBe("applied");
     expect(life.view().journal.diaries.find((diary) => diary.date === "2026-09-01")?.source).toBe("model");
   });
 
@@ -103,35 +149,38 @@ describe("早中晚模拟运行", () => {
       set: (key, value) => { expect(key).toBe("life-state"); saved = structuredClone(value); }, rootDir: () => "memory-only" };
     const inputs: LifePlanningInput[] = [];
     const generate = vi.fn(async (messages: PluginLlmMessage[]) => {
-      const current = JSON.parse(messages.at(-1)!.content) as LifePlanningInput;
+      const current = JSON.parse(messages.at(-1)!.content) as LifePlanningInput & { events?: Array<{ id: string; source: string; status: string; modelDetail?: string }> };
+      if (current.events) return JSON.stringify({ date: current.date, summary: "今天在自己的世界里散了步，也留意到了小桥边的小猫。",
+        eventIds: current.events.map((event) => event.id), details: current.events.filter((event) => event.source === "runtime_schedule"
+          && event.status === "materialized" && !event.modelDetail).slice(0, 1)
+          .map((event) => ({ eventId: event.id, text: "散步时在小桥边遇到一只小猫。" })) });
       inputs.push(current);
       if (current.phase === "afternoon") return JSON.stringify({ kind: current.kind, date: current.date,
-        revision: current.revision, decision: "keep", windows: [], diary: current.diaryTarget
-          ? { date: current.diaryTarget.date, summary: "上午在自己的世界里活动。", eventIds: current.diaryTarget.eventIds } : null,
-        details: current.detailTargets?.map((target) => ({ eventId: target.id,
-          text: "散步时在小桥边遇到一只小猫。" })) ?? [] });
-      return JSON.stringify(decision(current, current.phase === "evening" ? "整理今天的速写" : "在河边散步"));
+        revision: current.revision, decision: "keep", windows: [], diary: null, details: [] });
+      return JSON.stringify({ ...decision(current, current.phase === "evening" ? "整理今天的速写" : "在河边散步"), diary: null });
     });
-    const life = createLifeContext(storage, Date.now, { generate,
+    const life = createLifeContext(storage, Date.now, { generate, diaryPrompt: "日记写作规则",
       recentMessages: async () => [{ role: "user", content: "今天想听你说说生活" }] });
     life.start();
     expect((await life.plan("daily")).status).toBe("applied");
     await vi.advanceTimersByTimeAsync(time(12) - time(6, 45));
     expect((await life.plan("refine")).status).toBe("applied");
     expect(inputs[1].recentMessages?.[0].role).toBe("user");
-    expect(inputs[1].diaryTarget?.eventIds.length).toBeGreaterThan(0);
+    expect(inputs[1].diaryTarget).toBeNull();
     expect(life.view().planning.plans).toHaveLength(1);
-    expect(life.view().journal.diaries.find((diary) => diary.date === "2026-09-01")).toMatchObject({ source: "model", summary: "上午在自己的世界里活动。" });
-    expect(life.build("散步遇到了什么")).toContain("模型创作的角色世界细节：散步时在小桥边遇到一只小猫。");
-    expect(life.build("今天散步遇到了什么")).toContain("模型创作的角色世界细节：散步时在小桥边遇到一只小猫。");
+    expect(life.view().journal.diaries.find((diary) => diary.date === "2026-09-01")?.source).toBeUndefined();
     await vi.advanceTimersByTimeAsync(time(18) - time(12));
     expect((await life.plan("refine")).status).toBe("applied");
     expect(life.view().planning.plans).toHaveLength(2);
     expect(life.view().planning.attempts).toHaveLength(3);
     expect((await life.plan("refine")).status).toBe("skipped");
-    expect(generate).toHaveBeenCalledTimes(3);
+    life.configurePlanning(true);
+    await vi.advanceTimersByTimeAsync(new Date(2026, 8, 2, 2).getTime() - time(18));
+    expect((await life.writeDiary()).status).toBe("skipped");
+    expect(generate).toHaveBeenCalledTimes(4);
     const modelDiary = life.view().journal.diaries.find((diary) => diary.date === "2026-09-01")!;
     expect(modelDiary.source).toBe("model");
+    expect(life.build("散步遇到了什么")).toContain("模型创作的角色世界细节：散步时在小桥边遇到一只小猫。");
     expect(life.view().continuity.events.find((event) => event.id === modelDiary.eventRefs[0].id)?.modelDetail).toContain("小猫");
     life.revokeEvent(modelDiary.eventRefs[0].id);
     expect(life.view().continuity.events.find((event) => event.id === modelDiary.eventRefs[0].id)?.modelDetail).toBeUndefined();

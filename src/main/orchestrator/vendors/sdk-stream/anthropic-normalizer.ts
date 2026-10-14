@@ -44,8 +44,15 @@ export class AnthropicEventNormalizer {
       case "message_stop":
       case "ping":
         return [];
-      case "error":
-        throw new ProviderProtocolError("E_UNSUPPORTED_STREAM_EVENT", "Anthropic stream returned an error event");
+      case "error": {
+        const payload = isRecord(event.error) ? event.error : undefined;
+        throw new ProviderProtocolError("E_UNSUPPORTED_STREAM_EVENT", "Anthropic stream returned an error event", {
+          vendorCode: payload ? nonEmptyString(payload.code) : undefined,
+          vendorType: payload ? nonEmptyString(payload.type) : undefined,
+          status: typeof event.status === "number" ? event.status : undefined,
+          requestId: nonEmptyString(event.request_id),
+        });
+      }
       default:
         return [];
     }

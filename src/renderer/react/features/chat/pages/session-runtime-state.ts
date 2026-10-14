@@ -198,6 +198,13 @@ export interface PendingQueueEntry {
 
 export type PendingQueueBySession = Record<string, PendingQueueEntry[]>;
 
+export function editPendingQueueEntry(state: PendingQueueBySession, sessionId: string, id: string,
+  patch: Pick<PendingQueueEntry, "rawContent" | "visibleContent" | "userSticker">): PendingQueueBySession {
+  const queue = state[sessionId];
+  if (!queue?.some((item) => item.id === id)) return state;
+  return { ...state, [sessionId]: queue.map((item) => item.id === id ? { ...item, ...patch } : item) };
+}
+
 /** 会话忙时把消息追加到该会话的待发队列尾部（保持发送顺序）。 */
 export function appendPendingQueueEntry(
   state: PendingQueueBySession,

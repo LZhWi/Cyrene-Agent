@@ -25,6 +25,14 @@ function session(toolCalls: HarnessRunSession["toolCalls"]): HarnessRunSession {
 }
 
 describe("prepareHarnessRecovery", () => {
+  it("does not label a planned but never started side effect as externally executed", () => {
+    const recovered = prepareHarnessRecovery(session([
+      { toolCallId: "mail-1", toolName: "send_email", sideEffect: "non_idempotent_side_effect", status: "planned", updatedAt: 2 },
+    ]), { workspaceRoot: "E:\\project" });
+    expect(recovered.state.uncertainEffects).toEqual([]);
+    expect(recovered.messages.at(-1)?.content).toContain("not_executed_after_interruption");
+  });
+
   it("turns an interrupted non-idempotent invocation into an unknown fact without replaying it", () => {
     const recovered = prepareHarnessRecovery(session([
       { toolCallId: "mail-1", toolName: "send_email", sideEffect: "non_idempotent_side_effect", status: "started", updatedAt: 2 },

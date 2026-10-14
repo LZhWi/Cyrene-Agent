@@ -64,6 +64,11 @@ function expectHostError(promise: Promise<unknown>, code: string): Promise<void>
 }
 
 describe("插件会话列表服务", () => {
+  it("returns an empty history page without inventing bounds", async () => {
+    const api = service(makeReader([{ id: "empty", title: "Empty", mode: "chat", createdAt: 1, updatedAt: 1, messages: [] }]));
+    expect(await api.getMessages({ conversationId: "empty", historyProjection: true })).toEqual({ items: [], range: {} });
+    await expectHostError(api.getMessages({ conversationId: "empty", fromMessageId: "missing" }), "E_NOT_FOUND");
+  });
   it("默认每页 20 条并按游标翻页", async () => {
     const sessions: FixtureSession[] = Array.from({ length: 25 }, (_, i) => ({
       id: `conv-${i}`,

@@ -108,6 +108,9 @@ dist/components/
 
 # Test & coverage
 coverage/
+.test-runtime/
+local-plugins/releases/
+dist/renderer/learn-exam.html
 __pycache__/
 *.py[cod]
 

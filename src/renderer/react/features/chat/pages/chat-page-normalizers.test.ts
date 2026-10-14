@@ -3,6 +3,16 @@ import type { ChatSession } from "../../../../../shared/chat-types";
 import { getInitialMode, LAST_MODE_STORAGE_KEY, normalizeWeatherData, stageForStep, toUiMessages } from "./chat-page-normalizers";
 
 describe("chat page normalizers", () => {
+  it("restores delegated task links when reopening a workspace session", () => {
+    const taskDelegations = [{ taskId: "task-1", invocationId: "call-1", description: "Inspect files", nickname: "Fixture", assetFileName: "", status: "completed" as const }];
+    const session: ChatSession = {
+      id: "work-1", title: "Work", identityId: null, mode: "work", schemaVersion: 1, createdAt: 1, updatedAt: 2,
+      messages: [{ id: "reply", role: "model", content: "Done", at: 2, taskDelegations }],
+    };
+    expect(toUiMessages(session)[0].taskDelegations).toEqual(taskDelegations);
+    expect(toUiMessages({ ...session, mode: "chat" })[0].taskDelegations).toBeUndefined();
+  });
+
   it("preserves channel source metadata while hydrating a bound conversation", () => {
     const session: ChatSession = {
       id: "conversation-1",

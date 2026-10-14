@@ -7,6 +7,18 @@ vi.mock("electron", () => ({ app: { getPath: () => "/tmp/cyrene-test" } }));
 
 import { loadVisionConfig, normalizeModelSettings, type ModelSettings, type VisionModelConfig } from "./model-settings";
 
+describe("model retry settings", () => {
+  it("defaults old configurations to five extra attempts and preserves explicit zero", () => {
+    expect(normalizeModelSettings({}).modelRequestMaxRetries).toBe(5);
+    expect(normalizeModelSettings({ modelRequestMaxRetries: 0 }).modelRequestMaxRetries).toBe(0);
+  });
+  it.each([[-1, 0], [50, 10], [2.6, 3], [Number.NaN, 5], [Number.POSITIVE_INFINITY, 5]])(
+    "normalizes retry count %s to %s", (input, expected) => {
+      expect(normalizeModelSettings({ modelRequestMaxRetries: input }).modelRequestMaxRetries).toBe(expected);
+    },
+  );
+});
+
 // 旧版 vision 配置带 syncWithMain 标记（迁移用），比 VisionModelConfig 多一个可选字段
 type LegacyVision = VisionModelConfig & { syncWithMain?: boolean };
 

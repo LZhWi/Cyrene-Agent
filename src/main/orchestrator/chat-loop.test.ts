@@ -35,7 +35,7 @@ const capability: ProviderCapability = {
 };
 
 class FakeAdapter implements ChatVendorAdapter {
-  readonly id = "test";
+  constructor(readonly id = "test") {}
   readonly transport = "openai" as const;
   capability = capability;
   readonly requests: ChatRequest[] = [];
@@ -146,6 +146,7 @@ const testSdkStream: NonNullable<ChatLoopOptions["streamChat"]> = async (input) 
 function runChatLoop(options: ChatLoopOptions) {
   return runChatLoopProduction({
     ...options,
+    settings: { modelRequestMaxRetries: 0, ...options.settings },
     streamChat: options.streamChat ?? testSdkStream,
   });
 }
@@ -535,7 +536,7 @@ describe("runChatLoop", () => {
     })) as unknown as typeof fetch;
 
     await expect(runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000, modelRequestMaxRetries: 5 },
       adapter,
       messages: [{ role: "user", content: "在吗" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -544,6 +545,52 @@ describe("runChatLoop", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(adapter.requests).toHaveLength(1);
+  });
+
+  it("retries a transient non-stream failure without changing the prompt or duplicating usage", async () => {
+    const adapter = new FakeAdapter("openai");
+    const onEvent = vi.fn();
+    const recordUsage = vi.fn();
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(new Response('{"text":"完成"}', { status: 200 }));
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000, modelRequestMaxRetries: 1 },
+      adapter, messages: [{ role: "user", content: "你好" }], soulSystemBaseContent: "SOUL",
+      streaming: false, timeoutMs: 30_000, fallbackRevealIntervalMs: 0, onEvent, recordUsage,
+    });
+    expect(result.reply).toBe("完成");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(adapter.requests[1]).toEqual(adapter.requests[0]);
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(onEvent.mock.calls.map(([event]) => event).filter((event) => event.type === "model_retry")
+      .map((event) => event.retryStatus.phase)).toEqual(["waiting", "attempting", "cleared"]);
+  });
+
+  it.each([401, 402, 429, 500])("does not switch images to caption for HTTP %s", async (status) => {
+    const imageCaptionFallback = vi.fn(async () => [{ role: "user" as const, content: "图片转述" }]);
+    globalThis.fetch = vi.fn(async () => new Response("failed", { status })) as typeof fetch;
+    await expect(runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000, modelRequestMaxRetries: 0 },
+      adapter: new FakeAdapter(), messages: [{ role: "user", content: "看图" }], soulSystemBaseContent: "SOUL",
+      streaming: false, timeoutMs: 30_000, imageCaptionFallback,
+    })).rejects.toThrow();
+    expect(imageCaptionFallback).not.toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses caption fallback only once for an invalid HTTP 400 request", async () => {
+    const adapter = new FakeAdapter("openai");
+    const imageCaptionFallback = vi.fn(async () => [{ role: "user" as const, content: "图片转述" }]);
+    globalThis.fetch = vi.fn(async () => new Response('{"error":{"message":"invalid image format"}}', { status: 400 })) as typeof fetch;
+    await expect(runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000, modelRequestMaxRetries: 5 },
+      adapter, messages: [{ role: "user", content: "看图" }], soulSystemBaseContent: "SOUL",
+      streaming: false, timeoutMs: 30_000, imageCaptionFallback,
+    })).rejects.toThrow("HTTP 400");
+    expect(imageCaptionFallback).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(adapter.requests[1].messages.at(-1)?.content).toBe("图片转述");
   });
 
   it.each([401, 429, 500])("does not retry HTTP %s as a non-stream request", async (status) => {
@@ -589,7 +636,8 @@ describe("runChatLoop", () => {
 
     expect(result.reply).toContain("中断原因：模型请求失败：HTTP 500");
     expect(result.reply).toContain("request_id=req-1");
-    expect(result.reply).toContain("api_key=[REDACTED]");
+    expect(result.reply).not.toContain("secret-value");
+    expect(result.reply).not.toContain("api_key=");
     expect(result.reply).toContain("- 「weather」：晴，24℃");
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: "text_message_content",

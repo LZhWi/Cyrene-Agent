@@ -131,6 +131,8 @@ export class ObsidianError extends Error {
 // ── 允许的文件类型 ──────────────────────────────────────────
 
 const ALLOWED_EXTENSIONS = new Set([".md", ".markdown", ".mdown", ".mdx"]);
+// Shared across service instances so separate Learn runs targeting one file serialize writes.
+const fileWrites = new Map<string, Promise<unknown>>();
 
 function isAllowedFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
@@ -444,6 +446,30 @@ export class ObsidianWorkspaceService {
    * 编辑操作：创建/覆盖/追加/替换章节。
    */
   async edit(input: ObsidianEditRequest): Promise<ObsidianWriteResult> {
+    const resolved = this.resolveSafeFile(input.path);
+    return this.withFileWrite(resolved, () => this.editUnlocked(input));
+  }
+
+  /** Read/modify/write within the same queue as edits; progress deltas must merge under this lock. */
+  async updateFile(input: {
+    path: string;
+    update: (current: string | undefined) => string;
+  }): Promise<ObsidianWriteResult> {
+    const resolved = this.resolveSafeFile(input.path);
+    return this.withFileWrite(resolved, async () => {
+      let current: string | undefined;
+      try { current = await fs.readFile(resolved, "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const content = input.update(current);
+      await this.atomicWrite(resolved, content);
+      return { path: input.path, operation: "update_file", newContentHash: contentHash(content),
+        bytesWritten: Buffer.byteLength(content, "utf8") };
+    });
+  }
+
+  private async editUnlocked(input: ObsidianEditRequest): Promise<ObsidianWriteResult> {
     switch (input.operation) {
       case "create": {
         const resolved = this.resolveSafeFile(input.path);
@@ -576,6 +602,18 @@ export class ObsidianWorkspaceService {
 
   // ── 内部辅助 ─────────────────────────────────────────────
 
+  private async withFileWrite<T>(resolved: string, write: () => Promise<T>): Promise<T> {
+    const root = this.vaultRoot();
+    const canonical = fsSync.existsSync(resolved) ? fsSync.realpathSync(resolved)
+      : path.join(fsSync.realpathSync(root), path.relative(root, resolved));
+    const key = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    const previous = fileWrites.get(key) ?? Promise.resolve();
+    const pending = previous.catch(() => undefined).then(write);
+    fileWrites.set(key, pending);
+    try { return await pending; }
+    finally { if (fileWrites.get(key) === pending) fileWrites.delete(key); }
+  }
+
   /**
    * 原子写入：先写临时文件，再 rename。
    */
@@ -623,6 +661,8 @@ export class ObsidianWorkspaceService {
   }
 }
 
-// ── 全局单例 ─────────────────────────────────────────────────
-
-export const obsidianWorkspace = new ObsidianWorkspaceService();
+export function createObsidianWorkspace(vaultPath: string): ObsidianWorkspaceService {
+  const workspace = new ObsidianWorkspaceService();
+  workspace.configure({ enabled: true, vaultPath: path.resolve(vaultPath) });
+  return workspace;
+}

@@ -187,9 +187,13 @@ export function registerPluginPanelScheme(): void {
 }
 
 /** app.whenReady() 之后调用：安装静态文件 handler。 */
+export function resolvePluginPanelAssetsRoot(moduleDir: string): string {
+  return path.join(moduleDir, "..", "plugin-panel");
+}
+
 export function installPluginPanelProtocol(query: PluginPanelAccessQuery): void {
   // 宿主资产（panel-bridge.js 等）随构建复制到 dist/main/plugin-panel/
-  const assetsRoot = path.join(__dirname, "plugin-panel");
+  const assetsRoot = resolvePluginPanelAssetsRoot(__dirname);
   protocol.handle(PLUGIN_PANEL_SCHEME, async (request) => {
     const result = await resolvePluginPanelRequest(request.url, query, assetsRoot);
     if (result.status === 404) {

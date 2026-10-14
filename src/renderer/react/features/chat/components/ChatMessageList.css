@@ -11,6 +11,41 @@
   min-height: 100%;
 }
 
+.cy-message-list__virtual-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.cy-message-list__virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding-bottom: 16px;
+}
+
+.cy-message-reasoning__title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.cy-message-reasoning__preview {
+  overflow: hidden;
+  max-width: min(50vw, 420px);
+  color: var(--cy-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.cy-model-retry {
+  color: var(--cy-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .cy-message-list__channel-context {
   position: sticky;
   z-index: 2;

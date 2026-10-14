@@ -1,0 +1,13 @@
+{
+  "apiVersion": 1,
+  "id": "furina-file-tools",
+  "name": "Furina 本地文件工具",
+  "version": "0.3.0",
+  "description": "在 work/code/learn 中调用本机 FurinaKit 图片、PDF 和 HTML 工具",
+  "author": "Cyrene local integration",
+  "entry": "index.cjs",
+  "settingsPanel": "settings.html",
+  "settingsSection": "plugins",
+  "defaultEnabled": false,
+  "deps": ["llm"]
+}

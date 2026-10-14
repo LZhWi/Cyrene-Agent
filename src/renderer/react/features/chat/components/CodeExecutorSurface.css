@@ -1,0 +1,19 @@
+.cy-code-executor { min-width: 0; }
+.cy-code-executor__route { width: auto; cursor: pointer; color: inherit; font: inherit; }
+.cy-code-executor__route:disabled { cursor: default; opacity: .5; }
+.cy-code-executor__route > svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.cy-code-executor__panel { padding: 12px; border: 1px solid var(--border-color, #8885); border-radius: 12px; }
+.cy-code-executor__panel p { margin: 6px 0; }
+.cy-code-executor__controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cy-code-executor__controls button { max-width: 100%; overflow-wrap: anywhere; }
+.cy-code-executor__panel select { max-width: 240px; }
+.cy-code-executor__panel fieldset { border: 1px solid var(--border-color, #8885); border-radius: 8px; margin: 8px 0; min-width: 0; }
+.cy-code-executor__panel textarea { display: block; width: 100%; box-sizing: border-box; min-height: 84px; margin: 8px 0; resize: vertical; }
+.cy-code-executor__panel pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; font: inherit; }
+.cy-code-executor__panel [role=alert] { color: #c65b51; }
+.cy-code-executor__panel button, .cy-code-executor__panel select { padding: 5px 8px; }
+.cy-code-executor__panel label { margin-right: 10px; }
+.cy-code-executor__records { max-height: 38vh; overflow: auto; }
+.cy-code-executor__records article { padding: 12px; border-bottom: 1px solid var(--border-color, #8885); }
+.cy-code-executor__records h4 { margin: 8px 0; }
+.cy-code-executor__records aside { border-left: 3px solid #679987; padding-left: 10px; }

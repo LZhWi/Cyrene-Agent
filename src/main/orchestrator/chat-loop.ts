@@ -1,3 +1,5 @@
+import { chatModuleUsesOAuth, resolveChatModuleModel } from "../settings/chat-module-routes";
+import { getAdapterForConfig } from "./vendors";
 import { stripLeakedChatTimeContext } from "../chat-time-context";
 import { ChatTimeStreamPrefixFilter } from "../chat-time-stream-filter";
 import { recordUsage, recordRequest } from "../token-usage-store";
@@ -15,6 +17,10 @@ import type {
   VendorConfig,
 } from "./vendors/types";
 import { streamChatWithSdk } from "./vendors/sdk-stream/runtime";
+import { classifyModelFailure } from "./vendors/model-error-classifier";
+import { runModelRequestWithRetry, type ModelRetryAttemptInput } from "./vendors/model-retry-runner";
+import { readRetryAfterMs } from "./vendors/model-retry-policy";
+import { resolveModelRequestTimeoutMs } from "./config/model-timeout";
 import type { UnifiedStreamDelta } from "./vendors/sdk-stream/types";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { getTimeoutSettings } from "../timeout-manager";
@@ -160,6 +166,14 @@ function buildDiagnosticFailureReply(messages: readonly ChatMessage[], error: un
 }
 
 export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopResult> {
+  if (options.mode === "chat") {
+    const settings = resolveChatModuleModel("soul", options.settings);
+    const toolSettings = resolveChatModuleModel("tools", options.settings);
+    if (chatModuleUsesOAuth("tools") !== chatModuleUsesOAuth("soul") || toolSettings.model !== settings.model || toolSettings.baseUrl !== settings.baseUrl) {
+      options = { ...options, messages: options.messages.map(({ rawAssistant, thinking, ...message }) => message) };
+    }
+    if (settings !== options.settings) options = { ...options, settings, adapter: getAdapterForConfig(settings), soulSampling: undefined };
+  }
   const startedAt = Date.now();
   const usageRecorder = options.recordUsage ?? ((input, output, calls, cachedInput, cacheCreation) => recordUsage(input, output, calls, cachedInput, options.settings.model, cacheCreation));
   let usedImageCaptionFallback = false;
@@ -235,7 +249,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     };
   };
 
-  const invokeNonStreaming = async (messages: ChatMessage[]): Promise<ChatResponse> => {
+  const invokeNonStreaming = async (messages: ChatMessage[], signal: AbortSignal): Promise<ChatResponse> => {
     const request: ChatRequest = {
       ...buildRequest(messages, false),
     };
@@ -244,28 +258,49 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     const http = options.adapter.buildRequest(effectiveRequest, options.settings);
     const controller = new AbortController();
     const abort = () => controller.abort();
-    options.signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(abort, remainingBudget());
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; abort(); }, remainingBudget());
     try {
-      const response = await fetch(http.url, {
-        method: "POST",
-        headers: http.headers,
-        body: http.body,
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(http.url, {
+          method: "POST",
+          headers: http.headers,
+          body: http.body,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        const failure = classifyModelFailure({ provider: options.adapter.id, model: effectiveRequest.model, error });
+        throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", "模型服务请求失败。", {
+          cause: error,
+          modelFailure: { ...failure, category: timedOut ? "TIMEOUT" : failure.category === "UNKNOWN" ? "NETWORK" : failure.category },
+        });
+      }
       if (!response.ok) {
         const body = await response.text().catch(() => "");
         // [image-send] 链路日志④：服务端拒绝时打印完整错误体（Anthropic 400 会带具体 reason）。
         console.error(`[image-send] ChatLoop 请求被拒 HTTP ${response.status}:`, body.slice(0, 500) || "(无响应体)");
-        throw new AgentRuntimeError(
-          "E_MODEL_REQUEST_FAILED",
-          `模型请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`,
-        );
+        let errorPayload: unknown;
+        try { errorPayload = JSON.parse(body); } catch { errorPayload = undefined; }
+        // 非 JSON 错误体仍保留安全格式的 request_id，供诊断与用户报障；不回显原始响应体。
+        const plainRequestId = errorPayload === undefined
+          ? body.match(/\brequest_id\s*[:=]\s*([A-Za-z0-9._-]{1,80})\b/i)?.[1]
+          : undefined;
+        throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", `模型请求失败：HTTP ${response.status}${plainRequestId ? ` request_id=${plainRequestId}` : ""}`, {
+          retryAfterMs: readRetryAfterMs(response.headers),
+          modelFailure: classifyModelFailure({
+            provider: options.adapter.id, model: effectiveRequest.model, status: response.status,
+            error: errorPayload ?? (plainRequestId ? { request_id: plainRequestId } : undefined),
+          }),
+        });
       }
       return options.adapter.parseResponse(await response.json());
     } finally {
       clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abort);
+      signal.removeEventListener("abort", abort);
     }
   };
 
@@ -299,7 +334,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     options.onEvent?.({ type: "text_message_end", messageId });
   };
 
-  const invokeStreaming = async (messages: ChatMessage[]): Promise<{
+  const invokeStreaming = async (messages: ChatMessage[], attempt: ModelRetryAttemptInput): Promise<{
     response: ChatResponse;
     needsReveal: boolean;
   }> => {
@@ -312,12 +347,15 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
       if (!delta) return;
       text += delta;
       emittedStreamContent = true;
+      attempt.onVisibleDelta();
       startText();
       options.onEvent?.({ type: "text_message_content", messageId, delta });
     };
     const onDelta = (delta: UnifiedStreamDelta) => {
+      attempt.onStreamActivity();
       if (delta.type === "reasoning_delta" && delta.delta) {
         emittedStreamContent = true;
+        attempt.onVisibleDelta();
         startReasoning();
         options.onEvent?.({
           type: "reasoning_message_content",
@@ -334,7 +372,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
         request: effectiveRequest,
         config: vendorConfig,
         timeoutMs: remainingBudget(),
-        signal: options.signal,
+        signal: attempt.signal,
         onDelta,
       });
       emitTextDelta(timePrefixFilter.finish());
@@ -354,24 +392,40 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
       if (!emittedStreamContent && isExplicitStreamUnsupported(error)) {
         throw new StreamUnavailableError("流式请求不受支持", { cause: error });
       }
-      throw error;
+      if (error instanceof AgentRuntimeError && error.modelFailure) throw error;
+      if (options.signal?.aborted) throw error;
+      if (emittedStreamContent) throw error;
+      const modelFailure = classifyModelFailure({ provider: options.adapter.id, model: options.settings.model, error });
+      throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", modelFailure.status ? `模型请求失败：HTTP ${modelFailure.status}` : "模型服务请求失败。", {
+        cause: error,
+        modelFailure,
+        retryAfterMs: readRetryAfterMs(error),
+      });
     }
   };
 
-  const invokeWithStreamFallback = async (messages: ChatMessage[]) => {
+  let forceNonStreaming = options.streaming === false || Boolean(options.companionLifeSidecar);
+  const invokeWithStreamFallback = async (messages: ChatMessage[], attempt: ModelRetryAttemptInput) => {
+    if (forceNonStreaming) return { response: await invokeNonStreaming(messages, attempt.signal), needsReveal: true };
     try {
-      return await invokeStreaming(messages);
+      return await invokeStreaming(messages, attempt);
     } catch (error) {
       if (!(error instanceof StreamUnavailableError) || emittedStreamContent) throw error;
-      return { response: await invokeNonStreaming(messages), needsReveal: true };
+      forceNonStreaming = true;
+      return { response: await invokeNonStreaming(messages, attempt.signal), needsReveal: true };
     }
   };
 
   const invokeModel = async (messages: ChatMessage[]) => {
-    if (options.streaming === false || options.companionLifeSidecar) {
-      return { response: await invokeNonStreaming(messages), needsReveal: true };
-    }
-    return invokeWithStreamFallback(messages);
+    return runModelRequestWithRetry((attempt) => invokeWithStreamFallback(messages, attempt), {
+      provider: options.adapter.id,
+      model: options.settings.model,
+      maxRetries: options.settings.modelRequestMaxRetries ?? 5,
+      idleTimeoutMs: resolveModelRequestTimeoutMs(getTimeoutSettings()),
+      signal: options.signal,
+      getRemainingBudgetMs: remainingBudget,
+      onStatus: (retryStatus) => options.onEvent?.({ type: "model_retry", retryStatus }),
+    });
   };
 
   options.onEvent?.({ type: "step_started", stepName: "chat" });
@@ -380,7 +434,8 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     try {
       result = await invokeModel(options.messages);
     } catch (error) {
-      if (emittedStreamContent || options.signal?.aborted || !options.imageCaptionFallback || usedImageCaptionFallback) {
+      const failure = error instanceof AgentRuntimeError ? error.modelFailure : undefined;
+      if (emittedStreamContent || options.signal?.aborted || failure?.status !== 400 || failure.category !== "INVALID_REQUEST" || !options.imageCaptionFallback || usedImageCaptionFallback) {
         throw error;
       }
       usedImageCaptionFallback = true;

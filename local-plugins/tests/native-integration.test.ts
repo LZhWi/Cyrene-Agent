@@ -5,7 +5,6 @@ import { createMemory } from "../plugins/companion-memory/src/memory";
 import {
   createNativeIntegration,
   DEFAULT_NATIVE_INTEGRATION_SETTINGS,
-  suppressOverlappingMemoryEntries,
 } from "../plugins/companion-memory/src/native-integration";
 
 type DesktopTurnFinishedEvent = Extract<PluginTurnFinishedEvent, { source: "desktop" }>;
@@ -52,12 +51,49 @@ function acceptPrompt(ctx: ReturnType<typeof createMockPluginContext>, runId: st
 }
 
 describe("原生聊天记忆接入", () => {
-  it("与本地一致地优先保留 short_term 连续性资料并抑制重复 L2", () => {
-    const input = "【相关记忆】\n· 用户明天要去复诊（原文：明天复诊；记录于 2026/9/21 12时）\n· 用户喜欢乌龙茶（记录于 2026/9/1 10时）\n（时间解释说明）";
-    expect(suppressOverlappingMemoryEntries(input, [
-      { type: "short_term", content: "用户明天要去复诊并等待结果" },
-      { type: "open_loop", content: "之后继续聊乌龙茶" },
-    ])).toBe("【相关记忆】\n· 用户喜欢乌龙茶（记录于 2026/9/1 10时）\n（时间解释说明）");
+  it("历史读取失败不丢弃有效 L2 注入", async () => {
+    const ctx = createMockPluginContext();
+    const native = createNativeIntegration(ctx, createMemory(ctx.storage), {
+      searchForPrompt: vi.fn().mockResolvedValue("有效的长期记忆"),
+    }, undefined, { searchForAuto: vi.fn().mockRejectedValue(new Error("历史快照变化")) });
+    native.configure({ ...DEFAULT_NATIVE_INTEGRATION_SETTINGS, promptInjectionEnabled: true });
+    const prompt = await ctx.promptProviders[0].provide({ source: "conversation", mode: "chat", chatBackend: "companion",
+      conversationId: "c", userText: "回忆", signal: new AbortController().signal });
+    expect(prompt).toContain("有效的长期记忆");
+    native.stop();
+  });
+
+  it("冻结通话上下文进入提取输入，用户原文保持独立", async () => {
+    const ctx = createMockPluginContext({ deps: { conversations: { list: vi.fn(), getMessages: vi.fn().mockResolvedValue({
+      items: messages(0), range: { fromMessageId: "user-0", throughMessageId: "assistant-0" },
+    }) }, companionContext: { snapshot: vi.fn(), memoryContext: vi.fn().mockResolvedValue("[此前语音通话梗概]通话事实") } } });
+    const memory = createMemory(ctx.storage);
+    const native = createNativeIntegration(ctx, memory, { searchForPrompt: vi.fn() });
+    native.configure({ ...DEFAULT_NATIVE_INTEGRATION_SETTINGS, captureEnabled: true });
+    dispatch(ctx, event()); await native.whenIdle();
+    expect(memory.view().turns[0]).toMatchObject({ user: "用户内容 0", memoryContext: "[此前语音通话梗概]通话事实" });
+    native.stop();
+  });
+  it.each([
+    ["否定", "用户今晚不去公园", "用户今晚去公园"],
+    ["改期", "用户周一去复诊", "用户改为周三去复诊"],
+    ["历史", "用户去年正在准备考试", "用户现在正在准备考试"],
+    ["相同文本", "用户明天去复诊", "用户明天去复诊"],
+  ])("%s：提示词保留 L2 与短期状态的各自证据", async (_label, memoryText, socialText) => {
+    const ctx = createMockPluginContext();
+    const memoryBlock = `【相关记忆】\n· ${memoryText}（原文证据；记录于 2026/9/1）\n（时间解释说明）`;
+    const socialBlock = `【本轮可用的对话背景】\n- ${socialText}`;
+    const commitPromptReceipt = vi.fn();
+    const retrieval = {searchForPrompt:vi.fn(), previewForPrompt:vi.fn().mockResolvedValue({
+      text:memoryBlock,includedMemoryIds:["m"],recalledMemoryIds:["m"],
+    }),commitPromptReceipt};
+    const social = {extract:vi.fn(),retrieve:vi.fn().mockResolvedValue([{type:"short_term",content:socialText}]),buildBlock:vi.fn().mockReturnValue(socialBlock)};
+    const native = createNativeIntegration(ctx,createMemory(ctx.storage),retrieval,social);
+    native.configure({captureEnabled:true,autoExtractEnabled:false,promptInjectionEnabled:true,momentsInjectionEnabled:false,socialContextEnabled:true});
+    const prompt = await ctx.promptProviders[0].provide({source:"conversation",mode:"chat",chatBackend:"companion",conversationId:"c",userText:"继续聊",signal:new AbortController().signal});
+    expect(prompt).toContain(memoryBlock);
+    expect(prompt).toContain(socialBlock);
+    expect(commitPromptReceipt).not.toHaveBeenCalled();
   });
   it("三个能力默认全部关闭，不读取会话也不注入", async () => {
     const getMessages = vi.fn();
@@ -150,7 +186,7 @@ describe("原生聊天记忆接入", () => {
     const firstMemory = createMemory(storage);
     const firstNative = createNativeIntegration(first, firstMemory, { searchForPrompt: vi.fn() });
     firstNative.configure({ captureEnabled: true, autoExtractEnabled: false, promptInjectionEnabled: false });
-    dispatch(first, event());
+    dispatch(first, { ...event(), timezone: "Asia/Tokyo" });
     await firstNative.whenIdle();
     expect(firstNative.view().pending).toBe(1);
     firstNative.stop();
@@ -163,6 +199,7 @@ describe("原生聊天记忆接入", () => {
     await secondNative.whenIdle();
     expect(secondGetMessages).toHaveBeenCalledTimes(1);
     expect(secondMemory.view().turns).toHaveLength(1);
+    expect(secondMemory.view().turns[0]).toMatchObject({timezone:"Asia/Tokyo"});
     expect(secondNative.view()).toMatchObject({ pending: 0, completed: 1 });
   });
 
@@ -207,7 +244,7 @@ describe("原生聊天记忆接入", () => {
     expect(JSON.stringify(native.view())).not.toContain("synthetic-list-error");
   });
 
-  it("自动提取单独授权，满十轮才使用宿主模型", async () => {
+  it("自动提取单独授权，满六轮才使用宿主模型", async () => {
     const generateText = vi.fn().mockResolvedValue("[]");
     const getMessages = vi.fn().mockImplementation(async (input) => {
       const index = Number(String(input.fromMessageId).split("-")[1]);
@@ -218,13 +255,13 @@ describe("原生聊天记忆接入", () => {
     const native = createNativeIntegration(ctx, memory, { searchForPrompt: vi.fn() });
     native.configure({ captureEnabled: true, autoExtractEnabled: true, promptInjectionEnabled: false });
 
-    for (let index = 0; index < 9; index++) {
+    for (let index = 0; index < 5; index++) {
       dispatch(ctx, event(index));
       await native.whenIdle();
     }
     expect(generateText).not.toHaveBeenCalled();
-    expect(memory.view().pending).toBe(9);
-    dispatch(ctx, event(9));
+    expect(memory.view().pending).toBe(5);
+    dispatch(ctx, event(5));
     await native.whenIdle();
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(generateText.mock.calls[0][0].map((message: { role: string }) => message.role)).toEqual(["system", "user"]);
@@ -243,20 +280,20 @@ describe("原生聊天记忆接入", () => {
     const native = createNativeIntegration(ctx, memory, { searchForPrompt: vi.fn() });
     native.configure({ captureEnabled: true, autoExtractEnabled: true, promptInjectionEnabled: false });
 
-    for (let index = 0; index < 10; index++) {
+    for (let index = 0; index < 6; index++) {
       dispatch(ctx, event(index));
       await native.whenIdle();
     }
-    expect(native.view()).toMatchObject({ pending: 0, completed: 10, lastError: { kind: "extract" } });
-    expect(memory.view()).toMatchObject({ pending: 10 });
+    expect(native.view()).toMatchObject({ pending: 0, completed: 6, lastError: { kind: "extract" } });
+    expect(memory.view()).toMatchObject({ pending: 6 });
 
     native.retry();
     await native.whenIdle();
     expect(generateText).toHaveBeenCalledTimes(2);
-    expect(memory.view().turns).toHaveLength(10);
-    expect(new Set(memory.view().turns.map((turn) => turn.id)).size).toBe(10);
+    expect(memory.view().turns).toHaveLength(6);
+    expect(new Set(memory.view().turns.map((turn) => turn.id)).size).toBe(6);
     expect(memory.view().pending).toBe(0);
-    expect(native.view()).toMatchObject({ pending: 0, completed: 10, lastError: undefined });
+    expect(native.view()).toMatchObject({ pending: 0, completed: 6, lastError: undefined });
   });
 
   it("重启后保留提取失败状态，用户重试前不自动调用模型", async () => {
@@ -274,7 +311,7 @@ describe("原生聊天记忆接入", () => {
     first.storage = storage;
     const firstNative = createNativeIntegration(first, createMemory(storage), { searchForPrompt: vi.fn() });
     firstNative.configure({ captureEnabled: true, autoExtractEnabled: true, promptInjectionEnabled: false });
-    for (let index = 0; index < 10; index++) {
+    for (let index = 0; index < 6; index++) {
       dispatch(first, event(index));
       await firstNative.whenIdle();
     }
@@ -293,8 +330,8 @@ describe("原生聊天记忆接入", () => {
     native.retry();
     await native.whenIdle();
     expect(generateText).toHaveBeenCalledTimes(1);
-    expect(memory.view().turns).toHaveLength(10);
-    expect(new Set(memory.view().turns.map((turn) => turn.id)).size).toBe(10);
+    expect(memory.view().turns).toHaveLength(6);
+    expect(new Set(memory.view().turns.map((turn) => turn.id)).size).toBe(6);
     expect(memory.view().pending).toBe(0);
     expect(native.view().lastError).toBeUndefined();
   });
@@ -415,10 +452,10 @@ describe("原生聊天记忆接入", () => {
     const native = createNativeIntegration(ctx, createMemory(ctx.storage), retrieval, social);
     native.configure({ captureEnabled: true, autoExtractEnabled: false, promptInjectionEnabled: false, momentsInjectionEnabled: false, socialContextEnabled: true });
 
-    dispatch(ctx, event());
+    dispatch(ctx, { ...event(), timezone: "America/New_York" });
     await native.whenIdle();
     expect(social.extract).toHaveBeenCalledTimes(1);
-    expect(social.extract.mock.calls[0][0]).toMatchObject({ id: "host:event-0", sessionId: "conversation-1" });
+    expect(social.extract.mock.calls[0][0]).toMatchObject({ id: "host:event-0", sessionId: "conversation-1", timezone: "America/New_York" });
 
     const provider = ctx.promptProviders[0];
     const prompt = await provider.provide({ source: "conversation", mode: "chat", chatBackend: "companion", timezone: "Asia/Shanghai", userText: "继续聊", conversationId: "conversation-1", signal: new AbortController().signal });
@@ -573,4 +610,20 @@ describe("原生聊天记忆接入", () => {
     expect(memory.view().turns).toHaveLength(0);
     expect(native.view()).toMatchObject({ pending: 1, completed: 0, lastError: undefined });
   });
+});
+
+it("uses the frozen external window and never reintroduces evicted events", async () => {
+  const snapshot = vi.fn().mockResolvedValue({items: [{kind: "call", content: "EVICTED"}]});
+  const ctx = createMockPluginContext({deps: {companionContext: {snapshot}}});
+  const native = createNativeIntegration(ctx, createMemory(ctx.storage), {searchForPrompt: vi.fn().mockResolvedValue("MEMORY")});
+  native.configure({...DEFAULT_NATIVE_INTEGRATION_SETTINGS, promptInjectionEnabled: true});
+  const input = {source: "conversation" as const, mode: "chat" as const, chatBackend: "companion" as const,
+    conversationId: "c", userText: "hello", signal: new AbortController().signal};
+  const provide = ctx.promptProviders.find(p => p.id === "memory-context")!.provide;
+  expect(await provide({...input, visibleCompanionEvents: []})).not.toContain("EVICTED");
+  const text = await provide({...input, visibleCompanionEvents: [{kind: "minecraft" as const, content: "VISIBLE_MC"}, {kind: "call" as const, content: "VISIBLE_CALL"}]});
+  expect(text).toContain("VISIBLE_MC");
+  expect(text).toContain("VISIBLE_CALL");
+  expect(snapshot).not.toHaveBeenCalled();
+  native.stop();
 });

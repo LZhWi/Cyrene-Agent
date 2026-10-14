@@ -58,7 +58,7 @@ describe("原生历史来源绑定", () => {
     expect(applied.bound).toBe(1);
     const state = memory.view();
     expect(state.entries[0]).toMatchObject({ provenance: "verified", sessionId: "s1", turnId: "host-message:u1", quote: "我一直很喜欢喝乌龙茶", sourceAt: Date.parse("2026-09-01T00:01:00Z") });
-    expect(state.evidence[0]).toMatchObject({ memoryId: "m1", conversationId: "s1", messageIds: ["u1"], provenance: "verified", contextBeforeSnippet: "前文", contextAfterSnippet: "知道了" });
+    expect(state.evidence[0]).toMatchObject({ memoryId: "m1", conversationId: "s1", messageIds: ["u1", "a1"], provenance: "verified", contextBeforeSnippet: "前文", contextAfterSnippet: "知道了" });
   });
 
   it("来源预检和绑定只使用清洗后的助手上下文，不改会话读取结果或用户原文", async () => {

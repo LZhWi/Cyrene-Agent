@@ -4,6 +4,8 @@ export interface HistoryV2Candidate {
   role: "user" | "assistant";
   score: number;
   parentId?: string;
+  sessionId?: string;
+  turnId?: string;
   adjacent?: boolean;
   sentenceWindow?: boolean;
   semanticEvidenceRank?: number;
@@ -16,13 +18,14 @@ export async function rerankHistoryV2<T extends HistoryV2Candidate>(input: {
   expandedQuery: string;
   intentQuery: string;
   finalK: number;
+  supplementK?: 0 | 3;
+  onScored?: (rows: Array<{text: string; score: number; relevanceScore: number}>) => void;
   rerank(query: string, documents: string[]): Promise<Array<{ text: string; score: number }> | null>;
 }): Promise<Array<T & { relevanceScore: number }> | null> {
-  const { candidates, cleanUserQuery, expandedQuery, intentQuery, finalK } = input;
+  const { candidates, cleanUserQuery, expandedQuery, finalK } = input;
   if (!candidates.length) return [];
-  const queries = intentQuery && intentQuery !== cleanUserQuery
-    ? [{ query: cleanUserQuery, weight: 0.35 }, { query: intentQuery, weight: 0.65 }]
-    : [{ query: cleanUserQuery, weight: 1 }];
+  // Expanded queries retrieve candidates; reranking preserves the user's original question.
+  const queries = [{ query: cleanUserQuery, weight: 1 }];
   const documents = candidates.map((candidate) => candidate.text);
   const rankings = await Promise.all(queries.map((item) => input.rerank(item.query, documents)));
   if (rankings.some((ranking) => ranking === null)) return null;
@@ -34,16 +37,16 @@ export async function rerankHistoryV2<T extends HistoryV2Candidate>(input: {
   const intentTerms = expandedQuery.startsWith(`${cleanUserQuery} `)
     ? expandedQuery.slice(cleanUserQuery.length + 1).split(/\s+/u).filter((term) => term.length >= 2)
     : [];
+  const baseScores: Array<{text: string; score: number; relevanceScore: number}> = [];
   const evidenceRanked = candidates.map((candidate) => {
     const lexicalMatches = intentTerms.filter((term) => candidate.text.includes(term)).length;
     const baseScore = (fused.get(candidate.text) ?? 0) + Math.min(lexicalMatches, 2) * 0.016;
+    baseScores.push({text: candidate.text, score: baseScore, relevanceScore: relevanceScores.get(candidate.text) ?? Number.NEGATIVE_INFINITY});
     const compactText = candidate.text.replace(/\s+/gu, " ").trim();
     let multiplier = 1;
     if (candidate.sentenceWindow) multiplier *= 1.06;
     else if (!candidate.parentId && compactText.length >= 140) multiplier *= 1.03;
     if (candidate.adjacent) multiplier *= 0.9;
-    if (candidate.role === "assistant" && compactText.length < 140
-      && /[?？]|(?:吗|呢|是不是|有没有|怎么样)[。！…]*$/u.test(compactText)) multiplier *= 0.86;
     let score = baseScore * multiplier;
     if (candidate.semanticEvidenceRank !== undefined) score += 0.4 / (9 + candidate.semanticEvidenceRank);
     if (candidate.rrfEvidenceRank !== undefined) score += 0.5 / (9 + candidate.rrfEvidenceRank);
@@ -51,6 +54,7 @@ export async function rerankHistoryV2<T extends HistoryV2Candidate>(input: {
   }).sort((left, right) => right.score - left.score);
 
   const originalById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  try { input.onScored?.(baseScores); } catch { /* Observation cannot affect ranking. */ }
   const groupKey = (candidate: T) => candidate.parentId ? originalById.get(candidate.parentId)?.text ?? candidate.text : candidate.text;
   const chosen = new Map<string, typeof evidenceRanked[number]>(), deduped: typeof evidenceRanked = [];
   for (const candidate of evidenceRanked) {
@@ -80,13 +84,24 @@ export async function rerankHistoryV2<T extends HistoryV2Candidate>(input: {
     if (selectedIdsBeforePromotion.has(parentId)) continue;
     const parent = deferred.find((item) => item.id === parentId && item.score >= cutoffScore * 0.75);
     if (!parent) continue;
-    const replaceIndex = selected.findIndex((item) => item.role === "assistant" && item.text.replace(/\s+/gu, " ").trim().length < 140
-      && /[?？]|(?:吗|呢|是不是|有没有|怎么样)[。！…]*$/u.test(item.text.replace(/\s+/gu, " ").trim()));
-    const adjacentIndex = replaceIndex >= 0 ? -1 : selected.findIndex((item) => item.adjacent);
-    const target = replaceIndex >= 0 ? replaceIndex : adjacentIndex;
+    const target = selected.findIndex((item) => item.adjacent);
     if (target < 0) continue;
     selected[target] = parent;
     break;
   }
-  return selected.filter((item) => item.relevanceScore >= -6);
+  const baseline = selected.filter((item) => item.relevanceScore >= -6);
+  if (!input.supplementK) return baseline;
+  // Append only; rejected extra slots are not refilled or used to replace baseline evidence.
+  const sourceKey = (item: T) => item.sessionId && item.turnId
+    ? JSON.stringify([item.sessionId, item.turnId]) : item.parentId ?? item.id;
+  const seen = new Set(baseline.map(sourceKey));
+  const extras: typeof evidenceRanked = [];
+  for (const item of deduped) {
+    const key = sourceKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extras.push(item);
+    if (extras.length === input.supplementK) break;
+  }
+  return [...baseline, ...extras.filter((item) => item.relevanceScore >= -6)];
 }

@@ -58,6 +58,7 @@ export interface SchedulerResult<T> {
 
 export interface SchedulerApi {
   list: () => Promise<SchedulerResult<ScheduledTask[]>>;
+  onChanged?: (callback: () => void) => () => void;
   add: (input: unknown) => Promise<SchedulerResult<ScheduledTask>>;
   update: (id: string, patch: unknown) => Promise<SchedulerResult<ScheduledTask>>;
   delete: (id: string) => Promise<SchedulerResult<boolean>>;

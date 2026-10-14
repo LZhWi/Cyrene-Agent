@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+body{font:14px system-ui;color:var(--text-primary,#333);margin:16px;background:transparent}button,input,select{font:inherit;padding:8px;border:1px solid #999;border-radius:6px;color:inherit;background:var(--surface,#fff)}button{margin:5px 6px 5px 0;cursor:pointer}label{display:block;margin:10px 0 5px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}select,input[type=number]{width:100%;box-sizing:border-box}p{line-height:1.65}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;background:#8881;padding:12px}.danger{border-color:#d66}#notice{white-space:pre-wrap}button:disabled{opacity:.5;cursor:default}
+</style></head><body>
+<p><strong>初代地下城：原生键鼠 + 虚拟 P2</strong><br>独立输入与营地短距离跟随测试。游戏请从 Xbox 应用正常启动，进入离线游戏；本工具不会启动游戏或编辑存档。</p>
+<p>1. 检查驱动 → 在此面板创建两只手柄 → 再启动初代游戏。初始化会发送一个单位的摇杆值后归零，确认归零才显示就绪，不按按钮。<br>2. 按游戏提示，用第一只手柄初始化 P1（仅在需要时），用第二只加入 P2、选择测试角色。<br>3. P1 继续用原来的键鼠；第一只手柄保持空闲。测试第二只脉冲，确认只动 P2。<br>每次执行后，在倒计时结束前切回初代游戏；未切回则取消，不会补发。</p>
+<button id="probe" disabled>检查驱动（不创建手柄）</button><button id="start" disabled>创建两只测试手柄</button><button id="stop" class="danger" disabled>断开并移除测试手柄</button>
+<p id="summary">正在读取状态…</p>
+<div class="grid"><div><label for="pad">目标手柄（游戏 P1/P2 分配需现场核对）</label><select id="pad"><option value="2">第二只：P2 测试</option><option value="1">第一只：仅手动初始化 P1</option></select></div>
+<div><label for="control">输入（按游戏屏幕提示选按钮）</label><select id="control"><optgroup label="左摇杆：移动"><option value="right">向右</option><option value="left">向左</option><option value="up">向上</option><option value="down">向下</option></optgroup><optgroup label="按钮"><option value="A">A（菜单确认／选择）</option><option value="B">B（菜单返回／取消）</option><option>X</option><option>Y</option><option>LB</option><option>RB</option><option value="Start">Start（Menu 菜单键）</option><option value="Back">Back（View 视图键，非菜单返回）</option><option value="LeftThumb">按左摇杆 LS（加入提示可能使用此键）</option><option value="RightThumb">按右摇杆 RS</option><option value="DpadUp">方向键上</option><option value="DpadDown">方向键下</option><option value="DpadLeft">方向键左</option><option value="DpadRight">方向键右</option><option>RT</option></optgroup></select></div>
+<div><label for="duration">按住时间（50..1000 毫秒）</label><input id="duration" type="number" value="200" min="50" max="1000"></div><div><label for="delay">切回游戏的倒计时（2..10 秒）</label><input id="delay" type="number" value="5" min="2" max="10"></div></div>
+<label><input id="confirm-p1" type="checkbox"> 我确认本次操作第一只手柄，只用于初始化/核对 P1</label>
+<p id="connection-hint" role="status"><strong>尚未连接：先在上方检查驱动、创建两只测试手柄；看到设备 ID 和 XInput 槽位后才能发送。</strong></p>
+<button id="pulse" disabled>倒计时后发送一次</button><button id="cancel" class="danger" disabled>停止待执行/当前脉冲</button>
+<p><strong>菜单快捷操作（仅在角色选择、设置等菜单中使用）</strong><br>手柄通常用 A 确认、B 返回，方向键移动焦点；屏幕 Enter / Esc 是键鼠提示。此处仍发送手柄按钮，不发送键盘键。角色选择时把焦点移到「完成」后确认；具体作用以游戏当前菜单为准，战斗中的 A/B 有其他作用。</p>
+<div id="menu-controls" aria-label="手柄菜单快捷操作"><button data-menu-control="A" disabled>确认／选择 A</button><button data-menu-control="B" disabled>返回／取消 B</button><button data-menu-control="DpadUp" disabled>菜单 ↑</button><button data-menu-control="DpadDown" disabled>菜单 ↓</button><button data-menu-control="DpadLeft" disabled>菜单 ←</button><button data-menu-control="DpadRight" disabled>菜单 →</button></div>
+<p>快捷操作使用上方所选手柄、按住时间和倒计时，每次只发送一次；点击后请切回游戏观察。</p>
+<hr><p><strong>营地短距离跟随（实验）</strong><br>先点「只观察」，在上方倒计时内切回游戏；返回面板核对预览中的 P1/P2 框。只读取初代前台窗口，画面仅在本机内存中使用。识别失败请停止，不会使用旧位置。</p>
+<label><input id="confirm-camp" type="checkbox"> 我已核对预览中的 P1/P2、第二只手柄只控制 P2；两人在营地同一块平坦空地，附近无障碍或交互菜单。校准期间我会让 P1 静止。</label>
+<button id="observe" disabled>倒计时后只观察（不移动）</button><button id="follow" disabled>校准并跟随一轮</button><button id="follow-cancel" class="danger" disabled>停止观察／跟随</button>
+<p>跟随固定控制第二只手柄，与上方手动选择无关。每轮先右移、上移各 150ms 测量方向，再最多六次 150ms 短移；每次归零并重新观察。到达、受阻、丢失标记、失焦、F12 或期限结束都会停止，不自行恢复。此版不会绕障或战斗，也不能完整识别菜单；本轮保持营地空地，需要打开菜单或进关卡时先按 F12。</p>
+<p id="follow-result" role="status">尚未启动观察／跟随。</p><p>下方为上一次「只观察」的静态预览，不是实时画面。</p><canvas id="preview" style="display:none;max-width:100%;height:auto" aria-label="本地游戏画面与角色标记"></canvas>
+<p><strong>F12：紧急释放输入。</strong>游戏失焦立即结束当前脉冲；宿主心跳中断后自动移除本工具创建的两只手柄。每次结果只证明输入已发送，加入成功、角色移动要由你在游戏确认。</p>
+<p id="notice" role="status"></p><p id="result" aria-live="polite"></p><details><summary>手柄槽位和详细结果</summary><pre id="state"></pre></details>
+<script src="/.cyrene/panel-bridge.js"></script><script src="settings.js"></script></body></html>

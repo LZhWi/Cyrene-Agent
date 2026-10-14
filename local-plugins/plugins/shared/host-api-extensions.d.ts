@@ -1,8 +1,15 @@
 import type { PluginPromptMode } from "@playa0v0/cyrene-plugin-sdk";
 
 declare module "@playa0v0/cyrene-plugin-sdk" {
+  interface PluginCompanionContextService {
+    memoryContext?(input: { conversationId: string; inputMessageId: string; kinds: Array<"call" | "minecraft">; signal?: AbortSignal }): Promise<string>;
+  }
   interface PluginConversationSummary {
     purpose?: "proactive-chat";
+  }
+
+  interface PluginLlmService {
+    generateTextIfRouted?(messages: import("@playa0v0/cyrene-plugin-sdk").PluginLlmMessage[], options?: import("@playa0v0/cyrene-plugin-sdk").PluginLlmGenerateOptions): Promise<string | null>;
   }
 
   interface PluginDeps {
@@ -10,6 +17,7 @@ declare module "@playa0v0/cyrene-plugin-sdk" {
   }
 
   interface PluginLlmGenerateOptions {
+    routingModule?: "soul" | "proactive" | "tools" | "vision" | "memory" | "reflection" | "compression" | "resolver" | "retrieval" | "social" | "cita" | "moments" | "voice" | "translation" | "plugin" | "scheduled";
     reasoning?: "inherit" | "on" | "off";
   }
 
@@ -39,6 +47,10 @@ declare module "@playa0v0/cyrene-plugin-sdk" {
       text: string;
       noChange: boolean;
     }>;
+  }
+
+  interface PluginLlmService {
+    generateTextIfRouted?(messages: import("@playa0v0/cyrene-plugin-sdk").PluginLlmMessage[], options?: import("@playa0v0/cyrene-plugin-sdk").PluginLlmGenerateOptions): Promise<string | null>;
   }
 
   interface PluginDeps {

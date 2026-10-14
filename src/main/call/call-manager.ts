@@ -1,3 +1,4 @@
+import { resolveChatModuleModel } from "../settings/chat-module-routes";
 // 通话轮次协调器 —— 编排 ASR → agent → TTS 的轮次循环。
 //
 // 状态机：
@@ -12,7 +13,7 @@ import { getAsrConfig, type AsrConfig } from "../asr/asr-config";
 import { createAsrStream, type AsrStreamSession } from "../asr/asr-dispatcher";
 import { synthesizeByEngine } from "../tts/tts-dispatcher";
 import type { TtsEngine } from "../../shared/tts-types";
-import { getAdapterForConfig, buildVendorUrl } from "../orchestrator/vendors";
+import { getAdapterForConfig } from "../orchestrator/vendors";
 import { enqueueLLMTask } from "../llm-queue";
 import { saveCallContextEvent } from "./call-context-store";
 import { resolveTimeoutPolicy } from "../runtime-policy";
@@ -461,7 +462,8 @@ function fallbackCallSummary(history: ReadonlyArray<ChatMessage>): string {
 async function summarizeAndStoreCall(history: ReadonlyArray<ChatMessage>, startedAt: number, endedAt: number): Promise<void> {
   let summary = "";
   try {
-    const settings = modelSettingsGetter?.();
+    const original = modelSettingsGetter?.();
+    const settings = original && resolveChatModuleModel("voice", original);
     if (!settings?.apiKey) throw new Error("Phone 模型配置不可用");
     const adapter = getAdapterForConfig(settings);
     const transcript = history.filter((message) => message.role === "user" || message.role === "assistant")
@@ -524,7 +526,8 @@ async function runAgentTurn(userText: string): Promise<string | null> {
     }
 
     // 2. 直接调 LLM（不走 FC loop）
-    const ms = modelSettingsGetter?.();
+    const original = modelSettingsGetter?.();
+    const ms = original && resolveChatModuleModel("voice", original);
     if (!ms || !ms.apiKey) {
       throw new Error("模型配置缺失或未填写 API Key");
     }
@@ -532,7 +535,6 @@ async function runAgentTurn(userText: string): Promise<string | null> {
     // 协议跟随档案配置（explicitTransport），缺失时由 resolveTransport 回退厂商默认
     const adapter = getAdapterForConfig(ms);
 
-    const url = buildVendorUrl(ms.baseUrl, adapter.transport);
     const systemPrompt = await systemPromptBuilder?.(userText) ?? "";
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
@@ -548,7 +550,7 @@ async function runAgentTurn(userText: string): Promise<string | null> {
       { provider: ms.provider, baseUrl: ms.baseUrl, model: ms.model, apiKey: ms.apiKey },
     );
 
-    const httpResp = await fetch(url, {
+    const httpResp = await fetch(req.url, {
       method: "POST",
       headers: { ...req.headers, "Content-Type": "application/json" },
       body: req.body,

@@ -14,6 +14,41 @@ function extractionInput(): SocialExtractionInput {
 }
 
 describe("social context scheduler", () => {
+  it("rejects an unpersisted or replaced final reply at commit", async () => {
+    const store = createSocialAtomStore();
+    const apply = vi.spyOn(store, "applyOperations");
+    const scheduler = createSocialContextScheduler({store, generate:async()=>'{"operations":[]}',
+      sourceRevision:()=>"user-unchanged",canCommit:()=>false,enqueue:(_label,task)=>task()});
+    scheduler.schedule(extractionInput());
+    await new Promise(resolve=>setImmediate(resolve));
+    expect(apply).not.toHaveBeenCalled();
+  });
+  it("does not commit when the source changes during generation", async () => {
+    const store = createSocialAtomStore();
+    let revision: string | undefined = "original";
+    const apply = vi.spyOn(store, "applyOperations");
+    const scheduler = createSocialContextScheduler({store,
+      sourceRevision: () => revision,
+      generate: async () => { revision = undefined; return '{"operations":[]}'; },
+      enqueue: (_label, task) => task(),
+    });
+    scheduler.schedule(extractionInput());
+    await new Promise(resolve => setImmediate(resolve));
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("does not call the model for sources invalidated while queued", async () => {
+    let revision = "original";
+    let run!: () => Promise<void>;
+    const generate = vi.fn();
+    const scheduler = createSocialContextScheduler({store:createSocialAtomStore(), generate,
+      sourceRevision: () => revision,
+      enqueue: async (_label, task) => { run = task; },
+    });
+    scheduler.schedule(extractionInput()); revision = "edited";
+    await run();
+    expect(generate).not.toHaveBeenCalled();
+  });
   it("queues exactly one extraction call when the initial output is valid", async () => {
     const store = createSocialAtomStore();
     const generate = vi.fn().mockResolvedValue(JSON.stringify({

@@ -1,0 +1,9 @@
+{
+  "driver": "https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0",
+  "dllSha256": "2bf0cb1d809039573c922737d298a1653d4dbc61408060ff45a9bcfde82e97d2",
+  "clientApi": "https://github.com/nefarius/ViGEmClient/blob/master/include/ViGEm/Client.h",
+  "source": "https://pypi.org/pypi/vgamepad/0.1.0/json",
+  "driverInstalled": false,
+  "archiveSha256": "57f6bd01aec0c172947517fb782d150ef9b285f7f4d524c317374fa5c24a89de",
+  "archive": "https://files.pythonhosted.org/packages/8a/54/0eaddc33f84247963af078f364b37153d09fcd6cdc398f243ec3e8842c56/vgamepad-0.1.0.tar.gz"
+}

@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "id": "dungeons-decision",
+  "name": "昔涟地下城决策预演",
+  "version": "0.1.1",
+  "description": "独立预演跟随、战斗、治疗与救援决策，暂不发送游戏输入",
+  "author": "Cyrene local integration",
+  "entry": "index.cjs",
+  "settingsPanel": "settings.html",
+  "settingsSection": "plugins",
+  "defaultEnabled": false
+}

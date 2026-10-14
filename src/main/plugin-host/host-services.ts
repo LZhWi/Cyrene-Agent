@@ -26,6 +26,7 @@ import {
 } from "./workspace-service";
 import { pluginHostError } from "./errors";
 import { createPluginMemoryRetrievalService } from "./memory-retrieval-service";
+import { createPluginWindowNavigationService, type PluginWindowNavigationOptions } from "./window-navigation-service";
 
 /** 宿主服务装配所需的会话存储只读视图（列表 + 会话 + 工作区绑定）。 */
 export interface PluginHostChatsReader
@@ -58,6 +59,7 @@ export interface PluginHostServicesOptions {
   schedulerStore: PluginSchedulerStore;
   /** 独占语音输入租约服务；全局单例，由 plugin-runtime 创建一次后传入。 */
   speechInput: SpeechInputService;
+  windowNavigation?: Omit<PluginWindowNavigationOptions, "signal">;
 }
 
 /**
@@ -85,6 +87,9 @@ export function createHostServiceFactory(options: PluginHostServicesOptions): Pl
           reader: options.chatsReader,
           signal,
         }),
+        ...(options.windowNavigation ? {
+          windowNavigation: createPluginWindowNavigationService({ ...options.windowNavigation, signal }),
+        } : {}),
         conversations: createPluginConversationsService({
           reader: options.chatsReader,
           signal,
@@ -121,6 +126,12 @@ export function createHostServiceFactory(options: PluginHostServicesOptions): Pl
         },
         ...(options.companionContext ? {
           companionContext: {
+            ...(options.companionContext.memoryContext ? { memoryContext: async (input: Parameters<NonNullable<PluginCompanionContextService["memoryContext"]>>[0]) => {
+              if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止");
+              const result = await options.companionContext!.memoryContext!({ ...input, signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal });
+              if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止");
+              return result;
+            } } : {}),
             snapshot: async (input) => {
               if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止，陪伴上下文服务不可用");
               const snapshot = await options.companionContext!.snapshot({

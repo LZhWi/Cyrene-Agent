@@ -8,6 +8,7 @@ import { createModelService, endpoint, readReferencedConfig, DEFAULT_MODEL_CONFI
 import { createChat, type Turn } from "../plugins/companion-chat/src/chat";
 import { createMemory } from "../plugins/companion-memory/src/memory";
 import { createVectorIndex } from "../plugins/companion-memory/src/vector-index";
+import { createRecoverableMemoryStorage } from "../plugins/companion-memory/src/recoverable-storage";
 import { createPeer, CHAT_ID, MEMORY_ID } from "../plugins/shared/protocol";
 import { assertPluginStorageFile, resolvePluginStorageRoot } from "../plugins/shared/boundary";
 import { strictStorage } from "../plugins/shared/runtime";
@@ -39,6 +40,20 @@ afterEach(() => {
 });
 
 describe("模型来源与凭据边界", () => {
+  it("自定义线路可按模块交给宿主 OAuth，保留插件配置，失败不回退", async () => {
+    const generateTextIfRouted = vi.fn().mockResolvedValue("OAuth result");
+    const ctx = createMockPluginContext({ deps: { llm: { generateText: vi.fn(), generateTextIfRouted } } });
+    const config = { ...DEFAULT_MODEL_CONFIG, mode: "custom", baseUrl: "https://example.invalid/v1", model: "custom-model" };
+    ctx.storage.set("model-config", config);
+    const fetcher = vi.fn(), model = createModelService(ctx, fetcher);
+    expect(await model.generate([{ role: "user", content: "test" }], stop(), { routingModule: "proactive" })).toBe("OAuth result");
+    expect(generateTextIfRouted.mock.calls[0][1].routingModule).toBe("proactive");
+    expect(ctx.storage.get("model-config")).toEqual(config);
+    expect(fetcher).not.toHaveBeenCalled();
+    generateTextIfRouted.mockRejectedValueOnce(new Error("OAuth unavailable"));
+    await expect(model.generate([{ role: "user", content: "test" }], stop())).rejects.toThrow("OAuth unavailable");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("默认复用当前宿主，宿主模式不读取或复制密钥", async () => {
     expect(DEFAULT_MODEL_CONFIG.reuse).toBe("current");
     expect(DEFAULT_MODEL_CONFIG).not.toHaveProperty("personaStyle");
@@ -124,9 +139,9 @@ describe("独立聊天与记忆闭环", () => {
     const generate = vi.fn(); const chat = createChat({ storage: storage(), retrieve: async () => { throw new Error("offline"); }, systemPrompt: () => "", generate, ingest: vi.fn() });
     await expect(chat.send(chat.createSession(), "问题", stop())).rejects.toThrow("offline"); expect(generate).not.toHaveBeenCalled();
   });
-  it("满 10 轮提取、前 2 后 10、来源时间、队列恢复与重复交付", async () => {
+  it("满 6 轮提取、前 2 后 6、来源时间、队列恢复与重复交付", async () => {
     const data = storage(); let memory = createMemory(data);
-    for (let i = 0; i < 10; i++) memory.ingest(turn(i));
+    for (let i = 0; i < 6; i++) memory.ingest(turn(i));
     memory.ingest(turn(0));
     const generate = vi.fn().mockResolvedValue(JSON.stringify([memoryCandidate({
       layer: "L2", field: undefined, summary: "喜欢第0种茶", sourceQuote: "我喜欢第0种茶", evidenceQuotes: ["我喜欢第0种茶"],
@@ -134,11 +149,11 @@ describe("独立聊天与记忆闭环", () => {
     })]));
     await memory.maintain(generate, stop()); expect(memory.view().entries[0].sourceAt).toBe(1000);
     memory = createMemory(data);
-    for (let i = 10; i < 20; i++) memory.ingest(turn(i));
+    for (let i = 6; i < 12; i++) memory.ingest(turn(i));
     generate.mockResolvedValue("[]"); await memory.maintain(generate, stop());
     const prompt = generate.mock.calls[1][0];
     expect(prompt.map((message: { role: string }) => message.role)).toEqual(["system", "user"]);
-    expect(prompt[1].content).toContain("T1（第 1 轮，只读上下文）"); expect(prompt[1].content).toContain("我喜欢第8种茶"); expect(prompt[1].content).not.toContain("我喜欢第7种茶"); expect(prompt[1].content).toContain("我喜欢第19种茶");
+    expect(prompt[1].content).toContain("T1（第 1 轮，只读上下文）"); expect(prompt[1].content).toContain("我喜欢第4种茶"); expect(prompt[1].content).not.toContain("我喜欢第3种茶"); expect(prompt[1].content).toContain("我喜欢第11种茶");
     expect(memory.view().pending).toBe(0);
   });
   it("提取只清洗助手派生文本，不改原始轮次或用户原文", async () => {
@@ -157,44 +172,47 @@ describe("独立聊天与记忆闭环", () => {
     expect(prompt).not.toContain("隐藏设定");
     expect(memory.view().turns[0]).toEqual(original);
   });
-  it("非法证据逐条过滤；JSON 解析失败保留批次，不跨会话凑批", async () => {
+  it("非法证据和 JSON 失败保留批次，不跨会话凑批", async () => {
     const memory = createMemory(storage());
-    for (let i = 0; i < 9; i++) memory.ingest(turn(i));
+    for (let i = 0; i < 5; i++) memory.ingest(turn(i));
     memory.ingest(turn(0, "other")); const generate = vi.fn().mockResolvedValue("bad-json");
     await memory.maintain(generate, stop()); expect(generate).not.toHaveBeenCalled();
-    memory.ingest(turn(9)); await expect(memory.maintain(generate, stop())).rejects.toThrow();
+    memory.ingest(turn(5)); await expect(memory.maintain(generate, stop())).rejects.toThrow();
     generate.mockResolvedValue(JSON.stringify([memoryCandidate({ layer: "L2", field: undefined, summary: "猜测", sourceQuote: "不存在", evidenceQuotes: ["不存在"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] } })]));
-    await memory.maintain(generate, stop()); expect(memory.view().pending).toBe(1);
+    await expect(memory.maintain(generate, stop())).rejects.toThrow("逐字"); expect(memory.view().pending).toBe(7);
     expect(memory.view().entries).toHaveLength(0);
   });
-  it("模型给出格式错误的写入候选时逐条过滤，重启后不重复处理原批次", async () => {
+  it("格式错误不消费待处理队列，重启后仍可重试", async () => {
     const data = storage(); let memory = createMemory(data);
     for (let i = 0; i < 10; i++) memory.ingest(turn(i));
     const invalid = memoryCandidate({ layer: "L2", field: undefined, summary: "喜欢第0种茶",
       sourceQuote: "我喜欢第0种茶", evidenceQuotes: ["我喜欢第0种茶"],
       importance: 0.9, stability: "medium", facets: { primaryKind: "preference", retrievalKinds: ["preference"] } });
-    await memory.maintain(async () => JSON.stringify([invalid]), stop());
-    expect(memory.view().pending).toBe(0);
+    await expect(memory.maintain(async () => JSON.stringify([invalid]), stop())).rejects.toThrow();
+    expect(memory.view().pending).toBe(10);
     expect(memory.view().entries).toHaveLength(0);
     memory = createMemory(data);
-    expect(memory.view().pending).toBe(0);
+    expect(memory.view().pending).toBe(10);
     expect(memory.view().entries).toHaveLength(0);
   });
-  it("同批非法候选不阻断有证据的有效记忆", async () => {
+  it("同批非法候选阻止部分提交，修复后才消费队列", async () => {
     const memory = createMemory(storage());
     for (let i = 0; i < 10; i++) memory.ingest(turn(i));
     const good = memoryCandidate({ layer: "L2", field: undefined, summary: "用户喜欢第0种茶",
       sourceQuote: "我喜欢第0种茶", evidenceQuotes: ["我喜欢第0种茶"],
       facets: { primaryKind: "preference", retrievalKinds: ["preference"] } });
     const badQuote = memoryCandidate({ ...good, summary: "用户喜欢不存在的茶", evidenceQuotes: ["不存在"] });
-    await memory.maintain(async () => JSON.stringify([good, badQuote,
-      memoryCandidate({ ...good, summary: "用户不再喜欢茶" })]), stop());
-    expect(memory.view().pending).toBe(0);
+    await expect(memory.maintain(async () => JSON.stringify([good, badQuote,
+      memoryCandidate({ ...good, summary: "用户不再喜欢茶" })]), stop())).rejects.toThrow();
+    expect(memory.view().pending).toBe(10);
+    expect(memory.view().entries).toHaveLength(0);
+    await memory.maintain(async () => JSON.stringify([good]), stop());
+    expect(memory.view().pending).toBe(4);
     expect(memory.view().entries.map((entry) => entry.content)).toEqual(["用户喜欢第0种茶"]);
   });
   it("模型调用前后重新核验宿主来源，删除或改写的轮次不提交记忆", async () => {
     const memory = createMemory(storage());
-    for (let i = 0; i < 10; i++) memory.ingest({ ...turn(i), origin: "host", inputMessageId: `u-${i}`, finalMessageId: `a-${i}` });
+    for (let i = 0; i < 6; i++) memory.ingest({ ...turn(i), origin: "host", inputMessageId: `u-${i}`, finalMessageId: `a-${i}` });
     const validate = vi.fn()
       .mockImplementationOnce(async (turns: Turn[]) => turns.map((item) => item.id))
       .mockImplementationOnce(async (turns: Turn[]) => turns.filter((item) => item.id !== "s-0").map((item) => item.id));
@@ -207,7 +225,7 @@ describe("独立聊天与记忆闭环", () => {
     expect(validate).toHaveBeenCalledTimes(2);
     expect(memory.view().turns.map((item) => item.id)).not.toContain("s-0");
     expect(memory.view().entries).toHaveLength(0);
-    expect(memory.view().pending).toBe(9);
+    expect(memory.view().pending).toBe(5);
   });
   it("存储写失败时不在内存中假装提交成功", () => {
     const data = storage(); const memory = createMemory(data); data.set = () => { throw new Error("disk"); };
@@ -374,7 +392,7 @@ describe("跨插件协议与路径边界", () => {
       expect(await screenTool!.execute({ focus: "正在做什么" }, { userQuery: "看看屏幕", signal: stop() })).toBe("屏幕摘要:正在做什么");
       expect(observe).toHaveBeenCalledOnce();
       expect((await ui("extract")).batches).toBe(1);
-      expect((await ui("memory")).pending).toBe(0);
+      expect((await ui("memory")).pending).toBe(4);
     } finally { await a.dispose(); await b.dispose(); await chatPlugin.unregister?.(); await memoryPlugin.unregister?.(); }
     expect(a.subscriptions).toHaveLength(0); expect(b.subscriptions).toHaveLength(0);
   });
@@ -386,20 +404,27 @@ describe("跨插件协议与路径边界", () => {
     const a = createMockPluginContext({ pluginId: CHAT_ID });
     const b = createMockPluginContext({ pluginId: MEMORY_ID, deps: { memoryRetrieval: { embed: vi.fn(), rank } } });
     for (const ctx of [a, b]) { const dir = temporaryDirectory(ctx.id); ctx.storage.rootDir = () => dir; }
-    const seeded = createMemory(b.storage);
+    // The registered plugin reads recoverable files, not the SDK mock's in-memory map.
+    const persisted = createRecoverableMemoryStorage(b);
+    const seeded = createMemory(persisted);
     for (let index = 0; index < 10; index++) seeded.ingest(turn(index));
     await seeded.maintain(vi.fn().mockResolvedValue(JSON.stringify([memoryCandidate({
       layer: "L2", field: undefined, summary: "喜欢第0种茶", sourceQuote: "我喜欢第0种茶", evidenceQuotes: ["我喜欢第0种茶"],
       facets: { primaryKind: "preference", retrievalKinds: ["preference"] },
     })])), stop());
     const id = seeded.view().entries[0].id;
-    createVectorIndex(b.storage).upsertGenerated([{ l2Id: id, embedding: [1, ...Array(63).fill(0)], contentHash: "a".repeat(64) }], 64);
+    createVectorIndex(persisted).upsertGenerated([{ l2Id: id, embedding: [1, ...Array(63).fill(0)], contentHash: "a".repeat(64) }], 64);
+    expect(createMemory(createRecoverableMemoryStorage(b)).view().entries.map((entry) => entry.id)).toContain(id);
+    expect(createVectorIndex(createRecoverableMemoryStorage(b)).view().entries).toBe(1);
     for (const [source, target] of [[a, b], [b, a]]) source.events.emit = async (event, payload) => {
       for (const subscription of [...target.subscriptions]) if (subscription.event === `plugin:${source.id}:${event}`) subscription.listener(payload);
     };
     try {
       await chatPlugin.register(a); await memoryPlugin.register(b);
       expect(await a.ipcChannels.get("ui")!("save-memory-link", { enabled: true })).toMatchObject({ ok: true });
+      const newConversation = await a.ipcChannels.get("ui")!("new") as { ok: boolean; data: string };
+      expect(newConversation.ok).toBe(true);
+      expect(newConversation.data).not.toBe("s");
       const tool = a.tools.find((item) => item.id === "companion-chat_memory_search")!;
       const result = await tool.execute({ query: "第0种茶", topK: 10 }, { userQuery: "你还记得吗", signal: stop() });
       expect(result).toContain("喜欢第0种茶");

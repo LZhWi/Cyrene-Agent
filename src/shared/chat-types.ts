@@ -154,6 +154,10 @@ export interface ChatMessage {
   ttsCacheVersion?: string;
   /** 已实际展示的音乐候选卡片；持久化展示不延长 Skill 候选状态 TTL。 */
   musicCard?: MusicCardData;
+  /** 历史通话记录；摘要由用户展开查看。 */
+  callEvent?: { callId: string; startedAt: number; endedAt: number; summary: string };
+  /** 由播放器确认已开始播放的曲目；与搜索候选 musicCard 分开保存。 */
+  musicEvent?: { startedAt: number; tracks: Array<{ id: string; name: string; artists: string[]; playedAt: number }> };
   /** 上下文容量快照（run 终态落盘）；运行中被每轮 preRequest 快照实时覆盖（纯内存）。 */
   contextUsage?: ContextUsageSnapshot;
   /** 仅由宿主为插件主动投递消息写入；渲染端据此提供受控、一次性的反馈操作。 */

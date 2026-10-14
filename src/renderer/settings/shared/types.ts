@@ -55,6 +55,7 @@ export interface ModelSettings {
   stickerSimilarityThreshold: number;
   /** 整个聊天请求的超时（秒）。30-1800，默认 300。 */
   chatRequestTimeoutSec: number;
+  modelRequestMaxRetries: number;
   /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
   citaRepairBudgetSec: number;
   vision?: {
@@ -165,6 +166,7 @@ export interface LocationApi {
 }
 
 export interface MemoryPanelPayload {
+  lifecycleTrackingEnabled?: boolean;
   l0: {
     preferredName: string;
     occupation: string;
@@ -209,6 +211,7 @@ export interface ObsidianVaultConfig {
 
 export interface MemoryPanelApi {
   getData: () => Promise<MemoryPanelPayload>;
+  setLifecycleTracking: (enabled: boolean) => Promise<{ enabled: boolean }>;
   getQueryRouter: () => Promise<{ enabled: boolean; provider: string; baseUrl: string; model: string; explicitTransport: "auto" | "openai" | "anthropic"; reasoning: "auto" | "off" | "low"; hasKey: boolean }>;
   saveQueryRouter: (settings: { enabled: boolean; provider: string; baseUrl: string; model: string; explicitTransport: "auto" | "openai" | "anthropic"; reasoning: "auto" | "off" | "low"; apiKey?: string }) => ReturnType<MemoryPanelApi["getQueryRouter"]>;
   getColdRecall: (conversationId: string) => Promise<import("../../../shared/chat-types").ChatColdRecallRecord[]>;

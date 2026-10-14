@@ -32,28 +32,36 @@ export function createAutoReflection(
   events: PluginEvents,
   review: (signal: AbortSignal) => Promise<{ suggested: number; applied?: number }>,
   now: () => number = Date.now,
+  acquire?: (signal: AbortSignal) => Promise<() => void>,
 ) {
   let enabled = storage.get<boolean>(SETTINGS_KEY) ?? false;
   if (typeof enabled !== "boolean") throw new Error("后台画像反思设置损坏");
   let state = load(storage), stopped = false, running = false;
   let controller: AbortController | undefined;
   const save = (next: AutoReflectionState) => { storage.set(STATE_KEY, next); state = next; };
-  const onTurn = async (event: PluginTurnFinishedEvent) => {
-    if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.status !== "success") return;
-    const pendingTurns = Math.min(TURN_INTERVAL, state.pendingTurns + 1); save({ ...state, pendingTurns });
+  const onTurn = async (event: PluginTurnFinishedEvent, due = false) => {
+    if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion" || event.status !== "success") return;
+    const pendingTurns = due ? TURN_INTERVAL : Math.min(TURN_INTERVAL, state.pendingTurns + 1); save({ ...state, pendingTurns });
     if (pendingTurns < TURN_INTERVAL || running) return;
     const at = now(); if (state.lastAttemptAt !== undefined && at - state.lastAttemptAt < MIN_INTERVAL_MS) return;
     save({ ...state, pendingTurns: 0, lastAttemptAt: at }); running = true; controller = new AbortController();
+    let release: (() => void) | undefined;
     try {
+      if (acquire) release = await acquire(controller.signal);
+      if (stopped || controller.signal.aborted) return;
       const result = await review(controller.signal);
       if (stopped || controller.signal.aborted) return;
       save({ ...state, lastCompletedAt: now(), lastSuggested: result.suggested, lastApplied: result.applied ?? 0, lastErrorAt: undefined });
     } catch {
       if (!stopped && !controller.signal.aborted) save({ ...state, lastErrorAt: now() });
-    } finally { running = false; controller = undefined; }
+    } finally { release?.(); running = false; controller = undefined; }
   };
   const off = events.on<PluginTurnFinishedEvent>("host:turn:finished", onTurn);
   return {
+    async runDue(event: PluginTurnFinishedEvent) {
+      await onTurn(event, true);
+      return !enabled || (!stopped && !running && state.pendingTurns === 0 && state.lastErrorAt === undefined);
+    },
     view() { return { enabled, running, turnInterval: TURN_INTERVAL, ...structuredClone(state) }; },
     set(value: unknown) {
       if (typeof value !== "boolean") throw new Error("后台画像反思设置无效");

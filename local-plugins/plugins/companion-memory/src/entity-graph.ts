@@ -1,11 +1,13 @@
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
+import { legacyContextState } from "./legacy-context-state";
 
 const KEY = "entity-graph";
 const TYPES = ["person", "place", "concept", "preference", "organization"] as const;
 type EntityType = typeof TYPES[number];
 export interface ExtractedEntity { name: string; type: EntityType; aliases?: string[] }
 interface EntityNode extends ExtractedEntity { id: string; aliases: string[]; mentionCount: number; firstMentionedAt: number; lastMentionedAt: number }
-interface State { version: 1; entities: EntityNode[] }
+interface EntityRelation { id: string; sourceId: string; targetId: string; relation: string; confidence: number; strength: number }
+interface State { version: 1; entities: EntityNode[]; relations?: EntityRelation[] }
 
 const ENTITY_PATTERNS: Array<{ type: EntityType; patterns: RegExp[] }> = [
   { type: "person", patterns: [/我的朋友(.{1,6})/g, /我认识(.{1,6})/g, /同事(.{1,6})/g, /叫(.{1,4})(?:的人|的朋友|的同事|的老板)/g, /有.{0,4}朋友.{0,4}(.{1,6})/g, /(.{1,4})是我的朋友/g] },
@@ -34,7 +36,9 @@ function validate(value: unknown): State {
       || !Number.isSafeInteger(entity.mentionCount) || entity.mentionCount < 1
       || !Number.isFinite(entity.firstMentionedAt) || !Number.isFinite(entity.lastMentionedAt)) throw new Error("实体图谱损坏");
   }
-  return structuredClone(value as State);
+  const state = value as State, ids = new Set(state.entities.map(e => e.id));
+  if (ids.size !== state.entities.length || (state.relations !== undefined && (!Array.isArray(state.relations) || new Set(state.relations.map(r => r.id)).size !== state.relations.length || state.relations.some(r => !r || !r.id || !ids.has(r.sourceId) || !ids.has(r.targetId) || typeof r.relation !== "string" || !r.relation || !Number.isFinite(r.confidence) || r.confidence < 0 || r.confidence > 1 || !Number.isFinite(r.strength) || r.strength < 0)))) throw new Error("实体关系损坏");
+  return structuredClone(state);
 }
 
 export function normalizeExtractedEntities(value: unknown): ExtractedEntity[] {
@@ -49,9 +53,10 @@ export function normalizeExtractedEntities(value: unknown): ExtractedEntity[] {
 }
 
 export function createEntityGraph(storage: PluginStorage, now: () => number = Date.now) {
-  let state = storage.get<unknown>(KEY) === undefined ? { version: 1 as const, entities: [] } : validate(storage.get<unknown>(KEY));
+  const stored = storage.get<unknown>(KEY) ?? legacyContextState(storage, KEY);
+  let state: State = stored === undefined ? { version: 1, entities: [] } : validate(stored);
   return {
-    view() { return { count: state.entities.length }; },
+    view() { return { count: state.entities.length, relations: state.relations?.length ?? 0 }; },
     ingest(input: ExtractedEntity[] | string[]) {
       const items = typeof input[0] === "string"
         ? (input as string[]).flatMap(extractEntitiesFromText)
@@ -70,7 +75,7 @@ export function createEntityGraph(storage: PluginStorage, now: () => number = Da
         }
         changed += 1;
       }
-      state = { version: 1, entities };
+      state = { ...state, entities };
       storage.set(KEY, state);
       return changed;
     },
@@ -79,7 +84,9 @@ export function createEntityGraph(storage: PluginStorage, now: () => number = Da
       const rows = state.entities.filter((entity) => [entity.name, ...entity.aliases].some((name) => normalized.includes(name.toLowerCase()))).slice(0, 20);
       if (!rows.length) return "";
       const labels: Record<EntityType, string> = { person: "人物", place: "地点", concept: "概念", preference: "偏好", organization: "组织" };
-      return `【人物关系】\n${rows.map((entity) => `· ${entity.name}（${labels[entity.type]}）${entity.mentionCount > 1 ? `（提及${entity.mentionCount}次）` : ""}`).join("\n")}`;
+      const ids = new Set(rows.map(e => e.id)), byId = new Map(state.entities.map(e => [e.id, e.name]));
+      const relations = (state.relations ?? []).filter(r => ids.has(r.sourceId) || ids.has(r.targetId)).slice(0, 20);
+      return `【人物关系】\n${rows.map((entity) => `· ${entity.name}（${labels[entity.type]}）${entity.mentionCount > 1 ? `（提及${entity.mentionCount}次）` : ""}`).join("\n")}${relations.map(r => `\n· ${byId.get(r.sourceId)} — ${r.relation} → ${byId.get(r.targetId)}`).join("")}`;
     },
   };
 }

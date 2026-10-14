@@ -7,6 +7,18 @@ const signal = () => new AbortController().signal;
 const now = Date.parse("2026-09-23T08:00:00Z");
 
 describe("宿主旧会话只读检索", () => {
+  it("超过500个会话仍完整分页，非Chat会话不占检索额度", async () => {
+    const sessions = Array.from({ length: 501 }, (_, index) => ({ id: String(index), mode: "work", updatedAt: "same" }));
+    sessions.push({ id: "chat", mode: "chat", updatedAt: "same" });
+    const conversations: any = {
+      list: async ({ cursor }: any) => {
+        const offset = Number(cursor ?? 0);
+        return { items: sessions.slice(offset, offset + 100), nextCursor: offset + 100 < sessions.length ? String(offset + 100) : undefined };
+      },
+      getMessages: async () => ({ items: [{ id: "a", role: "assistant", text: "有效历史", at: new Date(now).toISOString() }] }),
+    };
+    expect(await createHostHistorySource(conversations).snapshot(signal())).toHaveLength(1);
+  });
   it("只读取 Chat 历史分页，不摄取未完成的末尾用户消息", async () => {
     const messages = [
       { id: "u1", role: "user" as const, text: "旧蓝色丝带", at: new Date(now - 2000).toISOString(),

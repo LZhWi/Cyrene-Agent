@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { resolveChatGptEndpoint } from "../../../chatgpt-oauth/runtime";
 import OpenAI from "openai";
 import { createThinkFilter } from "../../../chat/think-filter";
 import { AgentRuntimeError } from "../../agent-runtime-error";
+import { classifyModelFailure } from "../model-error-classifier";
 import type { ChatRequest, ChatResponse, ChatVendorAdapter, VendorConfig } from "../types";
 import { CyreneStreamAccumulator } from "./accumulator";
 import { AnthropicEventNormalizer, reconcileAnthropicTerminal } from "./anthropic-normalizer";
@@ -16,7 +18,6 @@ import {
 import { normalizeOpenAIChunk } from "./openai-normalizer";
 import { normalizeResponsesEvent } from "./responses-normalizer";
 import {
-  ProviderProtocolError,
   type StreamDiagnostic,
   type UnifiedStreamDelta,
 } from "./types";
@@ -110,6 +111,7 @@ export async function streamChatWithSdk(
   input: SdkStreamRunInput,
   deps: SdkStreamRuntimeDeps = defaultDeps,
 ): Promise<ChatResponse> {
+  input = { ...input, config: resolveChatGptEndpoint(input.config) };
   const controller = new AbortController();
   let timedOut = false;
   const abortFromCaller = () => controller.abort(input.signal?.reason);
@@ -207,18 +209,20 @@ export async function streamChatWithSdk(
         for (const delta of normalizeResponsesEvent(event)) dispatch(delta);
       }
       flushTaggedThink();
+      if (finalResponse === undefined || !Array.isArray(finalResponse.output)) {
+        throw new AgentRuntimeError(
+          "E_MODEL_RESPONSE_PARSE_FAILED",
+          finalResponse === undefined
+            ? "Responses 流结束但未收到终态事件"
+            : "Responses 终态事件缺少 output 项",
+        );
+      }
       const finalized = accumulator.finalize(finalResponse);
       // rawAssistant 补挂：完整 output items 是 Responses 多轮保真的核心（accumulator 不产出该字段）。
-      // 真正传输中断（无终态事件）时 finalResponse 为空 → rawAssistant 缺失 → 下轮退化构造，安全降级。
-      const outputItems = finalResponse !== undefined && Array.isArray(finalResponse.output)
-        ? finalResponse.output
-        : undefined;
-      const responsesFinal: ChatResponse = outputItems !== undefined
-        ? {
-            ...finalized,
-            assistantMessage: { ...finalized.assistantMessage, rawAssistant: outputItems },
-          }
-        : finalized;
+      const responsesFinal: ChatResponse = {
+        ...finalized,
+        assistantMessage: { ...finalized.assistantMessage, rawAssistant: finalResponse.output },
+      };
       dumpResponse(traceId, {
         transport: "responses",
         ok: true,
@@ -275,11 +279,21 @@ export async function streamChatWithSdk(
       });
     }
     if (timedOut) {
-      throw new AgentRuntimeError("E_MODEL_REQUEST_TIMEOUT", "模型响应超时，请稍后重试。", { cause: error });
+      throw new AgentRuntimeError("E_MODEL_REQUEST_TIMEOUT", "模型响应超时，请稍后重试。", {
+        cause: error,
+        modelFailure: { ...classifyModelFailure({ provider: input.adapter.id, model: input.request.model }), category: "TIMEOUT" },
+      });
     }
     if (input.signal?.aborted) throw cancellationError(input.signal);
-    if (error instanceof ProviderProtocolError || error instanceof AgentRuntimeError) throw error;
-    throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", "模型服务请求失败。", { cause: error });
+    if (error instanceof AgentRuntimeError && error.modelFailure) throw error;
+    const modelFailure = classifyModelFailure({ provider: input.adapter.id, model: input.request.model, error });
+    throw new AgentRuntimeError(
+      error instanceof AgentRuntimeError ? error.code : "E_MODEL_REQUEST_FAILED",
+      error instanceof AgentRuntimeError && error.code === "E_MODEL_RESPONSE_PARSE_FAILED"
+        ? error.message
+        : "模型服务请求失败。",
+      { cause: error, modelFailure },
+    );
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     input.signal?.removeEventListener("abort", abortFromCaller);

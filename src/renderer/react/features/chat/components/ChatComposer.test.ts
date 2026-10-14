@@ -73,6 +73,21 @@ describe("ChatComposer cancellation", () => {
     expect(senderProps?.disabled).toBe(false);
   });
 
+  it("shows model failure details without hiding the composer", () => {
+    const html = renderToStaticMarkup(createElement(ChatComposer, {
+      value: "", mode: "chat", docked: true, attachments: [],
+      onChange: vi.fn(), onSubmit: vi.fn(), onChooseWorkspace: vi.fn(),
+      onChooseFiles: vi.fn(), onRemoveAttachment: vi.fn(), onScreenshot: vi.fn(),
+      onChooseSticker: vi.fn(),
+      mainModelFailure: { provider: "glm", model: "glm-4.1v", category: "RATE_LIMIT", status: 429, vendorCode: "1302" },
+    }));
+
+    expect(html).toContain("cy-model-error-item");
+    expect(html).toContain("HTTP 429");
+    expect(html).toContain("1302");
+    expect(html).toContain("cy-composer-shell");
+  });
+
 });
 
 describe("ChatComposer Code sticker policy", () => {
@@ -98,6 +113,18 @@ describe("ChatComposer Code sticker policy", () => {
 
     expect(codeHtml).not.toContain('aria-label="表情包"');
     expect(workHtml).toContain('aria-label="表情包"');
+  });
+
+  it.each(["chat", "work", "code", "learn"])("gates document paste and attachment icons in %s", (mode) => {
+    const choose = vi.fn();
+    renderToStaticMarkup(createElement(ChatComposer, { ...baseProps, mode, onChooseFiles: choose,
+      attachments: [{ name: "report.txt", kind: "document" }] }));
+    const file = { name: "report.txt", type: "text/plain" };
+    const event = { clipboardData: { types: ["Files"], files: [file], items: [] }, preventDefault: vi.fn() };
+    (senderProps!.onPaste as (event: unknown) => void)(event);
+    expect(choose).toHaveBeenCalledTimes(mode === "chat" ? 0 : 1);
+    const header = renderToStaticMarkup(senderProps!.header as React.ReactElement);
+    expect(header.includes("cy-composer__attachment-icon")).toBe(mode !== "chat");
   });
 
   it("strips sticker markers without turning them into a Code message sticker", () => {

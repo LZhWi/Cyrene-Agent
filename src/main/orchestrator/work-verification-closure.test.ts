@@ -43,6 +43,15 @@ describe("Work run_verification 收口", () => {
 
   beforeEach(() => {
     cwd = fs.mkdtempSync(path.join(process.cwd(), ".tmp-work-verification-"));
+    // These tests mock runStep; provide local CLI fixtures so package resolution
+    // does not depend on whether this checkout's dependencies are linked elsewhere.
+    fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ private: true }));
+    for (const [name, cli] of [["typescript", "bin/tsc"], ["vitest", "vitest.mjs"]]) {
+      const root = path.join(cwd, "node_modules", name);
+      fs.mkdirSync(path.dirname(path.join(root, cli)), { recursive: true });
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name }));
+      fs.writeFileSync(path.join(root, cli), "");
+    }
     fs.writeFileSync(path.join(cwd, "tsconfig.json"), JSON.stringify({
       compilerOptions: { noEmit: true },
       include: ["sample.ts"],

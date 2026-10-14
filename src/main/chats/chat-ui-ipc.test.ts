@@ -84,6 +84,22 @@ describe("chat reasoning IPC", () => {
       .toMatchObject([{ kind: "image", mime: "image/png" }]);
   });
 
+  it("allows file URI paste only from the workspace main frame and task modes", async () => {
+    await register();
+    const { setReactWorkspaceWindow } = await import("../windows/window-state");
+    const mainFrame = {};
+    const sender = { mainFrame };
+    setReactWorkspaceWindow({ isDestroyed: () => false, webContents: sender } as any);
+    const handler = mocks.handlers.get(IPC.WORKSPACE_PASTE_FILE_URIS)!;
+    try {
+      for (const mode of ["work", "code", "learn"])
+        expect(await handler({ sender, senderFrame: mainFrame }, mode, "")).toEqual([]);
+      await expect(handler({ sender, senderFrame: mainFrame }, "chat", "")).rejects.toThrow("仅工作区");
+      await expect(handler({ sender: { mainFrame }, senderFrame: mainFrame }, "work", "")).rejects.toThrow("仅工作区");
+      await expect(handler({ sender, senderFrame: {} }, "work", "")).rejects.toThrow("仅工作区");
+    } finally { setReactWorkspaceWindow(null); }
+  });
+
   it("routes companion and work sessions to separate windows", async () => {
     mocks.sessions.set("chat-1", { id: "chat-1", mode: "chat" });
     mocks.sessions.set("code-1", { id: "code-1", mode: "code" });

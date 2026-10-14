@@ -1,0 +1,568 @@
+{
+  "version": 1,
+  "providers": {
+    "deepseek": {
+      "http": {
+        "400": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "401": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "402": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "422": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "429": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "500": {
+          "category": "SERVER_ERROR",
+          "retryable": true
+        },
+        "503": {
+          "category": "OVERLOADED",
+          "retryable": true
+        }
+      },
+      "docsUrl": "https://api-docs.deepseek.com/zh-cn/quick_start/error_codes/"
+    },
+    "minimax": {
+      "business_codes": {
+        "1008": {
+          "category": "BILLING",
+          "retryable": false,
+          "confidence": "observed-minimax-owned"
+        },
+        "2013": {
+          "category": "INVALID_REQUEST",
+          "retryable": false,
+          "confidence": "observed-minimax-owned"
+        },
+        "2049": {
+          "category": "AUTH",
+          "retryable": false,
+          "confidence": "observed-minimax-owned"
+        },
+        "2062": {
+          "category": "RATE_LIMIT",
+          "retryable": "conditional",
+          "confidence": "observed-minimax-owned"
+        }
+      },
+      "message_overrides": [
+        {
+          "code": "2013",
+          "contains": [
+            "context",
+            "max tokens"
+          ],
+          "category": "CONTEXT_LIMIT"
+        },
+        {
+          "code": "2062",
+          "contains": [
+            "no active token plan",
+            "subscription",
+            "entitlement"
+          ],
+          "category": "BILLING",
+          "retryable": false
+        }
+      ],
+      "docsUrl": "https://www.minimax.io/community/m/1526451464418099341"
+    },
+    "doubao": {
+      "codes": {
+        "MissingParameter": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "InvalidParameter": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "InvalidEndpoint.ClosedEndpoint": {
+          "category": "UNAVAILABLE",
+          "retryable": "conditional"
+        },
+        "InvalidSubscription": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "AuthenticationError": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "QuotaExceeded": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "ServerOverloaded": {
+          "category": "OVERLOADED",
+          "retryable": true
+        },
+        "RequestBurstTooFast": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        }
+      },
+      "docsUrl": "https://docs.volcengine.com/docs/ark/error-codes?lang=zh"
+    },
+    "glm": {
+      "codes": {
+        "1000": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "1001": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "1002": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "1003": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "1004": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "1113": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "1210": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "1211": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "1220": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "1231": {
+          "category": "CONFLICT",
+          "retryable": "conditional"
+        },
+        "1234": {
+          "category": "NETWORK",
+          "retryable": true
+        },
+        "1261": {
+          "category": "CONTEXT_LIMIT",
+          "retryable": false
+        },
+        "1300": {
+          "category": "CONTENT_POLICY",
+          "retryable": false
+        },
+        "1301": {
+          "category": "CONTENT_POLICY",
+          "retryable": false
+        },
+        "1302": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "1303": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "1304": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "1308": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "1309": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "1310": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "1311": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "1312": {
+          "category": "OVERLOADED",
+          "retryable": true
+        }
+      },
+      "docsUrl": "https://help.aliyun.com/zh/model-studio/glm-zhipu"
+    },
+    "kimi": {
+      "types": {
+        "invalid_authentication_error": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "model_not_found": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "engine_overloaded_error": {
+          "category": "OVERLOADED",
+          "retryable": true
+        },
+        "rate_limit_reached_error": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "exceeded_current_quota_error": {
+          "category": "QUOTA",
+          "retryable": false
+        },
+        "content_filter": {
+          "category": "CONTENT_POLICY",
+          "retryable": false
+        }
+      },
+      "docsUrl": "https://www.kimi.ai/help/kimi-api/api-error-codes"
+    },
+    "qwen": {
+      "codes": {
+        "InvalidApiKey": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "invalid_api_key": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "AccessDenied": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "ModelNotFound": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "Throttling.RateQuota": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "Throttling.BurstRate": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "Throttling.Concurrency": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "Throttling.ServiceOverloaded": {
+          "category": "OVERLOADED",
+          "retryable": true
+        },
+        "Throttling.AllocationQuota": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "insufficient_quota": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "CommodityNotPurchased": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "PrepaidBillOverdue": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "InternalError.Timeout": {
+          "category": "TIMEOUT",
+          "retryable": true
+        },
+        "ServiceUnavailable": {
+          "category": "UNAVAILABLE",
+          "retryable": true
+        },
+        "ModelUnavailable": {
+          "category": "UNAVAILABLE",
+          "retryable": true
+        },
+        "BadRequest.TooLarge": {
+          "category": "PAYLOAD_TOO_LARGE",
+          "retryable": false
+        }
+      },
+      "docsUrl": "https://help.aliyun.com/zh/model-studio/error-code"
+    },
+    "chatgpt": {
+      "codes": {
+        "credit_balance_exhausted": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "slow_down": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "organization_spend_limit_exceeded": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "project_spend_limit_exceeded": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "organization_usage_limit_exceeded": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "server_is_overloaded": {
+          "category": "OVERLOADED",
+          "retryable": true
+        }
+      },
+      "http_fallback": {
+        "400": "INVALID_REQUEST",
+        "401": "AUTH",
+        "403": "PERMISSION",
+        "404": "NOT_FOUND",
+        "409": "CONFLICT",
+        "429": "RATE_LIMIT",
+        "500": "SERVER_ERROR",
+        "503": "UNAVAILABLE"
+      },
+      "docsUrl": "https://developers.openai.com/api/docs/guides/error-codes"
+    },
+    "claude": {
+      "types": {
+        "invalid_request_error": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "authentication_error": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "billing_error": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "permission_error": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "not_found_error": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "conflict_error": {
+          "category": "CONFLICT",
+          "retryable": "conditional"
+        },
+        "request_too_large": {
+          "category": "PAYLOAD_TOO_LARGE",
+          "retryable": false
+        },
+        "rate_limit_error": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "api_error": {
+          "category": "SERVER_ERROR",
+          "retryable": true
+        },
+        "timeout_error": {
+          "category": "TIMEOUT",
+          "retryable": true
+        },
+        "overloaded_error": {
+          "category": "OVERLOADED",
+          "retryable": true
+        }
+      },
+      "docsUrl": "https://docs.anthropic.com/en/api/errors"
+    },
+    "mimo": {
+      "http": {
+        "400": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "401": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "402": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "403": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "404": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "421": {
+          "category": "CONTENT_POLICY",
+          "retryable": false
+        },
+        "429": {
+          "category": "RATE_LIMIT",
+          "retryable": "conditional"
+        },
+        "500": {
+          "category": "SERVER_ERROR",
+          "retryable": true
+        },
+        "503": {
+          "category": "OVERLOADED",
+          "retryable": true
+        }
+      },
+      "message_overrides": [
+        {
+          "contains": [
+            "quota",
+            "额度",
+            "Token Plan"
+          ],
+          "category": "QUOTA",
+          "retryable": false
+        }
+      ],
+      "docsUrl": "https://mimo.mi.com/docs/zh-CN/api/guidance/error-codes"
+    },
+    "grok": {
+      "http": {
+        "401": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "403": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "404": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "405": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "413": {
+          "category": "PAYLOAD_TOO_LARGE",
+          "retryable": false
+        },
+        "415": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "422": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "429": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "500": {
+          "category": "SERVER_ERROR",
+          "retryable": true
+        },
+        "502": {
+          "category": "UNAVAILABLE",
+          "retryable": true
+        },
+        "503": {
+          "category": "UNAVAILABLE",
+          "retryable": true
+        }
+      },
+      "structured_codes": {
+        "invalid_argument": "INVALID_REQUEST",
+        "permission_denied": "PERMISSION",
+        "failed_precondition": "INVALID_REQUEST",
+        "service_unavailable": "UNAVAILABLE",
+        "internal_error": "SERVER_ERROR"
+      },
+      "docsUrl": "https://docs.x.ai/developers/debugging"
+    },
+    "gemini": {
+      "codes": {
+        "invalid_request": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "failed_precondition": {
+          "category": "INVALID_REQUEST",
+          "retryable": false
+        },
+        "authentication": {
+          "category": "AUTH",
+          "retryable": false
+        },
+        "payment_required": {
+          "category": "BILLING",
+          "retryable": false
+        },
+        "permission_denied": {
+          "category": "PERMISSION",
+          "retryable": false
+        },
+        "not_found": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "model_not_found": {
+          "category": "NOT_FOUND",
+          "retryable": false
+        },
+        "rate_limit_exceeded": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "quota_exceeded": {
+          "category": "QUOTA",
+          "retryable": "conditional"
+        },
+        "too_many_requests": {
+          "category": "RATE_LIMIT",
+          "retryable": true
+        },
+        "cancelled": {
+          "category": "CANCELLED",
+          "retryable": false
+        },
+        "api_error": {
+          "category": "SERVER_ERROR",
+          "retryable": true
+        },
+        "service_unavailable": {
+          "category": "UNAVAILABLE",
+          "retryable": true
+        },
+        "deadline_exceeded": {
+          "category": "TIMEOUT",
+          "retryable": true
+        }
+      },
+      "docsUrl": "https://ai.google.dev/gemini-api/docs/api-errors"
+    }
+  }
+}

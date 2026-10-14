@@ -44,7 +44,7 @@ function labelFor(level: PermissionLevel, translate: (key: string) => string): s
   return translate(option?.labelKey ?? "permission.levelReadOnly");
 }
 
-export function PermissionControl() {
+export function PermissionControl({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const [level, setLevel] = useState<PermissionLevel>("read-only");
   const [open, setOpen] = useState(false);
@@ -99,9 +99,9 @@ export function PermissionControl() {
         </div>
       }
     >
-      <button type="button" className={`cy-composer__footer-button cy-permission-control is-${level}`}>
+      <button type="button" aria-label={labelFor(level, t)} title={labelFor(level, t)} className={`cy-composer__footer-button cy-permission-control is-${level}`}>
         <PermissionIcon level={level} />
-        <span>{labelFor(level, t)}</span>
+        {!compact && <span>{labelFor(level, t)}</span>}
         <ChevronIcon />
       </button>
     </Popover>

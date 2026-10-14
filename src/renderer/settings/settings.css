@@ -1546,6 +1546,8 @@ body {
 }
 
 /* 记忆面板 */
+#memory-lifecycle-card[hidden] { display: none; }
+
 .memory-card {
   background: var(--rb-card-bg);
   border: 1px solid var(--rb-border-strong);
@@ -4687,3 +4689,29 @@ body {
   background: transparent;
   transition: height 180ms ease;
 }
+
+/* Fixed OAuth profile editor in API settings. */
+#api-profile-editor { border: 0; padding: 0; margin: 0; min-width: 0; }
+#api-profile-editor[hidden], #oauth-profile-root[hidden] { display: none !important; }
+#new-api-profile-btn { margin-top: 12px; }
+#oauth-profile-root .model-panel__oauth { margin-top: 16px; padding: 20px; border: 1px solid var(--border-color, #e6dfe5); border-radius: 16px; }
+#oauth-profile-root h2 { margin: 0 0 10px; font-size: 17px; }
+#oauth-profile-root small { font-size: 12px; font-weight: normal; opacity: .65; }
+#oauth-profile-root p { font-size: 13px; line-height: 1.6; }
+#oauth-profile-root .model-panel__oauth-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
+#oauth-profile-root button, #oauth-profile-root select, #oauth-profile-root input { padding: 8px 12px; border: 1px solid var(--border-color, #e6dfe5); border-radius: 9px; background: var(--input-bg, white); color: inherit; font: inherit; }
+#oauth-profile-root button:disabled { opacity: .5; cursor: default; }
+#oauth-profile-root [role="alert"] { color: #b33850; }
+
+#chat-module-routes-root { margin-bottom: 18px; }
+.chat-module-settings .form-grid { margin-top: 18px; }
+.chat-module-settings .form-actions { flex-wrap: wrap; }
+.chat-module-settings [role="alert"] { color: var(--danger-color, #b33850); }
+.chat-module-settings__selectors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.chat-module-settings__selectors select { min-width: 0; width: 100%; }
+.chat-module-settings__heading { display: flex; align-items: center; gap: 8px; }
+.chat-module-settings__heading h2 { margin: 0; }
+.chat-module-settings__help { border: 0; padding: 2px 4px; background: transparent; color: var(--text-muted); font-size: 17px; cursor: pointer; }
+.chat-module-settings__help:focus-visible { outline: 2px solid currentColor; border-radius: 5px; }
+.chat-module-settings .chat-module-settings__selectors select { min-height: 32px; height: 32px; padding: 4px 8px; font-size: 12px; line-height: 1.4; }
+#chat-module-help[hidden] { display: none; }

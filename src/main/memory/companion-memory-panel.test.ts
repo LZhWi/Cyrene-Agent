@@ -7,6 +7,15 @@ import {
 } from "./companion-memory-panel";
 
 describe("companion memory native panel adapter", () => {
+  it("reads lifecycle tracking from plugin state without changing it", async () => {
+    for (const enabled of [false, true]) {
+      const invoke = vi.fn(async () => ({ ok: true, data: { lifecycle: { enabled }, entries: [] } }));
+      const panel = await loadCompanionMemoryPanelData(invoke, []);
+      expect(panel.lifecycleTrackingEnabled).toBe(enabled);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith("state");
+    }
+  });
+
   it("projects profiles, every lifecycle status, evidence text and reviews", async () => {
     const invoke = vi.fn(async () => ({ ok: true, data: {
       revision: 3,

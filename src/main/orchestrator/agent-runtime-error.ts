@@ -16,9 +16,14 @@ export class AgentRuntimeError extends Error {
   constructor(
     public readonly code: AgentErrorCode,
     message: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { modelFailure?: ModelFailureInfo; retryAfterMs?: number },
   ) {
     super(message, options);
     this.name = "AgentRuntimeError";
+    this.modelFailure = options?.modelFailure;
+    this.retryAfterMs = options?.retryAfterMs;
   }
+  public readonly modelFailure?: ModelFailureInfo;
+  public readonly retryAfterMs?: number;
 }
+import type { ModelFailureInfo } from "../../shared/model-error";

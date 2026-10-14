@@ -7,6 +7,7 @@ import { createChat } from "./chat";
 import { createProactiveController } from "./proactive";
 import type { ProactiveHistoryTurn } from "./proactive-prompt";
 import { createLifeContext } from "./life-context";
+import { readLifeDayMessages } from "./life-message-history";
 import { createPersonaService, personaStyleFromHost } from "./persona";
 import { createWorldbook } from "./worldbook";
 import { createScreenMonitor } from "./screen-monitor";
@@ -23,13 +24,18 @@ const plugin: CyrenePlugin = {
     if (ctx.id !== CHAT_ID) throw new Error("插件 ID 不匹配");
     const storage = strictStorage(ctx);
     const models = createModelService({ ...ctx, storage });
+    const persona = createPersonaService();
     const life = createLifeContext(storage, Date.now, {
       generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 25_600, timeoutMs: 90_000, reasoning: "on" }),
       recentMessages: () => readLifeRecentMessages(),
+      dayMessages: (startAt, endAt) => {
+        if (!ctx.deps.conversations) throw new Error("聊天历史只读服务不可用");
+        return readLifeDayMessages(ctx.deps.conversations, startAt, endAt);
+      },
+      diaryPrompt: persona.buildDiary(),
       stopSignal: ctx.signal,
     });
     ctx.registerIpc("life-status", () => life.status());
-    const persona = createPersonaService();
     const worldbook = createWorldbook(storage);
     const screenMonitor = createScreenMonitor({
       storage,
@@ -163,7 +169,9 @@ const plugin: CyrenePlugin = {
       modes: ["chat"],
       sources: ["conversation"],
       provide: async (input) => {
-        if (input.source !== "conversation" || input.chatBackend !== "companion" || input.channel) return "";
+        if (input.source !== "conversation") return "";
+        await life.awaitPendingDiary();
+        if (input.chatBackend !== "companion" || input.channel) return "";
         let recentMessages: Awaited<ReturnType<typeof readLifeRecentMessages>> = [];
         try { if (input.runId && input.conversationId) recentMessages = await readLifeRecentMessages(input.conversationId); }
         catch { /* 历史不可用时仍提供当前生活状态 */ }
@@ -340,7 +348,7 @@ const plugin: CyrenePlugin = {
       },
       recentContext: readRecentChatContext,
       toneRules: () => persona.buildTone(),
-      generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 2048, timeoutMs: 90_000 }),
+      generate: (messages, signal) => models.generate(messages, signal, { maxTokens: 2048, timeoutMs: 90_000, routingModule: "proactive" }),
       systemPrompt: () => persona.buildProactive(),
       lifeContext: (query) => life.build(query, { proactive: true }),
       lifeSharing: {
@@ -420,7 +428,7 @@ const plugin: CyrenePlugin = {
       proactive.noteConversationEnded();
       const lifeUpdate = (event as typeof event & { companionLifeUpdate?: string }).companionLifeUpdate;
       if (event.chatBackend === "companion" && event.status === "success" && event.finalMessageId && lifeUpdate) {
-        try { life.applyConversationUpdate(event.runId, lifeUpdate); }
+        try { life.applyConversationUpdate(event.runId, lifeUpdate, event.finalMessageId); }
         catch (error) { console.warn("[Life] 对话生活调整未提交:", error instanceof Error ? error.message : String(error)); }
       } else life.discardConversationUpdate(event.runId);
       if (event.status === "success" && event.finalMessageId) worldbook.commit(event.runId);
@@ -438,6 +446,7 @@ const plugin: CyrenePlugin = {
       retrieve: (query, signal) => memoryEnabled ? peer.request<string>("search-for-chat", query, signal, 140000) : Promise.resolve(""),
       ingest: (turn) => memoryEnabled ? peer.request("ingest", turn) : Promise.resolve(),
       generate: (messages, signal) => models.generate(messages, signal),
+      beforeGenerate: () => life.awaitPendingDiary(),
       systemPrompt: (query) => [standalonePersona(), life.build(query)].filter(Boolean).join("\n\n---\n\n"),
     });
     const window = createWindow(ctx, __dirname, "独立陪伴聊天");

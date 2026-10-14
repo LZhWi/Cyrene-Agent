@@ -1,8 +1,9 @@
 import { Popover } from "antd";
 import { useEffect, useState } from "react";
 import { useTranslation } from "../../../i18n";
+import { isChatGptOAuth } from "../../../../../shared/chatgpt-oauth";
 
-interface ModelProfile { id: string; provider: string; displayName?: string; model: string; }
+interface ModelProfile { id: string; provider: string; displayName?: string; model: string; baseUrl: string; }
 interface ModelCatalogApi {
   listModelProfiles?: () => Promise<{ profiles: ModelProfile[]; defaultModelProfileId?: string }>;
 }
@@ -18,7 +19,7 @@ export function ModelSelector({ activeProfileId, onSelect }: { activeProfileId?:
     setDefaultProfileId(result?.defaultModelProfileId);
   };
   useEffect(() => { void load(); }, []);
-  const active = profiles.find((item) => item.id === activeProfileId) ?? profiles.find((item) => item.id === defaultProfileId) ?? profiles[0];
+  const active = profiles.find((item) => item.id === activeProfileId) ?? profiles.find((item) => item.id === defaultProfileId) ?? profiles.find(item => !isChatGptOAuth(item));
   return (
     <Popover open={open} onOpenChange={(next) => { setOpen(next); if (next) void load(); }} trigger="click" placement="topLeft"
       content={<div className="cy-model-selector__menu">{profiles.length ? profiles.map((profile) => <button type="button" key={profile.id} onClick={() => { onSelect(profile.id); setOpen(false); }}><strong>{profile.displayName || profile.provider}</strong><small>{profile.model}</small></button>) : <span>{t("modelSelector.emptyHint")}</span>}</div>}>

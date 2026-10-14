@@ -1,4 +1,5 @@
 import type { ProviderProfile } from "./model-settings";
+import { isChatGptOAuth } from "../../shared/chatgpt-oauth";
 
 export interface SavedModelProfile extends ProviderProfile {
   id: string;
@@ -41,5 +42,5 @@ export function resolveDefaultModelProfile(
   profiles: SavedModelProfile[],
   defaultModelProfileId: string | undefined,
 ): SavedModelProfile | undefined {
-  return profiles.find((profile) => profile.id === defaultModelProfileId) ?? profiles[0];
+  return profiles.find((profile) => profile.id === defaultModelProfileId) ?? profiles.find(profile => !isChatGptOAuth(profile));
 }

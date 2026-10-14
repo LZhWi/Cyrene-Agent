@@ -1,4 +1,6 @@
 import { app, BrowserWindow, dialog, shell } from "electron";
+import { chatGptStatus, signInChatGpt, cancelChatGptSignIn, listChatGptModels, ensureChatGptBridge } from "../chatgpt-oauth/service";
+import { CHATGPT_OAUTH_URL, CHATGPT_OAUTH_PROVIDER, isChatGptOAuth } from "../../shared/chatgpt-oauth";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
@@ -26,6 +28,7 @@ import { testVendorConnection } from "../orchestrator/vendors/test-connection";
 import type { VendorConfig } from "../orchestrator/vendors";
 import { normalizeModelSettings, getPublicModelConfig, listSavedModelProfiles, saveModelProfile, setDefaultModelProfile, saveModelSettings } from "./model-settings";
 import type { ModelSettings } from "./model-settings";
+import { getChatModuleRoutesView, saveChatModuleRoutes, withChatModuleRoutes } from "./chat-module-routes";
 import { getTimeoutSettings, saveTimeoutSettings } from "../timeout-manager";
 import type { syncVolcanoSearchMcp } from "./general-settings-lifecycle";
 import type { syncPlaywrightMcp } from "../sync-mcp-builtin";
@@ -94,6 +97,27 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   }
 
   ipc.handle(IPC.SETTINGS_GET_CONFIG, () => getModelSettings());
+  const requireChatWindow = (event: Electron.IpcMainInvokeEvent) => {
+    const url = new URL(event.sender.getURL());
+    if (event.senderFrame !== event.sender.mainFrame || url.protocol !== "file:" && url.hostname !== "localhost"
+      || url.searchParams.get("windowKind") !== "chat" && event.sender !== settingsWindow?.webContents) throw new Error("模块分工仅可从原生 Chat 或设置窗口配置");
+  };
+  ipc.handle("settings:chat-module-routes:read", event => { requireChatWindow(event); return getChatModuleRoutesView(); });
+  ipc.handle("settings:chat-module-routes:save", (event, value) => { requireChatWindow(event); return saveChatModuleRoutes(value); });
+  ipc.handle(IPC.CHATGPT_OAUTH_STATUS, () => chatGptStatus());
+  ipc.handle(IPC.CHATGPT_OAUTH_LOGIN, () => signInChatGpt());
+  ipc.handle(IPC.CHATGPT_OAUTH_CANCEL, () => cancelChatGptSignIn());
+  ipc.handle(IPC.CHATGPT_OAUTH_MODELS, () => listChatGptModels());
+  ipc.handle(IPC.CHATGPT_OAUTH_SAVE, async (_event, input: { model?: string; displayName?: string }) => {
+    const models = await listChatGptModels();
+    if (!input || typeof input.model !== "string" || !models.some(m => m.id === input.model)) throw new Error("请选择已授权的 ChatGPT 模型");
+    await ensureChatGptBridge();
+    const existing = listSavedModelProfiles().find(isChatGptOAuth);
+    const saved = saveModelProfile({ ...existing, id: existing?.id ?? "chatgpt-oauth", provider: CHATGPT_OAUTH_PROVIDER, model: input.model,
+      displayName: typeof input.displayName === "string" ? input.displayName.slice(0, 80) : undefined,
+      baseUrl: CHATGPT_OAUTH_URL, apiKey: "oauth-managed", explicitTransport: "responses", multimodal: true });
+    return { added: saved.added };
+  });
   ipc.handle(IPC.SETTINGS_MODEL_PROFILES_LIST, () => ({
     profiles: listSavedModelProfiles(getModelSettings()),
     defaultModelProfileId: getModelSettings().defaultModelProfileId,
@@ -108,8 +132,9 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   ipc.handle(IPC.SETTINGS_MODEL_PROFILE_DELETE, (_event, id: unknown) => {
     if (typeof id !== "string") return null;
     const settings = getModelSettings();
+    if (listSavedModelProfiles(settings).some(profile => profile.id === id && isChatGptOAuth(profile))) throw new Error("OAuth 是固定模型档案，不能删除");
     const profiles = listSavedModelProfiles(settings).filter((profile) => profile.id !== id);
-    const defaultModelProfileId = settings.defaultModelProfileId === id ? profiles[0]?.id : settings.defaultModelProfileId;
+    const defaultModelProfileId = settings.defaultModelProfileId === id ? profiles.find(p => !isChatGptOAuth(p))?.id : settings.defaultModelProfileId;
     const saved = saveModelSettings({ modelProfiles: profiles, defaultModelProfileId });
     broadcastModelConfigChanged(saved);
     return { profiles: listSavedModelProfiles(saved), defaultModelProfileId: saved.defaultModelProfileId };
@@ -276,11 +301,11 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
       console.log("[Cyrene] test vision: model=" + cfg.model + " url=" + cfg.baseUrl);
       try {
         const { captionImage } = await import("../orchestrator/vision-captioner");
-        const result = await captionImage(
+        const result = await withChatModuleRoutes("work", () => captionImage(
           { base64: VISION_TEST_IMAGE_BASE64, mime: "image/png" },
           "这张图是什么颜色？用一个词回答。",
           { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model },
-        );
+        ));
         const latency = Date.now() - start;
         if (result.startsWith("[错误")) {
           return { ok: false, latency, error: result };

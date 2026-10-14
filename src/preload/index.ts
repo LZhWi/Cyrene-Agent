@@ -1,4 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { exposeLearnExamHost } from "./learn-exam-host";
+import { CODE_EXECUTOR_CHANNEL, type CodeExecutorApi } from "../shared/code-executor";
+
+contextBridge.exposeInMainWorld("codeExecutor", {
+  invoke: (sessionId, action, data) => ipcRenderer.invoke(CODE_EXECUTOR_CHANNEL, sessionId, action, data),
+} satisfies CodeExecutorApi);
+
+exposeLearnExamHost();
 import { IPC } from "../shared/ipc-channels";
 import type { StartTtsRequest, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import type { ScreenshotInsertPayload } from "../shared/ipc-channels";
@@ -87,6 +95,7 @@ const chatApi = {
     if (entries.length === 0) return [];
     return ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, entries);
   },
+  ingestClipboardFileUris: (mode: string, uriList: string) => ipcRenderer.invoke(IPC.WORKSPACE_PASTE_FILE_URIS, mode, uriList),
   processDocuments: (filePaths: string[], query: string) =>
     ipcRenderer.invoke(IPC.CHAT_PROCESS_DOCUMENTS, { filePaths, query }),
   onDocumentIndexProgress: (callback: (progress: DocumentIndexProgress) => void) => {
@@ -359,11 +368,18 @@ const cyreneAppearanceApi = {
 contextBridge.exposeInMainWorld("cyreneAppearance", cyreneAppearanceApi);
 
 const settingsApi = {
+  getChatModuleRoutes: () => ipcRenderer.invoke("settings:chat-module-routes:read"),
+  saveChatModuleRoutes: (value: unknown) => ipcRenderer.invoke("settings:chat-module-routes:save", value),
   minimize: () => ipcRenderer.send(IPC.SETTINGS_MINIMIZE),
   close: () => ipcRenderer.send(IPC.SETTINGS_CLOSE),
   getConfig: () => ipcRenderer.invoke(IPC.SETTINGS_GET_CONFIG),
   saveConfig: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_CONFIG, config),
   listModelProfiles: () => ipcRenderer.invoke(IPC.SETTINGS_MODEL_PROFILES_LIST),
+  chatGptOAuthStatus: () => ipcRenderer.invoke(IPC.CHATGPT_OAUTH_STATUS),
+  chatGptOAuthLogin: () => ipcRenderer.invoke(IPC.CHATGPT_OAUTH_LOGIN),
+  chatGptOAuthCancel: () => ipcRenderer.invoke(IPC.CHATGPT_OAUTH_CANCEL),
+  chatGptOAuthModels: () => ipcRenderer.invoke(IPC.CHATGPT_OAUTH_MODELS),
+  chatGptOAuthSave: (input: { model: string; displayName?: string }) => ipcRenderer.invoke(IPC.CHATGPT_OAUTH_SAVE, input),
   saveModelProfile: (profile: unknown) => ipcRenderer.invoke(IPC.SETTINGS_MODEL_PROFILE_SAVE, profile),
   deleteModelProfile: (id: string) => ipcRenderer.invoke(IPC.SETTINGS_MODEL_PROFILE_DELETE, id),
   setDefaultModelProfile: (id: string) => ipcRenderer.invoke(IPC.SETTINGS_MODEL_PROFILE_SET_DEFAULT, id),
@@ -414,6 +430,7 @@ const settingsApi = {
   setSkillEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke(IPC.SKILL_SET_ENABLED, { id, enabled }),
   // 三模适配层：skill-模式覆盖层（UI 设置面板用）
   getSkillCatalog: () => ipcRenderer.invoke(IPC.SKILL_GET_CATALOG),
+  getSkillSuggestions: (mode: string) => ipcRenderer.invoke(IPC.SKILL_GET_SUGGESTIONS, mode),
   rescanSkills: () => ipcRenderer.invoke(IPC.SKILL_RESCAN),
   getSkillModeOverrides: () => ipcRenderer.invoke(IPC.SKILL_GET_MODE_OVERRIDES),
   setSkillModeOverride: (skillId: string, mode: string, enabled: boolean) =>
@@ -564,6 +581,11 @@ contextBridge.exposeInMainWorld("pluginPanel", pluginPanelApi);
 
 const schedulerApi = {
   list: () => ipcRenderer.invoke(IPC.SCHEDULER_LIST),
+  onChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(IPC.SCHEDULER_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.SCHEDULER_CHANGED, listener);
+  },
   add: (input: unknown) => ipcRenderer.invoke(IPC.SCHEDULER_ADD, input),
   update: (id: string, patch: unknown) => ipcRenderer.invoke(IPC.SCHEDULER_UPDATE, id, patch),
   delete: (id: string) => ipcRenderer.invoke(IPC.SCHEDULER_DELETE, id),
@@ -658,6 +680,7 @@ const locationApi = {
 
 const memoryPanelApi = {
   getData: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_DATA),
+  setLifecycleTracking: (enabled: boolean) => ipcRenderer.invoke(IPC.MEMORY_LIFECYCLE_TRACKING_SET, enabled),
   getQueryRouter: () => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_GET),
   saveQueryRouter: (settings: unknown) => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_SAVE, settings),
   getColdRecall: (conversationId: string) => ipcRenderer.invoke(IPC.MEMORY_COLD_RECALL_GET, { conversationId }),
@@ -721,6 +744,14 @@ contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {
   list: (options?: { mode?: "chat" | "work" | "code" | "learn" }) => ipcRenderer.invoke(IPC.CHATS_LIST, options),
+  getSidebarOrganization: () => ipcRenderer.invoke(IPC.CHATS_SIDEBAR_ORGANIZATION_GET),
+  applySidebarOrganization: (expectedRevision: number, draft: import("../shared/sidebar-organization").SidebarOrganizationDraft) =>
+    ipcRenderer.invoke(IPC.CHATS_SIDEBAR_ORGANIZATION_APPLY, { expectedRevision, draft }),
+  onSidebarOrganizationChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(IPC.CHATS_SIDEBAR_ORGANIZATION_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.CHATS_SIDEBAR_ORGANIZATION_CHANGED, listener);
+  },
   get: (id: string) => ipcRenderer.invoke(IPC.CHATS_GET, id),
   getPage: (id: string, before: number | null, limit: number) =>
     ipcRenderer.invoke(IPC.CHATS_GET_PAGE, { id, before, limit }),
@@ -758,6 +789,12 @@ const chatStoreApi = {
   openFolder: () => ipcRenderer.invoke(IPC.CHATS_OPEN_FOLDER),
   openWorkspace: (workspaceRoot: string) =>
     ipcRenderer.invoke(IPC.CHATS_OPEN_WORKSPACE, workspaceRoot),
+  listFiles: (sessionId: string, directory: string, offset?: number) =>
+    ipcRenderer.invoke(IPC.WORKSPACE_INSPECTOR_LIST, { sessionId, path: directory, offset }),
+  readFile: (sessionId: string, file: string) =>
+    ipcRenderer.invoke(IPC.WORKSPACE_INSPECTOR_READ, { sessionId, path: file }),
+  getTask: (sessionId: string, taskId: string) =>
+    ipcRenderer.invoke(IPC.WORKSPACE_INSPECTOR_TASK, { sessionId, taskId }),
   migrateLegacy: (messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_MIGRATE_LEGACY, messages),
   // 聊天窗口加载 / 切换 session 时上报；附带本页面的渲染目标标识与会话模式，

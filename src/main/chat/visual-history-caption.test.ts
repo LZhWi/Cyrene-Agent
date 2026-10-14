@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../chats/chats-store", () => ({
+  getStorageRecoveryIssues: () => [],
   getSession: (id: string) => state.sessions.get(id) ?? null,
   listSessions: () => [...state.sessions.values()].map(({ messages, ...meta }) => meta),
   setImageVisualIndexResult: state.setCaption,

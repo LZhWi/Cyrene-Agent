@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { runHarness, permissionCheck, getById } = vi.hoisted(() => ({
+const { runHarness, permissionCheck, getById, userData } = vi.hoisted(() => ({
   runHarness: vi.fn(),
   permissionCheck: vi.fn(),
   getById: vi.fn(),
+  userData: { root: "" },
 }));
 
 vi.mock("./harness", async (importOriginal) => {
@@ -27,7 +31,7 @@ vi.mock("../prompts/prompt-loader", () => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { getPath: vi.fn(() => "C:\\cyrene-test-user-data") },
+  app: { getPath: vi.fn(() => userData.root) },
 }));
 
 import { runHarnessWithAdapter } from "./harness-adapter";
@@ -35,6 +39,7 @@ import type { HarnessInput } from "./harness";
 
 describe("runHarnessWithAdapter cancellation context", () => {
   beforeEach(() => {
+    userData.root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-harness-adapter-cancel-"));
     runHarness.mockReset();
     permissionCheck.mockReset();
     getById.mockReset();
@@ -44,6 +49,14 @@ describe("runHarnessWithAdapter cancellation context", () => {
       terminated: true,
       rounds: 1,
     });
+  });
+
+  afterEach(() => {
+    const root = path.resolve(userData.root);
+    if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith("cyrene-harness-adapter-cancel-")) {
+      throw new Error("Unexpected test directory; refusing cleanup");
+    }
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("threads the same run signal into tools, permission, and clarification", async () => {
@@ -65,6 +78,7 @@ describe("runHarnessWithAdapter cancellation context", () => {
         model: "",
         apiKey: "",
         contextWindowTokens: 256_000,
+        modelRequestMaxRetries: 2,
       },
       messages: [{ role: "user", content: "hi" }],
       timeoutMs: 60_000,
@@ -76,6 +90,7 @@ describe("runHarnessWithAdapter cancellation context", () => {
 
     const input = runHarness.mock.calls[0]?.[0] as HarnessInput;
     expect(input.signal).toBe(signal);
+    expect(input.config?.modelRequestMaxRetries).toBe(2);
     expect(input.toolContext?.signal).toBe(signal);
 
     await input.checkPermission?.("read_file", { path: "x" });

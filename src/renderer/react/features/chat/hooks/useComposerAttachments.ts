@@ -6,6 +6,7 @@ import { arrayBufferToBase64, containsFiles, PASTE_IMAGE_MAX_BYTES } from "../pa
 
 /** window.chat 中附件链路用到的子集（桥模式：显式 cast，不依赖全局 Window 声明）。 */
 interface ComposerChatApi {
+  ingestClipboardFileUris?: (mode: string, uriList: string) => Promise<ComposerAttachment[]>;
   ingestDroppedFiles: (files: File[]) => Promise<ComposerAttachment[]>;
   saveScreenshotTemp: (base64: string, mime: string) => Promise<{ filePath: string }>;
   startScreenshot: () => Promise<{ ok: boolean; reason?: string } | undefined>;
@@ -26,6 +27,7 @@ export interface ComposerDragHandlers {
 }
 
 export interface ComposerAttachmentsApi {
+  handlePastedFileUris: (uriList: string) => Promise<void>;
   /** 当前 scope（会话 id 或 mode:xxx）的附件列表 */
   attachments: ComposerAttachment[];
   attachmentBusy: boolean;
@@ -49,6 +51,7 @@ export interface ComposerAttachmentsApi {
  * caption 结果写回消息卡片通过注入的 patchMessageAttachments 完成，附件域不直接持有消息状态。
  */
 export function useComposerAttachments(input: {
+  mode?: string;
   scopeKey: string;
   /** 读取当前激活 scope（读取 ref 的回调，供只订阅一次的截图插入监听使用） */
   getActiveScope: () => string;
@@ -65,6 +68,32 @@ export function useComposerAttachments(input: {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
+  const workspaceMode = ["work", "code", "learn"].includes(input.mode ?? "");
+  function appendAttachments(current: ComposerAttachment[], incoming: ComposerAttachment[]) {
+    if (!workspaceMode) return [...current, ...incoming];
+    const key = (item: ComposerAttachment) => item.filePath?.replace(/\\/g, "/").replace(/^[a-z]:\/.*$/i, (path) => path.toLowerCase());
+    const seen = new Set(current.map(key).filter(Boolean));
+    return [...current, ...incoming.filter((item) => {
+      const path = key(item);
+      if (!path) return true;
+      if (seen.has(path)) return false;
+      seen.add(path); return true;
+    })];
+  }
+  async function handlePastedFileUris(uriList: string) {
+    if (!workspaceMode) return;
+    const targetScope = scopeKey;
+    const api = composerChatApi();
+    if (!api?.ingestClipboardFileUris) return;
+    setAttachmentBusy(true);
+    try {
+      const items = await api.ingestClipboardFileUris(input.mode!, uriList);
+      if (!items.length) throw new Error("剪贴板中没有可读取的本地文件");
+      setAttachmentsByScope((current) => ({ ...current, [targetScope]: appendAttachments(current[targetScope] ?? [], items) }));
+    } catch (error) {
+      window.alert(t("chatPage.ingestFilesFailed", { error: String(error) }));
+    } finally { setAttachmentBusy(false); }
+  }
 
   // 卸载时释放本地 objectURL，防止泄漏
   useEffect(() => () => {
@@ -104,6 +133,7 @@ export function useComposerAttachments(input: {
     }
     try {
       const results = await chat.ingestDroppedFiles(files);
+      if (workspaceMode && results.length === 0) throw new Error("无法读取粘贴或选择的文件，请从文件管理器重新选择");
       if (results.length > 0) {
         const hydratedResults = results.map((attachment) => {
           if (attachment.kind !== "image") return attachment;
@@ -113,7 +143,7 @@ export function useComposerAttachments(input: {
         });
         setAttachmentsByScope((current) => ({
           ...current,
-          [targetScope]: [...(current[targetScope] ?? []), ...hydratedResults],
+          [targetScope]: appendAttachments(current[targetScope] ?? [], hydratedResults),
         }));
       }
     } catch (error) {
@@ -287,6 +317,7 @@ export function useComposerAttachments(input: {
     isDraggingFiles,
     chooseFiles,
     handlePastedImage,
+    handlePastedFileUris,
     handleScreenshot,
     removeAttachment,
     prepareImageAttachments,

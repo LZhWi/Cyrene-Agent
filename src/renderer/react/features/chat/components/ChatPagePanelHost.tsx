@@ -4,6 +4,7 @@ import { PluginModePanel } from "./PluginModePanel";
 import { SkillModePanel } from "./SkillModePanel";
 import { ToolModePanel } from "./ToolModePanel";
 import { MomentsPanel } from "../../moments/MomentsPanel";
+import { ScheduledTasksPanel } from "../../scheduler/ScheduledTasksPanel";
 
 export function ChatPagePanelHost({ panel }: { panel: ChatPagePanel }) {
   switch (panel) {
@@ -12,5 +13,6 @@ export function ChatPagePanelHost({ panel }: { panel: ChatPagePanel }) {
     case "skill": return <SkillModePanel />;
     case "tool": return <ToolModePanel />;
     case "moments": return <MomentsPanel />;
+    case "scheduledTasks": return <ScheduledTasksPanel />;
   }
 }

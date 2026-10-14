@@ -2,7 +2,7 @@ import { PlanContent, planTabDotClass, planTabLabel, type PlanReviewPhase } from
 import { ReviewDiffContent } from "./ReviewInspector";
 import { RightInspector, type InspectorTab } from "./RightInspector";
 
-export type ChatPageInspectorTabId = "diff" | "plan";
+export type ChatPageInspectorTabId = string;
 
 export interface ChatPageInspectorProps {
   reviewInspector: { runId: string; fileIndex: number } | null;
@@ -11,6 +11,8 @@ export interface ChatPageInspectorProps {
   activeTabId: ChatPageInspectorTabId;
   onTabChange: (id: ChatPageInspectorTabId) => void;
   onCloseTab: (id: ChatPageInspectorTabId) => void;
+  additionalTabs?: InspectorTab[];
+  resizable?: boolean;
 }
 
 export function ChatPageInspector({
@@ -20,8 +22,10 @@ export function ChatPageInspector({
   activeTabId,
   onTabChange,
   onCloseTab,
+  additionalTabs = [],
+  resizable = false,
 }: ChatPageInspectorProps) {
-  const tabs: InspectorTab[] = [];
+  const tabs: InspectorTab[] = [...additionalTabs];
   if (reviewInspector) {
     tabs.push({
       id: "diff",
@@ -41,10 +45,11 @@ export function ChatPageInspector({
 
   return (
     <RightInspector
+      resizable={resizable}
       tabs={tabs}
       activeTabId={activeTabId}
       onTabChange={(id) => onTabChange(id as ChatPageInspectorTabId)}
-      onClose={() => onCloseTab(activeTabId)}
+      onClose={(id) => onCloseTab(id)}
     />
   );
 }

@@ -14,6 +14,7 @@ import { IPC } from "../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "./application/ipc-scope";
 import { Subscription } from "rxjs";
 import { AgentRuntimeError } from "./orchestrator/agent-runtime-error";
+import { isModelFailureInfo } from "../shared/model-error";
 import {
   CyreneAgent,
   type AgentExecutionMode,
@@ -28,8 +29,7 @@ import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 import { ChatTimeStreamPrefixFilter } from "./chat-time-stream-filter";
 import { runLearnPostTurnHook } from "./learn/progress/learn-post-turn";
-import { obsidianWorkspace } from "./learn/obsidian/obsidian-workspace-service";
-import { registerObsidianTools, unregisterObsidianTools } from "./learn/obsidian/obsidian-tools";
+import { createObsidianWorkspace } from "./learn/obsidian/obsidian-workspace-service";
 import { getAdapterForConfig } from "./orchestrator/vendors";
 import { perf } from "./perf-trace";
 import type { StyleId } from "../shared/style-sampling";
@@ -133,6 +133,7 @@ export type BuildOptionsFn = (input: AguiRunInput) => Promise<{
   options: CyreneRunOptions;
   /** 跑完后副作用需要的信息。 */
   latestUserText: string;
+  timezone?: string;
 }>;
 
 /** 调用方注入：agent 跑完后的副作用（记忆/sticker/表情/广播）。 */
@@ -429,6 +430,9 @@ export function registerAgUiIpc(
       lifecycle?.onConversationEnded();
       throw new Error(`${mode} 模式需要先绑定项目工作区`);
     }
+    // 固定本轮 Learn Vault；切换会话或重绑目录不能改变在途工具与后台进度的目标。
+    const learnWorkspaceRoot = mode === "learn" ? session.workspaceBinding!.workspaceRoot : undefined;
+    const learnWorkspace = learnWorkspaceRoot ? createObsidianWorkspace(learnWorkspaceRoot) : undefined;
 
     // ── 会话级运行守卫：同一会话同一时刻最多一个 active run ──
     // 检查 + 注册在同一同步代码块内完成（JS 单线程，get 与 set 之间无 await = 原子），
@@ -495,6 +499,7 @@ export function registerAgUiIpc(
     options.recoveryContext = input.recoveryContext;
     options.resumeFromRunId = input.resumeFromRunId;
     options.conversationMode = mode;
+    if (learnWorkspaceRoot) options.resolvedWorkspaceRoot = learnWorkspaceRoot;
     // 把 bridge 创建的 canonical runId 注入 CyreneRunOptions，
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
     // ack.runId 与 RUN_STARTED.runId 必须一致。
@@ -510,28 +515,6 @@ export function registerAgUiIpc(
       send({ type: "CUSTOM", name: "cyrene.choice.dismiss", value: settlement, threadId, runId });
     }, { runId, revision: 1 });
 
-    // Learn 模式：配置 Obsidian Vault 并注册工具
-    if (mode === "learn" && session.workspaceBinding?.workspaceRoot) {
-      try {
-        obsidianWorkspace.configure({
-          enabled: true,
-          vaultPath: session.workspaceBinding.workspaceRoot,
-        });
-      } catch (error) {
-        // 守卫已注册：configure 失败时必须释放，否则该会话永久拒绝新 run。
-        // 语义保持"配置失败 → 中断本次 run"（learn 工具不可用时不静默降级）。
-        releaseSessionGuard?.();
-        releaseSessionGuard = null;
-        lifecycle?.onConversationEnded();
-        throw error;
-      }
-      try {
-        registerObsidianTools();
-      } catch (err) {
-        console.warn("[Learn] Obsidian 工具注册失败：", err);
-      }
-    }
-
     const threadId = `thread-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
@@ -546,6 +529,7 @@ export function registerAgUiIpc(
         inputMessageId: input.userTurnId ?? "",
         ...(input.assistantTurnId ? { assistantMessageId: input.assistantTurnId } : {}),
         ...(mode === "chat" ? { chatBackend: chatBackendSnapshot } : {}),
+        ...(built.timezone ? { timezone: built.timezone } : {}),
         startedAt: turnStartedAt,
         runTimeoutMs: options.timeoutMs,
       });
@@ -583,10 +567,6 @@ export function registerAgUiIpc(
       // 等待中的 takeover 此刻才被放行，保证其开局时旧 run 的 checkpoint 已落盘。
       releaseSessionGuard?.();
       releaseSessionGuard = null;
-      // Learn 模式：注销 Obsidian 工具
-      if (mode === "learn") {
-        try { unregisterObsidianTools(); } catch { /* ignore */ }
-      }
       lifecycle?.onConversationEnded();
     };
 
@@ -658,7 +638,13 @@ export function registerAgUiIpc(
           // complete 回调据此跳过成功收尾副作用；渲染端只收到 RUN_ERROR 作为终态。
           if (terminal.status === "runtime_error") {
             const reason = terminal.reason ?? "E_RUN_FAILURE";
-            send({ type: "RUN_ERROR", message: reason, code: reason, threadId, runId });
+            const eventMetadata = (baseEvent as { metadata?: unknown }).metadata;
+            const modelFailure = eventMetadata && typeof eventMetadata === "object"
+              ? (eventMetadata as { cyreneModelFailure?: unknown }).cyreneModelFailure
+              : undefined;
+            send({ type: "RUN_ERROR", message: reason, code: reason, threadId, runId,
+              ...(isModelFailureInfo(modelFailure) ? { metadata: { cyreneModelFailure: modelFailure } } : {}),
+            });
             pendingRunFinishedEvent = null;
             return;
           }
@@ -733,6 +719,7 @@ export function registerAgUiIpc(
         console.error("[AgUiBridge] run 失败:", message);
         perf.dump();
         const code = err instanceof AgentRuntimeError ? err.code : undefined;
+        const modelFailure = err instanceof AgentRuntimeError ? err.modelFailure : undefined;
         // runtime error 必须经过同一个 settlement gate。
         // 如果 upstream 已经发过 RUN_FINISHED（gate 已结算为 success / cancelled / timeout），
         // 这里直接丢弃 RUN_ERROR，避免渲染端收到第二终态。
@@ -768,7 +755,9 @@ export function registerAgUiIpc(
           durationMs: Date.now() - turnStartedAt,
         });
         // 补发 RUN_ERROR 事件，渲染端据此收尾（invoke 早已 resolve，靠事件驱动）
-        send({ type: "RUN_ERROR", message, code, threadId, runId });
+        send({ type: "RUN_ERROR", message, code, threadId, runId,
+          ...(isModelFailureInfo(modelFailure) ? { metadata: { cyreneModelFailure: modelFailure } } : {}),
+        });
         cleanupRunState();
         endLifecycle();
       },
@@ -836,7 +825,7 @@ export function registerAgUiIpc(
             }
 
             // Learn 模式：静默更新学习进度（异步，不阻塞，失败不影响主流程）
-            if (mode === "learn" && obsidianWorkspace.isReady()) {
+            if (learnWorkspace?.isReady()) {
               const adapter = getAdapterForConfig({
                 provider: options.settings.provider,
                 baseUrl: options.settings.baseUrl,
@@ -846,6 +835,7 @@ export function registerAgUiIpc(
               // 取走本轮抽查的实测作答（take 语义：取后即清，避免重复计入）
               const quizEvidence = takeQuizEvidenceForRun(runId);
               void runLearnPostTurnHook({
+                workspace: learnWorkspace,
                 adapter,
                 cfg: {
                   provider: options.settings.provider,

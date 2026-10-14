@@ -71,9 +71,9 @@ export function createAutoReview(
   let controller: AbortController | undefined;
   const save = (next: AutoReviewState) => { storage.set(STATE_KEY, next); state = next; };
 
-  const onTurn = async (event: PluginTurnFinishedEvent) => {
-    if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.status !== "success") return;
-    const pendingTurns = Math.min(TURN_INTERVAL, state.pendingTurns + 1);
+  const onTurn = async (event: PluginTurnFinishedEvent, due = false) => {
+    if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion" || event.status !== "success") return;
+    const pendingTurns = due ? TURN_INTERVAL : Math.min(TURN_INTERVAL, state.pendingTurns + 1);
     save({ ...state, pendingTurns });
     if (pendingTurns < TURN_INTERVAL || running) return;
 
@@ -82,7 +82,7 @@ export function createAutoReview(
     const handled = new Set(state.handledItemIds);
     const candidate = listCandidates().find((item) => item.status === "open" && !item.stale && !handled.has(item.id));
     if (!candidate) {
-      save({ ...state, pendingTurns: 0, lastAttemptAt: at });
+      save({ ...state, pendingTurns: 0, lastAttemptAt: at, lastErrorAt: undefined });
       return;
     }
 
@@ -107,6 +107,10 @@ export function createAutoReview(
 
   const off = events.on<PluginTurnFinishedEvent>("host:turn:finished", onTurn);
   return {
+    async runDue(event: PluginTurnFinishedEvent) {
+      await onTurn(event, true);
+      return !enabled || (!stopped && !running && state.pendingTurns === 0 && state.lastErrorAt === undefined);
+    },
     view() { return { enabled, applyEnabled, running, turnInterval: TURN_INTERVAL, ...structuredClone(state) }; },
     set(value: unknown) {
       if (typeof value !== "boolean") throw new Error("后台复核设置无效");

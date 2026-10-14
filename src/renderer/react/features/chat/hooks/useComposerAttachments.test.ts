@@ -12,9 +12,50 @@ let host: HTMLElement | null = null;
 let latest: ComposerAttachmentsApi;
 let insertCallback: ((data: { mime: "image/png"; filePath: string; previewUrl: string; hasAnnotations: boolean }) => void) | undefined;
 let activeScope = "other";
+let composerMode = "chat";
 const patchMessageAttachments = vi.fn();
 
+it("deduplicates workspace file paths across choose and URI paste without changing Chat append behavior", async () => {
+  const item = { name: "a.txt", kind: "document", filePath: "C:/docs/a.txt" };
+  chatMock.ingestDroppedFiles.mockResolvedValue([item]);
+  await act(async () => { await latest.chooseFiles([new File(["x"], "a.txt")]); await latest.chooseFiles([new File(["x"], "a.txt")]); });
+  expect(latest.attachments).toHaveLength(2);
+  act(() => root!.unmount()); host!.remove();
+  composerMode = "work";
+  mountProbe();
+  chatMock.ingestClipboardFileUris.mockResolvedValue([{ ...item, filePath: "c:\\docs\\a.txt" }]);
+  await act(async () => { await latest.chooseFiles([new File(["x"], "a.txt")]); await latest.handlePastedFileUris("file:///C:/docs/a.txt"); });
+  expect(latest.attachments).toHaveLength(1);
+  expect(chatMock.ingestClipboardFileUris).toHaveBeenCalledWith("work", "file:///C:/docs/a.txt");
+});
+
+it("never calls the workspace file URI API from Chat", async () => {
+  await act(async () => latest.handlePastedFileUris("file:///C:/docs/a.txt"));
+  expect(chatMock.ingestClipboardFileUris).not.toHaveBeenCalled();
+});
+
+it("keeps an in-flight paste attached to its original scope", async () => {
+  act(() => root!.unmount()); host!.remove();
+  host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  function Probe({ scope }: { scope: string }) {
+    latest = useComposerAttachments({ mode: "work", scopeKey: scope, getActiveScope: () => scope, patchMessageAttachments });
+    return null;
+  }
+  let finish!: (items: ComposerAttachment[]) => void;
+  chatMock.ingestClipboardFileUris.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  await act(async () => root!.render(createElement(Probe, { scope: "first" })));
+  let pending!: Promise<void>;
+  act(() => { pending = latest.handlePastedFileUris("file:///C:/sample.txt"); });
+  await act(async () => root!.render(createElement(Probe, { scope: "second" })));
+  await act(async () => { finish([{ kind: "document", name: "sample.txt", filePath: "C:/sample.txt" }]); await pending; });
+  expect(latest.attachments).toEqual([]);
+  await act(async () => root!.render(createElement(Probe, { scope: "first" })));
+  expect(latest.attachments).toHaveLength(1);
+});
+
 const chatMock = {
+  ingestClipboardFileUris: vi.fn(),
   ingestDroppedFiles: vi.fn(),
   saveScreenshotTemp: vi.fn(),
   startScreenshot: vi.fn(),
@@ -33,6 +74,7 @@ function mountProbe() {
   function Probe() {
     // 固定输入：scopeKey 指向 s1，截图插入目标由 activeScope 变量控制
     latest = useComposerAttachments({
+      mode: composerMode,
       scopeKey: "s1",
       getActiveScope: () => activeScope,
       patchMessageAttachments: (sessionId, messageId, updater) => patchMessageAttachments(sessionId, messageId, updater),
@@ -52,6 +94,8 @@ function dragEvent(types: string[], files: File[] = []) {
 }
 
 beforeEach(() => {
+  composerMode = "chat";
+  chatMock.ingestClipboardFileUris.mockReset();
   insertCallback = undefined;
   activeScope = "other";
   patchMessageAttachments.mockClear();

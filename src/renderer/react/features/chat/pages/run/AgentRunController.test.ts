@@ -61,6 +61,7 @@ function createRecordingHost() {
       todoState = updater(todoState);
     }),
     updateContextUsage: vi.fn(),
+    setMainModelFailure: vi.fn(),
     setCompressingContext: vi.fn(),
     setModeBusy: vi.fn(),
     requestTakeover: vi.fn(),
@@ -127,6 +128,24 @@ afterEach(() => {
 });
 
 describe("AgentRunController", () => {
+  it("shows retry status temporarily without persisting it into a message checkpoint", async () => {
+    const api = createFakeApi({ success: true, runId: "run-1" });
+    const store = createFakeStore();
+    const { host } = createRecordingHost();
+    const { promise } = launch(createInput(), { api, store, host, registries: createRegistries() });
+    await flush();
+    api.emit(RUN_STARTED_EVENT);
+    const status = { phase: "waiting", retryNumber: 1, maxRetries: 5, delayMs: 2000, category: "SERVER_ERROR" };
+    api.emit({ type: "CUSTOM", runId: "run-1", name: "cyrene.model.retry", value: status });
+    expect(host.patchMessage).toHaveBeenCalledWith("session-1", "assistant-1", { modelRetry: status });
+    api.emit({ type: "CUSTOM", runId: "run-1", name: "cyrene.model.retry", value: { phase: "waiting", retryNumber: 99, maxRetries: 5 } });
+    expect(host.patchMessage).not.toHaveBeenCalledWith("session-1", "assistant-1", { modelRetry: expect.objectContaining({ retryNumber: 99 }) });
+    api.emit({ type: "RUN_FINISHED", runId: "run-1", result: { status: "success" } });
+    await promise;
+    expect(host.patchMessage).toHaveBeenCalledWith("session-1", "assistant-1", expect.objectContaining({ modelRetry: undefined }));
+    for (const [, message] of store.upsert.mock.calls) expect(message).not.toHaveProperty("modelRetry");
+  });
+
   it("多模态直发只保留最近三个用户轮次内的图片", async () => {
     const api = createFakeApi({ success: true, runId: "run-1" });
     const store = createFakeStore();
@@ -446,6 +465,32 @@ describe("AgentRunController", () => {
     expect(api.reportRunPersisted).toHaveBeenCalledWith({ runId: "run-1", finalMessageId: "assistant-1" });
     expect(host.setModeBusy).toHaveBeenCalledWith("chat", false);
     expect(host.onRunFinished).toHaveBeenCalled();
+  });
+
+  it("RUN_ERROR 保留可见失败记录并传递安全的模型诊断字段", async () => {
+    const api = createFakeApi({ success: true, runId: "run-1" });
+    const store = createFakeStore();
+    const { host } = createRecordingHost();
+    const { promise } = launch(createInput(), { api, store, host, registries: createRegistries() });
+    await flush();
+
+    api.emit(RUN_STARTED_EVENT);
+    api.emit({
+      type: "RUN_ERROR", runId: "run-1", message: "模型服务暂时不可用",
+      metadata: { cyreneModelFailure: {
+        provider: "glm", model: "glm-4.1v", category: "RATE_LIMIT", status: 429,
+        vendorCode: "1302", requestId: "request-1",
+      } },
+    });
+    await promise;
+
+    expect(host.setMainModelFailure).toHaveBeenNthCalledWith(1, "session-1", null);
+    expect(host.setMainModelFailure).toHaveBeenLastCalledWith("session-1", expect.objectContaining({
+      category: "RATE_LIMIT", status: 429, vendorCode: "1302",
+    }));
+    expect(host.patchMessage).toHaveBeenCalledWith("session-1", "assistant-1", expect.objectContaining({
+      processMessages: expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining("模型服务暂时不可用") })]),
+    }));
   });
 
   it("会话守卫冲突：挂起接管操作卡，重试时带 takeoverFromRunId 复用派发入口", async () => {

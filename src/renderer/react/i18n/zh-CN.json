@@ -1,4 +1,22 @@
 {
+  "workspaceUi": {
+    "moreFiles": "加载更多文件",
+    "toolCalls": "工具调用",
+    "taskTrace": "执行记录",
+    "taskStatus": { "running": "运行中", "completed": "已完成", "failed": "失败", "cancelled": "已取消", "interrupted": "已中断" },
+    "recentSessions": "最近会话",
+    "editQueuedMessage": "编辑待发送消息",
+    "collapseInteraction": "收起确认卡片",
+    "restoreInteraction": "展开待处理卡片",
+    "files": "文件",
+    "tasks": "任务详情",
+    "chooseWorkspace": "请先选择工作区",
+    "refresh": "刷新",
+    "back": "返回",
+    "preview": "预览",
+    "resizePanel": "调整侧面板宽度",
+    "openFolder": "打开文件夹"
+  },
   "common": {
     "cancel": "取消",
     "confirm": "确认",
@@ -11,6 +29,9 @@
     "empty": "暂无内容"
   },
   "composer": {
+    "skillSuggestions": "技能补全",
+    "skillSuggestionsEmpty": "没有匹配的可用技能",
+    "skillSuggestionsError": "技能列表读取失败，请重新输入 / 重试",
     "placeholderChat": "昔涟期待和你一起聊天♪",
     "placeholderTaskNoWorkspace": "有什么问题 / 任务，来找昔涟♪（ps：请先选中一个项目路径哦♪）",
     "placeholderTask": "有什么问题 / 任务，来找昔涟♪",
@@ -32,7 +53,24 @@
     "workspaceEnter": "进入项目工作",
     "workspaceChoose": "选择工作文件夹",
     "obsidianLibrary": "Obsidian 项目库",
-    "obsidianChoose": "选择 Obsidian 项目库"
+    "obsidianChoose": "选择 Obsidian 项目库",
+    "modelError": {
+      "viewDetails": "查看详情", "provider": "厂商", "model": "模型", "status": "HTTP 状态码",
+      "code": "厂商错误码", "type": "错误类型", "requestId": "请求 ID",
+      "hint": "可以稍后重试；如果问题持续，请查看厂商文档或联系厂商支持。",
+      "unknownHint": "未知错误，请检查错误码并查询厂商文档。", "vendorDocs": "查看厂商文档",
+      "categories": {
+        "auth": "认证失败，请检查 API 密钥", "permission": "没有调用权限，请检查账户或模型权限",
+        "billing": "账户余额或付费状态异常", "quota": "账户额度不足或已达到用量上限",
+        "rateLimit": "请求频率达到上限，请稍后重试", "invalidRequest": "请求参数或格式不正确",
+        "notFound": "模型或接口不存在", "contextLimit": "输入内容超过模型上下文长度",
+        "payloadTooLarge": "请求内容过大", "contentPolicy": "请求触发了厂商内容策略限制",
+        "conflict": "请求与当前服务状态冲突", "timeout": "连接或模型响应超时",
+        "network": "网络连接失败", "overloaded": "厂商模型服务负载过高",
+        "serverError": "厂商服务器发生错误", "unavailable": "厂商模型服务暂时不可用",
+        "cancelled": "模型请求已取消", "unknown": "未知错误，请检查错误码并查询厂商文档"
+      }
+    }
   },
   "chatPage": {
     "scrollToBottom": "滚动到底部",
@@ -75,6 +113,8 @@
     "loadingAria": "加载中",
     "modelWaitAria": "等待模型响应",
     "modelWaitText": "昔涟正在等模型回应…",
+    "retryWaiting": "等待 {{seconds}} 秒后重试（{{retryNumber}}/{{maxRetries}}）",
+    "retryAttempting": "正在重试（{{retryNumber}}/{{maxRetries}}）",
     "thinkingTitle": "正在思考…",
     "thinkingDoneTitle": "思考完成",
     "assistantStickerAlt": "昔涟表情",
@@ -587,7 +627,24 @@
     "searchAction": "搜索",
     "searchSessions": "搜索对话和项目",
     "noSearchResults": "没有匹配的对话",
-    "scheduledTasks": "定时任务"
+    "scheduledTasks": "定时任务",
+    "groupsView": "分组",
+    "pinned": "已置顶",
+    "uncategorizedProjects": "未分类项目",
+    "createProjectCategory": "新建项目分类",
+    "createGroup": "新建分组",
+    "projectCategoryTitle": "项目分类",
+    "groupTitle": "会话分组",
+    "moveToGroup": "移入分组",
+    "dropToUngroup": "拖到这里移出分组",
+    "hideProject": "隐藏项目",
+    "hiddenProjects": "已隐藏项目",
+    "restoreProject": "恢复显示",
+    "organizationSaveFailed": "侧栏分组保存失败，请重试",
+    "sessionActions": "会话操作",
+    "projectActions": "项目操作",
+    "categoryActions": "分类操作",
+    "groupActions": "分组操作"
   },
   "ttsPlayback": {
     "playbackFailed": "语音播放失败",

@@ -123,6 +123,44 @@ describe("agui-bridge sticker event ordering", () => {
     mocks.completeOnAbort = false;
   });
 
+  it("Learn 在构建期间重绑目录后，工具上下文与后台进度仍固定到开局工作区", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "agui-learn-root-"));
+    const a = path.join(temp, "A");
+    const b = path.join(temp, "B");
+    fs.mkdirSync(a); fs.mkdirSync(b);
+    fs.writeFileSync(path.join(a, "note.md"), "A-only");
+    fs.writeFileSync(path.join(b, "note.md"), "B-only");
+    const session = { id: "learn-bound-root", mode: "learn", workspaceBinding: { workspaceRoot: a } };
+    mocks.getSession.mockReturnValue(session);
+    const hooks = await import("./learn/progress/learn-post-turn");
+    const postTurn = vi.spyOn(hooks, "runLearnPostTurnHook").mockResolvedValue();
+    try {
+      const { registerAgUiIpc } = await import("./agui-bridge");
+      registerAgUiIpc(async () => {
+        session.workspaceBinding = { workspaceRoot: b };
+        return {
+          options: {
+            settings: { provider: "openai", baseUrl: "https://unused.invalid/v1", model: "test", apiKey: "", contextWindowTokens: 256000 },
+            messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "LEARN",
+            resolvedWorkspaceRoot: b,
+          },
+          latestUserText: "学习 A",
+        };
+      }, async () => ({}), () => null);
+      await mocks.handlers.get(IPC.AGUI_RUN)!({ sender: { isDestroyed: () => false, send: () => {} } }, {
+        messages: [{ role: "user", content: "学习 A" }], sessionId: session.id,
+      });
+      await expect.poll(() => postTurn.mock.calls.length).toBe(1);
+      expect(mocks.runCyreneAgent).toHaveBeenLastCalledWith(expect.objectContaining({ conversationMode: "learn", resolvedWorkspaceRoot: a }));
+      expect((await postTurn.mock.calls[0][0].workspace.readFile({ path: "note.md" })).content).toBe("A-only");
+    } finally {
+      postTurn.mockRestore();
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   it("成功桌面对话把来源、模式和 canonical runId 交给收尾回调", async () => {
     vi.resetModules();
     mocks.handlers.clear();
@@ -285,7 +323,7 @@ describe("agui-bridge sticker event ordering", () => {
     registerAgUiIpc(async () => ({ options: {
       settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
       messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
-    }, latestUserText: "想调整日程" }), async () => ({}), () => null, undefined, undefined, pendingTurns, () => "companion");
+    }, latestUserText: "想调整日程", timezone: "America/New_York" }), async () => ({}), () => null, undefined, undefined, pendingTurns, () => "companion");
     const handler = mocks.handlers.get(IPC.AGUI_RUN)!;
     const persist = mocks.listeners.get(IPC.AGUI_RUN_PERSISTED)!;
     const sender = { isDestroyed: () => false, send: () => {}, once: vi.fn(), removeListener: vi.fn() };
@@ -297,6 +335,7 @@ describe("agui-bridge sticker event ordering", () => {
     await vi.waitFor(() => expect(publisher.publishTurnFinished).toHaveBeenCalledTimes(1));
     expect(publisher.publishTurnFinished).toHaveBeenCalledWith(expect.objectContaining({
       chatBackend: "companion", companionLifeUpdate: mocks.companionLifeUpdate, finalMessageId: "assistant-1",
+      timezone: "America/New_York",
     }));
   });
 
@@ -1054,6 +1093,42 @@ describe("agui-bridge sticker event ordering", () => {
     // 不能触发成功收尾副作用
     expect(onFinished).not.toHaveBeenCalled();
     expect(sent.some((event) => event.type === "CUSTOM" && event.name === "cyrene.sticker")).toBe(false);
+  });
+
+  it("forwards structured model failure details with the runtime error terminal", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "chat-model-failure", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.agentEvents = [{
+      type: "RUN_FINISHED",
+      result: { status: "runtime_error", reason: "E_MODEL_REQUEST_FAILED", externalEffectsMayContinue: true },
+      metadata: { cyreneModelFailure: {
+        provider: "glm", model: "glm-4.1v", category: "RATE_LIMIT", status: 429, vendorCode: "1302",
+      } },
+    }];
+    try {
+      const { registerAgUiIpc } = await import("./agui-bridge");
+      const sent: Array<{ type?: string; metadata?: unknown }> = [];
+      registerAgUiIpc(async () => ({
+        options: {
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
+          messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+        },
+        latestUserText: "hi",
+      }), vi.fn(), () => null);
+      const handler = mocks.handlers.get(IPC.AGUI_RUN);
+      if (!handler) throw new Error("AGUI_RUN handler was not registered");
+      await handler({ sender: { isDestroyed: () => false, send: (_channel: string, event: { type?: string; metadata?: unknown }) => sent.push(event) } }, {
+        messages: [{ role: "user", content: "hi" }], sessionId: "chat-model-failure",
+      });
+      await expect.poll(() => sent.some((event) => event.type === "RUN_ERROR")).toBe(true);
+      expect(sent.find((event) => event.type === "RUN_ERROR")?.metadata).toEqual({
+        cyreneModelFailure: expect.objectContaining({ category: "RATE_LIMIT", status: 429, vendorCode: "1302" }),
+      });
+    } finally {
+      mocks.agentEvents = [];
+    }
   });
 
   // ── cancellation propagation（取消传播）───────────────────────────────

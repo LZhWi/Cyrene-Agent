@@ -364,6 +364,24 @@ describe("createContext", () => {
     expect(postProactiveMessage).toHaveBeenCalledWith("你好");
   });
 
+  it("window-navigation 显式声明后注入且不附带模型或会话服务", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const open = vi.fn(async () => ({ sessionId: null }));
+    const rt = runtime();
+    rt.hostServices = {
+      createForPlugin: () => ({
+        windowNavigation: { listSessions: async () => [], open },
+        llm: { generateText: async () => "unused" },
+      }),
+    };
+    expect(createTestContext(rt).deps.windowNavigation).toBeUndefined();
+    const ctx = createTestContext(rt, ["window-navigation"]);
+    expect(ctx.deps.llm).toBeUndefined();
+    expect(ctx.deps.conversations).toBeUndefined();
+    await ctx.deps.windowNavigation?.open({ target: "settings" });
+    expect(open).toHaveBeenCalledExactlyOnceWith({ target: "settings" });
+  });
+
   it("companion-context 只有显式声明后才注入", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const snapshot = vi.fn(async () => ({ items: [{ kind: "call" as const, content: "通话上下文" }] }));

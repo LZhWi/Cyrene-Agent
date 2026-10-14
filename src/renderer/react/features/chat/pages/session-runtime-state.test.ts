@@ -3,6 +3,7 @@ import type { ChatMessageItem } from "../components/ChatMessageList";
 import type { ComposerInteraction } from "../components/run-presentation";
 import {
   appendPendingQueueEntry,
+  editPendingQueueEntry,
   clearSessionInteraction,
   buildTodoRecoveryContext,
   bindWorkspaceName,
@@ -31,6 +32,17 @@ const ask = (id: string): ComposerInteraction => ({
 });
 
 describe("session runtime presentation state", () => {
+  it("edits a queued message in place while retaining attachments and other sessions", () => {
+    const attachment = { name: "notes.txt", kind: "document", filePath: "notes.txt" };
+    const entry: PendingQueueEntry = { id: "q", rawContent: "old", visibleContent: "old", attachments: [attachment] };
+    const state = { work: [entry], learn: [entry] };
+    const next = editPendingQueueEntry(state, "work", "q", { rawContent: "new [sticker:calm]", visibleContent: "new", userSticker: "calm" });
+    expect(next.work[0]).toEqual({ ...entry, rawContent: "new [sticker:calm]", visibleContent: "new", userSticker: "calm" });
+    expect(next.work[0].attachments).toBe(entry.attachments);
+    expect(next.learn).toBe(state.learn);
+    expect(editPendingQueueEntry(state, "work", "already-sent", { rawContent: "", visibleContent: "" })).toBe(state);
+    expect(state.work[0].rawContent).toBe("old");
+  });
   it("keeps a newly bound workspace label available before the session is reselected", () => {
     const next = bindWorkspaceName({ chat: "聊天目录" }, "code", "Cyrene-Agent");
 

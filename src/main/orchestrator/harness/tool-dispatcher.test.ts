@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ExecutionLedger } from "../execution-ledger";
 import { ToolExecutionError } from "../tools/registry/tool-execution-error";
 import type { ToolDefinition } from "../tools/registry/tool-registry";
-import type { AgentState } from "./types";
+import { toolCallFingerprint, type AgentState } from "./types";
 import { dispatchToolCall, DEFAULT_TRUNCATION, truncateOutput } from "./tool-dispatcher";
 import { resolveUncertainEffect } from "./uncertain-effect-guard";
 import type { ToolOutputStore } from "./tool-output/tool-output-store";
@@ -32,6 +32,82 @@ function call(id: string, args: Record<string, unknown> = { to: "a@example.com" 
 }
 
 describe("dispatchToolCall truthful execution", () => {
+  it("records started only after permission and not on ledger replay", async () => {
+    const order: string[] = [];
+    const execute = vi.fn(async () => { order.push("execute"); return "sent"; });
+    const ctx = { state: state(), tools: [tool(execute)], executionLedger: new ExecutionLedger(),
+      checkPermission: async () => { order.push("permission"); return true; },
+      beforeExecute: () => { order.push("started"); } };
+    await dispatchToolCall(call("a"), ctx);
+    expect(order).toEqual(["permission", "started", "execute"]);
+    await dispatchToolCall(call("a"), ctx);
+    expect(order).toEqual(["permission", "started", "execute", "permission"]);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("never records started for missing or denied tools", async () => {
+    const beforeExecute = vi.fn();
+    const execute = vi.fn(async () => "sent");
+    await dispatchToolCall(call("missing"), { state: state(), tools: [], beforeExecute });
+    await dispatchToolCall(call("denied"), { state: state(), tools: [tool(execute)], beforeExecute, checkPermission: async () => false });
+    expect(beforeExecute).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not execute after cancellation during permission wait", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(async () => "sent");
+    const beforeExecute = vi.fn();
+    const result = dispatchToolCall(call("cancelled"), { state: state(), tools: [tool(execute)], beforeExecute,
+      signal: controller.signal, checkPermission: async () => { controller.abort(); return true; } });
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(beforeExecute).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("fails closed if saving started fails", async () => {
+    const execute = vi.fn(async () => "sent");
+    await expect(dispatchToolCall(call("a"), { state: state(), tools: [tool(execute)],
+      beforeExecute: () => { throw new Error("disk failure"); } })).rejects.toThrow("disk failure");
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it("consumes repeat authorization once even with concurrent permission waits", async () => {
+    const execute = vi.fn(async () => "sent");
+    const current = state();
+    current.uncertainEffects.push({ id: "old", toolCallId: "old-call", fingerprint: toolCallFingerprint("send_email", { to: "a@example.com" }),
+      toolName: "send_email", message: "unknown", repeatAuthorization: { source: "user", grantedAt: 1 } });
+    const persist = vi.fn();
+    const ctx = { state: current, tools: [tool(execute, "external_side_effect")],
+      checkPermission: async () => true, persistSafetyState: persist };
+    const results = await Promise.all([dispatchToolCall(call("a"), ctx), dispatchToolCall(call("b"), ctx)]);
+    expect(results.map((r) => r.outcome).sort()).toEqual(["not_executed", "success"]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(current.uncertainEffects[0].repeatAuthorization).toBeUndefined();
+  });
+
+  it("does not execute when saving authorization consumption fails", async () => {
+    const execute = vi.fn(async () => "sent");
+    const current = state();
+    current.uncertainEffects.push({ id: "old", toolCallId: "old-call", fingerprint: toolCallFingerprint("send_email", { to: "a@example.com" }),
+      toolName: "send_email", message: "unknown", repeatAuthorization: { source: "user", grantedAt: 1 } });
+    await expect(dispatchToolCall(call("a"), { state: current, tools: [tool(execute, "external_side_effect")],
+      persistSafetyState: () => { throw new Error("disk failure"); } })).rejects.toThrow("disk failure");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("routes the fixed confirmation tool to user approval instead of unknown builtin", async () => {
+    const current = state();
+    current.uncertainEffects.push({ id: "old", toolCallId: "old-call", fingerprint: "f", toolName: "send_email", message: "unknown" });
+    const persist = vi.fn();
+    const result = await dispatchToolCall({ id: "confirm", name: "confirm_uncertain_effect", arguments: '{"effectId":"old"}' }, {
+      state: current, tools: [], persistSafetyState: persist,
+      requestUserClarification: async () => ({ answers: [{ field: "decision", selectedValues: ["allow_repeat"] }] }),
+    });
+    expect(result.outcome).toBe("success");
+    expect(current.uncertainEffects[0].repeatAuthorization?.source).toBe("user");
+    expect(persist).toHaveBeenCalledTimes(1);
+  });
   it("preserves both the head and tail when pruning output above 30000 characters", () => {
     const output = [
       "HEAD_MARKER",

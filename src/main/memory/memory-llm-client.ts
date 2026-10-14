@@ -1,3 +1,4 @@
+import { resolveChatModuleModel } from "../settings/chat-module-routes";
 /**
  * Memory LLM Client — 统一 Memory 子系统的网络 LLM 调用层。
  *
@@ -56,6 +57,7 @@ export interface MemoryLlmResponse {
 }
 
 export interface InvokeMemoryStructuredOutputOptions<T> {
+  repairInstructions?: () => string;
   operation: MemoryLlmOperation;
   systemPrompt: string;
   userPrompt: string;
@@ -148,7 +150,7 @@ function buildVendorConfig(config: MemoryModelConfig): VendorConfig {
  */
 export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStructuredOutputOptions<T>): Promise<T> {
   const { operation, systemPrompt, userPrompt, maxOutputTokens, parseSchema, validateBusiness, signal } = options;
-  const config = options.config ?? loadMemoryModelConfig();
+  const config = resolveChatModuleModel(({ judge: "memory", compress: "compression", reflect: "reflection", resolve: "resolver" } as const)[options.operation], options.config ?? loadMemoryModelConfig());
 
   if (!config.apiKey) {
     throw new MemoryLlmConfigurationError(`missing API key for Memory LLM (source: ${config.source})`);
@@ -171,6 +173,10 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
       ];
       const repairMessage = buildRepairMessage(operation, repair);
       if (repairMessage) messages.push(repairMessage);
+      if (repair.attempt > 0 && options.repairInstructions) {
+        const content = options.repairInstructions();
+        if (content) messages.push({ role: "user", content });
+      }
       return {
         model: cfg.model,
         messages,
@@ -183,35 +189,13 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
     generate: async (request, generateSignal) => {
       const http = adapter.buildRequest(request, cfg);
 
-      const timeoutMs = resolveTimeoutPolicy({ stage: "memory-llm" }).totalMs;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-      // 合并外部 signal
-      if (generateSignal.aborted) controller.abort();
-      const onExternalAbort = () => controller.abort();
-      generateSignal.addEventListener("abort", onExternalAbort);
-
-      let response: Response;
-      try {
-        response = await fetch(http.url, {
-          method: "POST",
-          signal: controller.signal,
-          headers: http.headers,
-          body: http.body,
-        });
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          if (generateSignal.aborted) {
-            throw new Error(`Memory LLM [${operation}] cancelled by external signal`);
-          }
-          throw new MemoryLlmTimeoutError(timeoutMs, operation);
-        }
-        throw err;
-      } finally {
-        clearTimeout(timer);
-        generateSignal.removeEventListener("abort", onExternalAbort);
-      }
+      // The structured-output runner owns the request/repair budget, including body reads.
+      const response = await fetch(http.url, {
+        method: "POST",
+        signal: generateSignal,
+        headers: http.headers,
+        body: http.body,
+      });
 
       if (!response.ok) {
         let responseBody: string | undefined;
@@ -290,7 +274,7 @@ function buildStructuredOutputRequest(
 
 export async function invokeMemoryLlm(request: MemoryLlmRequest): Promise<MemoryLlmResponse> {
   const { operation, messages, maxOutputTokens, signal } = request;
-  const config = request.config ?? loadMemoryModelConfig();
+  const config = resolveChatModuleModel(({ judge: "memory", compress: "compression", reflect: "reflection", resolve: "resolver" } as const)[request.operation], request.config ?? loadMemoryModelConfig());
 
   if (!config.apiKey) {
     throw new MemoryLlmConfigurationError(`missing API key for Memory LLM (source: ${config.source})`);

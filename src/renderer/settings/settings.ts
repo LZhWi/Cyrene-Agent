@@ -1,6 +1,7 @@
 /* 标记！AI写的超大技术债，延期重构*/
 import "../ui/base.css";
 import "./settings.css";
+import { isChatGptOAuth } from "../../shared/chatgpt-oauth";
 import { mountReactSettingsPanel } from "./react-panels";
 import "../ui/theme";
 import neteaseLogoUrl from "./assets/netease-logo.svg?url";
@@ -720,6 +721,14 @@ function restoreVisionInputs(snapshot: { baseUrl: string; apiKey: string; model:
 function renderProfileList(): void {
   if (!profileList) return;
   profileList.replaceChildren();
+  if (!apiState.profiles.some(isChatGptOAuth)) {
+    const oauth = document.createElement("button");
+    oauth.type = "button";
+    oauth.className = "profile-card";
+    oauth.textContent = "ChatGPT · OAuth · 固定档案";
+    oauth.addEventListener("click", () => { showOAuthEditor(true); });
+    profileList.appendChild(oauth);
+  }
   const count = apiState.profiles.length;
   profileListCount.textContent = count ? t("settings.profile.count", { count }) : "";
 
@@ -786,7 +795,21 @@ function applyEditingStateUI(): void {
 }
 
 /** 载入档案到编辑表单。 */
+function showOAuthEditor(oauth: boolean): void {
+  document.getElementById("oauth-profile-root")!.hidden = !oauth;
+  const editor = document.getElementById("api-profile-editor") as HTMLFieldSetElement;
+  editor.hidden = oauth;
+  editor.disabled = oauth;
+}
+
 function editProfile(profile: SavedProfileLite, globalMultimodal: boolean): void {
+  showOAuthEditor(isChatGptOAuth(profile));
+  if (isChatGptOAuth(profile)) {
+    apiState.editingProfileId = profile.id;
+    renderProfileList();
+    document.getElementById("oauth-profile-root")?.scrollIntoView({ block: "center", behavior: "smooth" });
+    return;
+  }
   const visionSnapshot = snapshotVisionInputs();
   apiState.editingProfileId = profile.id;
   apiState.editingReasoning = profile.reasoning;
@@ -810,6 +833,7 @@ function editProfile(profile: SavedProfileLite, globalMultimodal: boolean): void
 
 /** 开始新建草稿：preset 预填 URL/模型/协议，清空 Key 与昵称。 */
 function startNewDraft(providerName: string): void {
+  showOAuthEditor(false);
   const visionSnapshot = snapshotVisionInputs();
   apiState.editingProfileId = undefined;
   apiState.editingReasoning = undefined;
@@ -1597,6 +1621,7 @@ cyrenePanel.addEventListener("submit", async (e) => {
 
 apiForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if ((document.getElementById("api-profile-editor") as HTMLFieldSetElement).disabled) return;
   const customValidationError = validateActiveCustomEndpoint();
   if (customValidationError) {
     setSaveStatus(customValidationError, "is-error");
@@ -1706,7 +1731,7 @@ function switchSection(section: string): void {
   pluginsPanel.classList.toggle("is-hidden", !isPlugins);
   document.getElementById("skills-panel")?.classList.toggle("is-hidden", !isSkills);
   document.getElementById("feature-plugins-panel")?.classList.toggle("is-hidden", !isFeaturePlugins);
-  if (isSkills || isFeaturePlugins) mountReactSettingsPanel(section);
+  if (section === "api" || isCyrene || isSkills || isFeaturePlugins) mountReactSettingsPanel(section);
   const tokenPanel = document.getElementById("token-panel");
   if (tokenPanel) tokenPanel.classList.toggle("is-hidden", !isTokens);
   const channelsPanel = document.getElementById("channels-panel");
@@ -2067,6 +2092,8 @@ profileList?.addEventListener("click", (e) => {
   if (!profile) return;
   editProfile(profile, multimodalToggle.checked);
 });
+window.addEventListener("oauth-profile-saved", () => { void reloadProfiles(); });
+document.getElementById("new-api-profile-btn")?.addEventListener("click", () => startNewDraft(apiState.activeProvider));
 
 // ── 删除当前编辑的档案 ────────────────────────────────────────
 deleteProfileBtn?.addEventListener("click", async () => {

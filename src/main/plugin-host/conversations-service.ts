@@ -194,6 +194,7 @@ export function createPluginConversationsService(
         throw pluginHostError("E_NOT_FOUND", `会话不存在: ${input.conversationId}`);
       }
       const messages = session.messages;
+      if (messages.length === 0 && from === undefined && through === undefined && cursor === undefined) return { items: [], range: {} };
 
       let startIndex = 0;
       let endIndex = messages.length - 1;

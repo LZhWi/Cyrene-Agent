@@ -27,6 +27,7 @@ const DEP_TO_FIELD: Record<string, keyof PluginDeps> = {
   llm: "llm",
   secrets: "secrets",
   workspace: "workspace",
+  "window-navigation": "windowNavigation",
   conversations: "conversations",
   "assistant-delivery": "assistantDelivery",
   "screen-observation": "screenObservation",
@@ -91,6 +92,7 @@ function wrapLlmPurpose(service: PluginLlmService, pluginId: string): PluginLlmS
       purpose: options?.purpose ? `${pluginId}:${options.purpose}` : pluginId,
     }),
     ...(service.runGoal ? { runGoal: service.runGoal } : {}),
+    ...(service.generateTextIfRouted ? { generateTextIfRouted: (messages: import("./api").PluginLlmMessage[], options?: import("./api").PluginLlmGenerateOptions) => service.generateTextIfRouted!(messages, { ...options, purpose: `${pluginId}:${options?.purpose ?? "custom"}` }) } : {}),
   };
 }
 

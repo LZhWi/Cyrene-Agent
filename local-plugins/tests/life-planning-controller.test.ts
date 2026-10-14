@@ -219,54 +219,63 @@ describe("生活规划未来生效与生命周期", () => {
 });
 
 describe("生活规划自动触发", () => {
-  it("早上规划全天，中午不调用，晚上为已完成事件写日记", async () => {
+  it("早上规划全天，次日2点单独为4点起的已完成事件写日记", async () => {
     vi.useFakeTimers(); vi.setSystemTime(time(1, 6, 45));
     const f = store();
     const generate = vi.fn(async (messages: PluginLlmMessage[]) => {
       const input = inputOf(messages);
+      if ("events" in input) return JSON.stringify({ date: input.date, summary: "今天在河边散步，也读了书。",
+        eventIds: (input as any).events.map((event: any) => event.id), details: [] });
       return JSON.stringify({ kind: input.kind, date: input.date, revision: input.revision,
-        decision: input.diaryOnly ? "keep" : "revise", details: [],
-        diary: input.diaryTarget ? { date: input.diaryTarget.date, summary: "今天在河边散步，也读了书。",
-          eventIds: input.diaryTarget.eventIds } : null,
+        decision: "revise", details: [], diary: null,
         windows: input.windows.map((window) => ({ id: window.id,
           segments: [{ activity: "读书：《星灯游记》", minutes: (window.endAt - window.startAt) / 60_000 }] })) });
     });
-    const life = createLifeContext(f.storage, Date.now, { generate });
+    const life = createLifeContext(f.storage, Date.now, { generate, diaryPrompt: "日记写作规则" });
     life.configurePlanning(true); life.start();
     await vi.advanceTimersByTimeAsync(time(1, 12) - time(1, 6, 45));
     expect(generate).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(time(1, 18) - time(1, 12));
+    expect(generate).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(time(2, 2) - time(1, 18));
     expect(generate).toHaveBeenCalledTimes(2);
-    expect(inputOf(generate.mock.calls[1][0])).toMatchObject({ phase: "evening", diaryOnly: true, windows: [] });
+    expect(inputOf(generate.mock.calls[1][0])).toMatchObject({ date: "2026-09-01" });
+    expect((inputOf(generate.mock.calls[1][0]) as any).events.length).toBeGreaterThan(0);
     expect(life.view().journal.diaries.find((diary) => diary.date === "2026-09-01")?.source).toBe("model");
     expect(life.view().planning.plans).toHaveLength(1);
     life.stop();
   });
 
-  it("下午启动时不补做早间计划，晚上只写一次日记", async () => {
+  it("下午启动时不补做早间计划，次日2点只写一次日记", async () => {
     vi.useFakeTimers(); vi.setSystemTime(time(1, 14));
-    const f = store(), generate = vi.fn(async (messages: PluginLlmMessage[]) => reply(inputOf(messages)));
-    const life = createLifeContext(f.storage, Date.now, { generate });
+    const f = store(), generate = vi.fn(async (messages: PluginLlmMessage[]) => {
+      const input = inputOf(messages) as any;
+      return "events" in input ? JSON.stringify({ date: input.date, summary: "今天写下了一篇日记。",
+        eventIds: input.events.map((event: any) => event.id), details: [] }) : reply(input);
+    });
+    const life = createLifeContext(f.storage, Date.now, { generate, diaryPrompt: "日记写作规则" });
     life.configurePlanning(true);
     expect(generate).not.toHaveBeenCalled();
     life.start();
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
     expect(generate).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(5 * 60 * 60_000);
-    expect(generate.mock.calls.map(([messages]) => inputOf(messages).kind)).toEqual(["refine"]);
-    expect(inputOf(generate.mock.calls[0][0]).diaryOnly).toBe(true);
-    expect(inputOf(generate.mock.calls[0][0]).windows).toEqual([]);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000);
+    expect(generate).toHaveBeenCalledOnce();
+    expect((inputOf(generate.mock.calls[0][0]) as any).events.length).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(generate).toHaveBeenCalledOnce();
     life.stop();
   });
 
-  it("早间每日失败也不重试，中午不自动调用，晚上再尝试日记", async () => {
+  it("早间每日失败也不重试，中午不自动调用，次日2点再尝试日记", async () => {
     vi.useFakeTimers(); vi.setSystemTime(time(1, 8));
     const f = store(), generate = vi.fn(async (_messages: PluginLlmMessage[]) => { throw new Error("模拟服务不可用"); });
-    const life = createLifeContext(f.storage, Date.now, { generate });
+    const life = createLifeContext(f.storage, Date.now, { generate, diaryPrompt: "日记写作规则" });
     life.configurePlanning(true); life.start();
-    await vi.advanceTimersByTimeAsync(14 * 60 * 60_000);
-    expect(generate.mock.calls.map(([messages]) => inputOf(messages).kind)).toEqual(["daily", "refine"]);
+    await vi.advanceTimersByTimeAsync(18 * 60 * 60_000);
+    expect(generate.mock.calls.map(([messages]) => "events" in inputOf(messages) ? "diary" : inputOf(messages).kind)).toEqual(["daily", "diary"]);
     expect(life.view().planning.attempts.every((attempt) => attempt.status === "failed")).toBe(true);
+    expect(life.view().planning.diaryAttempts?.[0].status).toBe("failed");
     life.stop();
   });
 });

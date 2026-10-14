@@ -179,6 +179,12 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
     return loadCompanionMemoryPanelData(invokeCompanionMemory, await loadImportedDocs());
   });
 
+  ipc.handle(IPC.MEMORY_LIFECYCLE_TRACKING_SET, async (_event, enabled: unknown) => {
+    if (!useCompanionMemory()) throw new Error("请先选择陪伴聊天后端");
+    if (typeof enabled !== "boolean") throw new Error("生命周期跟踪设置无效");
+    return invokeColdRecall("lifecycle-tracking", enabled);
+  });
+
   ipc.handle(IPC.MEMORY_QUERY_ROUTER_GET, async () => {
     if (!useCompanionMemory()) throw new Error("请先选择陪伴聊天后端");
     return invokeColdRecall("get-query-router", null);
@@ -462,6 +468,14 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
   });
 
   // 重新扫描 user skills 目录，安装/删除 skill 后无需重启即可刷新 UI。
+  ipc.handle(IPC.SKILL_GET_SUGGESTIONS, (_event, mode: unknown) => {
+    if (mode !== "work" && mode !== "code" && mode !== "learn") return [];
+    rescanSkills();
+    return skillRegistry.getEnabledForMode(mode, loadGeneralSettings().skillModeOverrides)
+      .filter((skill) => !skill.hiddenFromUi)
+      .map(({ id, name, description, source }) => ({ id, name, description, source }));
+  });
+
   ipc.handle(IPC.SKILL_RESCAN, () => {
     const count = rescanSkills();
     return { ok: true, count };

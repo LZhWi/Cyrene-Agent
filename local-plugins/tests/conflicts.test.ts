@@ -12,8 +12,8 @@ function fixture() {
   };
   const memory = createMemory(storage);
   async function batch(start: number, name: string, layer: "L0" | "L1" = "L0") {
-    for (let index = start; index < start + 10; index += 1) {
-      memory.ingest({ id: `t${index}`, sessionId: "s", user: `请叫我${name}`, assistant: "好的", userAt: index + 1, assistantAt: index + 2 });
+    for (let index = start; index < start + 6; index += 1) {
+      memory.ingest({ id: `t${index}`, sessionId: "s", user: index === start ? `请叫我${name}` : `闲聊${index}`, assistant: "好的", userAt: index + 1, assistantAt: index + 2 });
     }
     await memory.maintain(async () => JSON.stringify([memoryCandidate({
       layer,

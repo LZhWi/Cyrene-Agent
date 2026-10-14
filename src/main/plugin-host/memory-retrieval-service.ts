@@ -1,3 +1,4 @@
+import { resolveChatModuleModel } from "../settings/chat-module-routes";
 import type { PluginMemoryQueryRoute, PluginMemoryRetrievalService } from "../../plugins/api";
 import { getEmbeddingProvider, getEmbeddingProviderIdentity } from "../rag/embedding";
 import { detachedBm25TopScore, rankDetachedMemoryCandidates } from "../rag/retriever";
@@ -99,14 +100,14 @@ export function createPluginMemoryRetrievalService(signal: AbortSignal): PluginM
       ensureRunning(input.signal);
       if (!input.query?.trim() || input.query.length > 20_000 || !input.baseUrl?.trim() || !input.apiKey?.trim() || !input.model?.trim()
         || !["auto", "openai", "anthropic"].includes(input.explicitTransport) || !["auto", "off", "low"].includes(input.reasoning)) throw new Error("记忆查询路由请求无效");
-      const config: VendorConfig = {
+      const config: VendorConfig = resolveChatModuleModel("retrieval", {
         provider: input.provider?.trim() || "自定义",
         baseUrl: input.baseUrl.trim(),
         apiKey: input.apiKey.trim(),
         model: input.model.trim(),
         explicitTransport: input.explicitTransport,
         reasoning: input.reasoning === "low" ? { mode: "on", effort: "low" } : input.reasoning === "auto" ? { mode: "auto" } : { mode: "off" },
-      };
+      });
       let lastError: unknown;
       for (let attempt = 0; attempt < 2; attempt++) {
         const controller = new AbortController();
@@ -114,7 +115,7 @@ export function createPluginMemoryRetrievalService(signal: AbortSignal): PluginM
         const requestSignal = input.signal ? AbortSignal.any([activeSignal(input.signal), controller.signal]) : AbortSignal.any([signal, controller.signal]);
         try {
           const adapter = getAdapterForConfig(config);
-          const http = adapter.buildRequest({ model: config.model, messages: [{ role: "user", content: queryRoutePrompt(input.query.trim()) }], maxTokens: 256, stream: false, extraBody: { response_format: { type: "json_object" } } }, config);
+          const http = adapter.buildRequest({ model: config.model, messages: [{ role: "user", content: queryRoutePrompt(input.query.trim()) }], maxTokens: 256, stream: false, structuredOutput: { mode: "json_object", name: "memory_query_route" } }, config);
           const response = await fetch(http.url, { method: "POST", headers: http.headers, body: http.body, signal: requestSignal });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const parsed = adapter.parseResponse(await response.json());

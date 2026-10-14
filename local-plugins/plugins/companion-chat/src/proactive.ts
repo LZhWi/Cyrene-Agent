@@ -3,7 +3,6 @@ import { buildProactiveMessages, NIGHT_ACTIVE_IDLE_LIMIT_SECONDS, parseProactive
 import type { LifeShareReceipt, LifeShareSource } from "./life-sharing";
 export { NIGHT_ACTIVE_IDLE_LIMIT_SECONDS } from "./proactive-prompt";
 import {
-  FOLLOWUP_MIN_SCORE,
   isWeatherSceneHour,
   markPlannerCommitted,
   sampleAndPlan,
@@ -183,7 +182,7 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
   function candidateAllows(candidate: ProactiveCandidate, at: number): boolean {
     const last = state.planner!.lastFiredAt[candidate.scene];
     return (last === undefined || at - last >= sceneCooldownMs(candidate.scene))
-      && (state.unansweredCount !== 1 || (candidate.scene !== state.lastScene && candidate.score >= FOLLOWUP_MIN_SCORE));
+      && (state.unansweredCount !== 1 || (candidate.scene !== state.lastScene && candidate.score >= 55));
   }
 
   function ensureTimer(): void {

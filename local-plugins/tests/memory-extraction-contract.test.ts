@@ -24,13 +24,13 @@ describe("记忆提取输出契约", () => {
     expect(messages[1].content).toContain("T3（第 3 轮，可写）");
   });
 
-  it("逐条过滤格式错误和不受证据支持的绝对措辞，保留同批合规候选", () => {
+  it("逐条过滤格式错误，语义风险交由调用层复核", () => {
     expect(() => parseMemoryExtraction(JSON.stringify([memoryCandidate({ stability: "medium", importance: 0.9 })]), 1))
       .not.toThrow();
     expect(parseMemoryExtraction(JSON.stringify([memoryCandidate({ importance: 0.9 })]), 1)).toEqual([]);
     expect(parseMemoryExtraction(JSON.stringify([memoryCandidate({ stability: "medium" })]), 1)).toEqual([]);
     expect(parseMemoryExtraction(JSON.stringify([memoryCandidate(), memoryCandidate({ stability: "medium" }),
-      memoryCandidate({ summary: "用户不再紧张", evidenceQuotes: ["我现在轻松些"] })]), 1)).toHaveLength(1);
+      memoryCandidate({ summary: "用户不再紧张", evidenceQuotes: ["我现在轻松些"] })]), 1)).toHaveLength(2);
     expect(parseMemoryExtraction(JSON.stringify([memoryCandidate({ shouldWrite: false })]), 1)).toEqual([]);
     expect(parseMemoryExtraction("[]", 1)).toEqual([]);
     expect(() => parseMemoryExtraction("bad-json", 1)).toThrow("JSON 无效");

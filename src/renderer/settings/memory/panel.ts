@@ -17,6 +17,24 @@ import { shallowEqual } from "../shared/utils";
 import { formatDateTime, escapeHtml } from "../shared/format";
 import { showModal } from "../shared/modal";
 
+const lifecycleCard = document.getElementById("memory-lifecycle-card");
+const lifecycleToggle = document.getElementById("memory-lifecycle-tracking") as HTMLInputElement | null;
+const lifecycleStatus = document.getElementById("memory-lifecycle-status");
+lifecycleToggle?.addEventListener("change", async () => {
+  const before = memoryState.panelCache?.lifecycleTrackingEnabled;
+  if (typeof before !== "boolean" || !window.memoryPanel) return;
+  lifecycleToggle.disabled = true;
+  try {
+    const saved = await window.memoryPanel.setLifecycleTracking(lifecycleToggle.checked);
+    lifecycleToggle.checked = saved.enabled;
+    if (memoryState.panelCache) memoryState.panelCache.lifecycleTrackingEnabled = saved.enabled;
+    if (lifecycleStatus) lifecycleStatus.textContent = saved.enabled ? "已开启" : "已关闭";
+  } catch (error) {
+    lifecycleToggle.checked = before;
+    if (lifecycleStatus) lifecycleStatus.textContent = error instanceof Error ? error.message : "保存失败";
+  } finally { lifecycleToggle.disabled = false; }
+});
+
 function formatL2MemoryTimeMeta(item: NonNullable<typeof memoryState.panelCache>["l2"][number]): string {
   if (typeof item.sourceAt !== "number") return `创建于：${formatDateTime(item.createdAt)}`;
   const sourceStart = formatDateTime(item.sourceAt);
@@ -144,6 +162,12 @@ export async function loadMemoryPanel(): Promise<void> {
     const payload = await window.memoryPanel?.getData();
     if (!payload) return;
     memoryState.panelCache = payload;
+    if (lifecycleCard) lifecycleCard.hidden = typeof payload.lifecycleTrackingEnabled !== "boolean";
+    if (lifecycleToggle) {
+      lifecycleToggle.checked = payload.lifecycleTrackingEnabled === true;
+      lifecycleToggle.disabled = typeof payload.lifecycleTrackingEnabled !== "boolean";
+    }
+    if (lifecycleStatus) lifecycleStatus.textContent = "";
 
     if (memoryL0NameInput) memoryL0NameInput.value = payload.l0.preferredName || "";
     if (memoryL0OccupationInput) memoryL0OccupationInput.value = payload.l0.occupation || "";

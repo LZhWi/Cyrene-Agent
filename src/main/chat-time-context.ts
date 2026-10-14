@@ -12,6 +12,8 @@ export interface ConversationTimeContext {
   /** @deprecated 使用 timestampedMessages */
   messages: ChatContextMessage[];
   timeContext: string;
+  timestampRule: string;
+  gapNotice: string;
 }
 
 export type ChatTimestampPresentation = "private" | "local-visible";
@@ -190,14 +192,14 @@ export function buildConversationTimeContext(
 ): ConversationTimeContext {
   const resolvedTimezone = resolveChatContextTimezone(timezone);
   const gapNotice = buildGapNotice(messages, resolvedTimezone);
+  const timestampRule = presentation === "local-visible" ? buildTimestampUseRule(messages) : buildInternalContextPolicy(messages);
   const timestampedMessages = messages.map((message) => withTimePrefix(message, resolvedTimezone, presentation));
   return {
     cleanMessages: messages.map((message) => ({ ...message })),
     timestampedMessages,
     messages: timestampedMessages,
-    timeContext: [
-      presentation === "local-visible" ? buildTimestampUseRule(messages) : buildInternalContextPolicy(messages),
-      gapNotice,
-    ].filter(Boolean).join("\n\n"),
+    timeContext: [timestampRule, gapNotice].filter(Boolean).join("\n\n"),
+    timestampRule,
+    gapNotice,
   };
 }

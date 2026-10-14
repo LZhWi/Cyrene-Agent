@@ -5,19 +5,19 @@ import type { Evidence } from "./evidence";
 
 const STATE_KEY = "dream-state";
 const INJECTION_KEY = "dream-injection-enabled";
-interface Narrative { id: string; text: string; createdAt: number; reviewId: string }
+interface Narrative { id: string; text: string; createdAt: number; reviewId?: string; origin?: "legacy" }
 interface DreamReview { id: string; entryIds: string[]; entries: Entry[]; memoryRevision: number; narrative: string; status: "pending" | "dismissed" | "applied" | "undone" | "evicted"; createdAt: number; narrativeId?: string }
 interface DreamState { version: 1; revision: number; narratives: Narrative[]; reviews: DreamReview[] }
 
 function load(storage: PluginStorage): DreamState {
-  const raw = storage.get<unknown>(STATE_KEY);
+  const raw = storage.get<unknown>(STATE_KEY) ?? storage.get<any>("memory-state")?.legacyCompatibility?.dream;
   if (raw === undefined) return { version: 1, revision: 0, narratives: [], reviews: [] };
   if (!raw || typeof raw !== "object") throw new Error("梦境状态损坏");
   const state = raw as Partial<DreamState>;
   if (state.version !== 1 || !Number.isSafeInteger(state.revision) || state.revision! < 0 || !Array.isArray(state.narratives) || state.narratives.length > 8 || !Array.isArray(state.reviews) || state.reviews.length > 30) throw new Error("梦境状态损坏");
   const narrativeIds = new Set<string>();
   for (const item of state.narratives) {
-    if (!item || typeof item.id !== "string" || !item.id || narrativeIds.has(item.id) || typeof item.text !== "string" || item.text.length < 20 || item.text.length > 600 || !Number.isFinite(item.createdAt) || typeof item.reviewId !== "string" || !item.reviewId) throw new Error("梦境叙事损坏");
+    if (!item || typeof item.id !== "string" || !item.id || narrativeIds.has(item.id) || typeof item.text !== "string" || item.text.length < 20 || item.text.length > 600 || !Number.isFinite(item.createdAt) || (item.origin !== undefined && item.origin !== "legacy") || (item.origin === "legacy" ? item.reviewId !== undefined : typeof item.reviewId !== "string" || !item.reviewId)) throw new Error("梦境叙事损坏");
     narrativeIds.add(item.id);
   }
   const reviewIds = new Set<string>();
@@ -26,6 +26,7 @@ function load(storage: PluginStorage): DreamState {
     item.entries.forEach(validateEntry); reviewIds.add(item.id);
   }
   for (const narrative of state.narratives) {
+    if (narrative.origin === "legacy") continue;
     const review = state.reviews.find((item) => item.id === narrative.reviewId);
     if (!review || review.status !== "applied" || review.narrativeId !== narrative.id || review.narrative !== narrative.text) throw new Error("梦境叙事关联损坏");
   }
@@ -42,7 +43,7 @@ export function createDream(storage: PluginStorage) {
   if (typeof injectionEnabled !== "boolean") throw new Error("梦境注入设置损坏");
   let state = load(storage);
   const save = (next: Omit<DreamState, "revision">) => {
-    const required = new Set(next.narratives.map((narrative) => narrative.reviewId));
+    const required = new Set(next.narratives.flatMap((narrative) => narrative.reviewId ? [narrative.reviewId] : []));
     const optionalSlots = 30 - required.size, optional = new Set(next.reviews.filter((review) => !required.has(review.id)).slice(-optionalSlots).map((review) => review.id));
     const reviews = next.reviews.filter((review) => required.has(review.id) || optional.has(review.id));
     state = { ...next, reviews, revision: state.revision + 1 }; storage.set(STATE_KEY, state);
@@ -65,6 +66,7 @@ export function createDream(storage: PluginStorage) {
     return structuredClone(review);
   };
   return {
+    reload() { state = load(storage); return this.view(); },
     view() { return structuredClone({ ...state, injectionEnabled }); },
     setInjection(value: unknown) { if (typeof value !== "boolean") throw new Error("梦境注入设置无效"); storage.set(INJECTION_KEY, value); injectionEnabled = value; return this.view(); },
     async review(raw: any, entries: Entry[], evidence: Evidence[], memoryRevision: number, generate: (prompt: string) => Promise<string>, signal: AbortSignal) {

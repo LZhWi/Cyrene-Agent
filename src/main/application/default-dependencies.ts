@@ -1,3 +1,5 @@
+import { ensureChatGptBridge } from "../chatgpt-oauth/service";
+import { isChatGptOAuth } from "../../shared/chatgpt-oauth";
 /**
  * 默认应用依赖装配（真正的组合根胶水层）：
  * 持有全部业务子系统的导入与工厂闭包，把它们按窄依赖喂给各启动阶段。
@@ -84,6 +86,7 @@ import {
 import { memoryStore } from "../memory/memory-store";
 import { backupMemoryRagFiles, reconcileMemoryRag } from "../memory/memory-rag-reconciliation";
 import { registerChatsIpc } from "../chats/chats-ipc";
+import { registerCodeExecutorIpc } from "../chats/code-executor-ipc";
 import { registerMomentsIpc } from "../moments/moments-ipc";
 import { registerChatUiIpc, getActiveChatSessionId } from "../chats/chat-ui-ipc";
 import { createToastWindowController } from "../toast/toast-window";
@@ -119,12 +122,22 @@ import { createWindowManager } from "../windows/window-manager";
 import { createTray } from "../tray";
 import { createSplashWindow } from "../startup/create-splash-window";
 import { revealStartupWindows } from "../startup/startup-window-reveal";
+import { createListeningHistory } from "../music/listening-history";
+import { broadcastChatsChanged } from "../chats/chats-ipc";
 import { bootstrapMusicService } from "../music/bootstrap";
 import { resolveMusicPaths } from "../music/paths";
 import { initializeScreenshotService } from "../screenshot/screenshot-lifecycle";
 import { bootstrapConfigGetters } from "../startup/bootstrap-config";
 import { bootstrapPermission } from "../permission/bootstrap";
-import { registerPopQuizIpc, registerPopQuizTool } from "../orchestrator/pop-quiz";
+import { registerPopQuizIpc } from "../orchestrator/pop-quiz";
+import { registerLearnReviewTools } from "../learn/study/review-tools";
+import { registerLearnStudyIpc } from "../learn/study/study-ipc";
+import { createExamPaperStore } from "../learn/exam-paper-store";
+import { createExamDraftStore } from "../learn/exam-draft";
+import { registerExamPaperIpc } from "../learn/exam-paper-ipc";
+import { registerLearnExamPageIpc } from "../learn/exam-page-ipc";
+import { openExamWindow } from "../learn/exam-window";
+import { registerLearnExamTools } from "../orchestrator/learn-exam-tools";
 
 import { createIpcScope } from "./ipc-scope";
 import { createShutdownCoordinator } from "./shutdown";
@@ -414,6 +427,18 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         // Cloud Music wiring（MusicService + IPC + Agent 工具）；
         // 后端由首次音乐动作惰性连接，退出清理由中心协调器负责。
         const music = bootstrapMusicService(resolveMusicPaths());
+        const recordListening = createListeningHistory({
+          activeSessionId: getActiveChatSessionId,
+          getSession: chatsStore.getSession,
+          save: (sessionId, message) => {
+            if (chatsStore.upsertMessage(sessionId, message)) broadcastChatsChanged();
+          },
+        });
+        const stopListening = music.service.onPlaybackStateChange((state) => {
+          try { recordListening(state); } catch { console.warn("[music] 听歌记录保存失败"); }
+        });
+        const shutdownMusic = music.shutdown;
+        music.shutdown = async () => { stopListening(); return shutdownMusic(); };
 
         // 应用更新服务（检查/下载按需；安装必须先走受控退出）
         const update = createGitHubAppUpdateService({
@@ -459,6 +484,10 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
 
       initRag: async () => {
         const modelSettings = loadModelSettings();
+        if (modelSettings.modelProfiles?.some(isChatGptOAuth)) {
+          try { await ensureChatGptBridge(); }
+          catch (error) { console.warn("[ChatGPT OAuth] 初始化失败，请在模型面板重新连接", error); }
+        }
         await initRAG("auto", undefined, undefined, modelSettings.embeddingModel, modelSettings.embeddingDimensions);
         logger.info(LogTag.RAG, "RAG initialized OK");
       },
@@ -509,6 +538,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
 
       startPlugins: async (services, scheduler, runtime) => {
         pluginManager = await startPluginRuntime({
+          windowManager: shell.windowManager,
           llmClient: services.llm,
           ipc: shell.ipc,
           schedulerStore: scheduler.store,
@@ -613,6 +643,14 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           publishConversationChanged: (event) => lifecyclePublisher.publishConversationChanged(event),
         });
         setTimeout(backfillVisualHistoryCaptions, 10_000);
+        registerCodeExecutorIpc(ipc, {
+          getWindow: () => reactWorkspaceWindow,
+          getSession: chatsStore.getSession,
+          invoke: (action, data) => {
+            if (!pluginManager?.isRunning("codex-bridge")) throw new Error("请先安装并启用 Codex Bridge 插件；原生 Cyrene 线路仍可使用");
+            return pluginManager.invokePluginIpc("codex-bridge", "native", [action, data]);
+          },
+        });
         registerMomentsIpc(ipc);
         registerCodeGitIpc({ ipc, service: services.git });
 
@@ -670,7 +708,19 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         bootstrapPermission(ipc);
         // pop_quiz 抽查工具：IPC（提交/跳过）与工具注册（learn 模式可见）
         registerPopQuizIpc(ipc);
-        registerPopQuizTool();
+        registerLearnReviewTools();
+        const examStore = createExamPaperStore(app.getPath("userData"));
+        registerLearnStudyIpc(ipc, { getWindow: () => reactWorkspaceWindow, getSession: (id) => chatsStore.getSession(id) }, examStore);
+        registerLearnExamTools(examStore, createExamDraftStore(app.getPath("userData"), examStore));
+        registerLearnExamPageIpc(examStore, ipc);
+        registerExamPaperIpc(examStore, ipc, {
+          getWindow: () => reactWorkspaceWindow,
+          getMode: (id) => chatsStore.getSession(id)?.mode,
+          open: async (examId, conversationId) => {
+            if (!reactWorkspaceWindow || chatsStore.getSession(conversationId)?.mode !== "learn") throw new Error("E_LEARN_EXAM_FORBIDDEN");
+            await openExamWindow(examId, conversationId, reactWorkspaceWindow);
+          },
+        });
         registerCallIpc(ipc);
       },
 

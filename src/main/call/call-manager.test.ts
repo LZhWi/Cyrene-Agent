@@ -18,11 +18,15 @@ vi.mock("../asr/asr-dispatcher", () => ({
   createAsrStream: mocks.createAsrStream,
 }));
 
+vi.mock("../settings/chat-module-routes", () => ({
+  resolveChatModuleModel: (_module: string, settings: unknown) => settings,
+}));
+
 vi.mock("../orchestrator/vendors", () => ({
   buildVendorUrl: () => "https://example.invalid/chat",
   getAdapterForConfig: () => ({
     transport: "openai",
-    buildRequest: () => ({ headers: {}, body: "{}" }),
+    buildRequest: () => ({ url: "https://example.invalid/chat", headers: {}, body: "{}" }),
     parseResponse: () => ({ text: "模型回复" }),
   }),
 }));

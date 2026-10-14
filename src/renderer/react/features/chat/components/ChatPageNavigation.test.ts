@@ -34,6 +34,9 @@ vi.mock("./AppUpdateEntry", () => ({ AppUpdateEntry: () => createElement("span",
 vi.mock("./ConversationSidebar", () => ({
   ConversationSidebar: () => createElement("span", null, "conversation-sidebar"),
 }));
+vi.mock("./WorkspaceConversationSidebar", () => ({
+  WorkspaceConversationSidebar: () => createElement("span", null, "workspace-organizer"),
+}));
 
 import { ChatPageNavigation } from "./ChatPageNavigation";
 
@@ -63,6 +66,26 @@ describe("ChatPageNavigation", () => {
     expect(workspace).toContain("mode-switch:work,code,learn");
     expect(workspace).not.toContain("tool-button");
     expect(workspace).not.toContain("plugin-button");
+  });
+
+  it("uses the persisted workspace organizer only in the Work/Code window", () => {
+    const props = {
+      collapsed: false, activePanel: null, sessions: [],
+      sidebarOrganization: { version: 1, revision: 0, projects: [], projectOrder: [],
+        projectCategories: [], projectCategoryMembers: {}, groups: [], topLevelOrder: [], groupMembers: {} },
+      onSaveSidebarOrganization: async () => true,
+      onToggleCollapsed: () => undefined, onModeChange: () => undefined,
+      onNewTask: () => undefined, onTogglePanel: () => undefined,
+      onSelectSession: () => undefined, onOpenProject: () => undefined,
+      onRenameSession: () => undefined, onDeleteSession: () => undefined,
+      onTogglePinSession: () => undefined, onMinimize: () => undefined,
+      onMaximize: () => undefined, onCloseWindow: () => undefined,
+      onOpenSettings: () => undefined,
+    } as const;
+    expect(renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, windowKind: "workspace", mode: "work" })))
+      .toContain("workspace-organizer");
+    expect(renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, windowKind: "chat", mode: "chat" })))
+      .toContain("conversation-sidebar");
   });
 
   it("renders a dedicated titlebar drag region", () => {

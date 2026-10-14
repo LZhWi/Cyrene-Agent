@@ -875,7 +875,10 @@ describe("CyreneHarness completion", () => {
       assistantResponse({ text: "完成。" }),
     ]);
     vi.stubGlobal("fetch", fetchMock);
-    mockedDispatch.mockResolvedValue(successDispatchResult("durable-call"));
+    mockedDispatch.mockImplementation(async (_call, ctx) => {
+      ctx.beforeExecute?.();
+      return successDispatchResult("durable-call");
+    });
     const lifecycle: Array<{ toolCallId: string; status: string }> = [];
 
     await runCyreneHarness({
@@ -887,6 +890,7 @@ describe("CyreneHarness completion", () => {
     });
 
     expect(lifecycle).toEqual([
+      expect.objectContaining({ toolCallId: "durable-call", status: "planned", toolSideEffect: "idempotent_mutation" }),
       expect.objectContaining({ toolCallId: "durable-call", status: "started", toolSideEffect: "idempotent_mutation" }),
       expect.objectContaining({ toolCallId: "durable-call", status: "committed", toolSideEffect: "idempotent_mutation" }),
     ]);
@@ -898,7 +902,10 @@ describe("CyreneHarness completion", () => {
       assistantResponse({ text: "完成。" }),
     ]);
     vi.stubGlobal("fetch", fetchMock);
-    mockedDispatch.mockResolvedValue(successDispatchResult("obs-call"));
+    mockedDispatch.mockImplementation(async (_call, ctx) => {
+      ctx.beforeExecute?.();
+      return successDispatchResult("obs-call");
+    });
     const finished: HarnessToolFinishedEvent[] = [];
 
     await runCyreneHarness({

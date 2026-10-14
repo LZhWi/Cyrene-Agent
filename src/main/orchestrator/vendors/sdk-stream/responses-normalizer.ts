@@ -130,12 +130,16 @@ export function normalizeResponsesEvent(event: unknown): UnifiedStreamDelta[] {
 
     case "response.failed": {
       const response = isRecord(event.response) ? event.response : undefined;
-      const message = response && isRecord(response.error)
-        ? nonEmptyString(response.error.message)
-        : undefined;
+      const payload = response && isRecord(response.error) ? response.error : undefined;
+      const message = payload ? nonEmptyString(payload.message) : undefined;
       throw new ProviderProtocolError(
         "E_UNSUPPORTED_STREAM_EVENT",
         message ?? "Responses stream returned response.failed",
+        payload ? {
+          vendorCode: nonEmptyString(payload.code),
+          vendorType: nonEmptyString(payload.type),
+          requestId: response ? nonEmptyString(response.id) : undefined,
+        } : undefined,
       );
     }
 
@@ -144,6 +148,11 @@ export function normalizeResponsesEvent(event: unknown): UnifiedStreamDelta[] {
       throw new ProviderProtocolError(
         "E_UNSUPPORTED_STREAM_EVENT",
         message ?? "Responses stream returned an error event",
+        {
+          vendorCode: nonEmptyString(event.code),
+          vendorType: nonEmptyString(event.type),
+          requestId: nonEmptyString(event.request_id),
+        },
       );
     }
 

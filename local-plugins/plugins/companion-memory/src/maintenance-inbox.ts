@@ -7,13 +7,13 @@ import type { ConflictResolverPriority, ConflictScoreResult } from "./conflict";
 const STATE_KEY = "maintenance-inbox";
 interface Candidate { key: string; leftId: string; rightId: string; kind: "normalized-duplicate" | "vector-similar" | "conflict"; score?: number; leftHash: string; rightHash: string; conflictScore?: number; resolverPriority?: ConflictResolverPriority; scoringSignals?: ConflictScoreResult["scoringSignals"]; reason?: string }
 interface Item extends Candidate { id: string; createdAt: number; status: "open" | "dismissed" }
-interface InboxState { version: 1; revision: number; items: Item[] }
+export interface InboxState { version: 1; revision: number; items: Item[] }
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const normalized = (text: string) => text.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]/gu, "");
 const pairKey = (left: string, right: string) => [left, right].sort().join("\u0000");
 
 function load(storage: PluginStorage): InboxState {
-  const raw = storage.get<unknown>(STATE_KEY);
+  const raw = storage.get<unknown>(STATE_KEY) ?? storage.get<any>("memory-state")?.legacyCompatibility?.maintenanceInbox;
   if (raw === undefined) return { version: 1, revision: 0, items: [] };
   if (!raw || typeof raw !== "object") throw new Error("维护候选收件箱损坏");
   const state = raw as Partial<InboxState>;
@@ -48,6 +48,7 @@ export function createMaintenanceInbox(storage: PluginStorage) {
     return collect(entries, vectorPairs).filter((candidate) => !existing.has(candidate.key)).slice(0, 100);
   };
   return {
+    reload() { state = load(storage); return this.view([]); },
     view(entries: Entry[]) {
       const byId = new Map(entries.map((entry) => [entry.id, entry]));
       const rank = { high: 3, normal: 2, idle: 1, none: 0 } as const;

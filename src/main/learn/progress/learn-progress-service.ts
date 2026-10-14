@@ -5,7 +5,7 @@
  * 维护 progress.md 中的结构化学习进度数据。
  */
 
-import { obsidianWorkspace } from "../obsidian/obsidian-workspace-service";
+import type { ObsidianWorkspaceService } from "../obsidian/obsidian-workspace-service";
 import {
   defaultProgressContent,
   type LearnProgress,
@@ -21,9 +21,9 @@ const YAML_RE = /^---\s*\n([\s\S]*?)\n---/;
  * 从 progress.md 解析学习进度。
  * 文件不存在或解析失败时返回空进度。
  */
-export async function loadProgress(): Promise<LearnProgress> {
+export async function loadProgress(workspace: ObsidianWorkspaceService): Promise<LearnProgress> {
   try {
-    const result = await obsidianWorkspace.readFile({ path: PROGRESS_FILE });
+    const result = await workspace.readFile({ path: PROGRESS_FILE });
     return parseProgressFile(result.content);
   } catch {
     // 文件不存在，返回默认
@@ -92,15 +92,15 @@ function parseProgressFile(content: string): LearnProgress {
 
 /**
  * 从文件系统创建默认进度文件。
- * 在 obsidianWorkspace 可用时调用。
+ * 在本轮绑定的 workspace 可用时调用。
  */
-export async function ensureProgressFile(): Promise<boolean> {
+export async function ensureProgressFile(workspace: ObsidianWorkspaceService): Promise<boolean> {
   try {
-    await obsidianWorkspace.readFile({ path: PROGRESS_FILE });
+    await workspace.readFile({ path: PROGRESS_FILE });
     return true; // 已存在
   } catch {
     try {
-      await obsidianWorkspace.edit({
+      await workspace.edit({
         operation: "create",
         path: PROGRESS_FILE,
         content: defaultProgressContent(),
@@ -114,33 +114,14 @@ export async function ensureProgressFile(): Promise<boolean> {
 }
 
 /**
- * 更新进度并保存。
+ * 在文件写入锁内读取最新进度、合并增量并保存，避免并发轮次丢失更新。
  */
-export async function saveProgress(progress: LearnProgress): Promise<boolean> {
-  try {
-    const content = buildProgressFile(progress);
-
-    try {
-      // 尝试编辑已有文件
-      await obsidianWorkspace.edit({
-        operation: "replace_file",
-        path: PROGRESS_FILE,
-        content,
-      });
-    } catch {
-      // 创建新文件
-      await obsidianWorkspace.edit({
-        operation: "create",
-        path: PROGRESS_FILE,
-        content,
-      });
-    }
-
-    return true;
-  } catch (err) {
-    console.warn("[LearnProgress] 保存进度失败：", err);
-    return false;
-  }
+export async function applyProgressUpdate(workspace: ObsidianWorkspaceService, update: LearnProgressUpdate): Promise<void> {
+  if (!update.hasMeaningfulChange) return;
+  await workspace.updateFile({
+    path: PROGRESS_FILE,
+    update: current => buildProgressFile(applyUpdate(parseProgressFile(current ?? defaultProgressContent()), update)),
+  });
 }
 
 /**

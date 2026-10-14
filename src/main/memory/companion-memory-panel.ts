@@ -20,6 +20,7 @@ interface CompanionEntry {
 }
 interface CompanionState {
   revision?: unknown;
+  lifecycle?: { enabled?: boolean };
   profiles?: { l0?: Record<string, ProfileFact>; l1?: Record<string, ProfileFact> };
   entries?: CompanionEntry[];
   profileChanges?: Array<Record<string, unknown>>;
@@ -109,7 +110,7 @@ export async function loadCompanionMemoryPanelData(
     sourceAt: timestamp(entry.sourceAt),
     ...(timestamp(entry.sourceEndAt) ? { sourceEndAt: timestamp(entry.sourceEndAt) } : {}),
   })).sort((a, b) => b.createdAt - a.createdAt);
-  return { l0, l1, l2, importedDocs, reflections: reflectionItems(state) };
+  return { l0, l1, l2, importedDocs, reflections: reflectionItems(state), lifecycleTrackingEnabled: state.lifecycle?.enabled === true };
 }
 
 function requireRevision(state: CompanionState): number {

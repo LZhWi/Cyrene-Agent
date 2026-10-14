@@ -75,7 +75,7 @@ describe("实体图谱与查询路由", () => {
     const turn = { id: "t1", sessionId: "s", user: "小鹿是我的朋友", assistant: "我认识阿兰", userAt: 1, assistantAt: 2 };
     memory.ingest(turn);
     memory.ingest(turn);
-    expect(graph.view()).toEqual({ count: 2 });
+    expect(graph.view()).toEqual({ count: 2, relations: 0 });
     expect((map.get("entity-graph") as { entities: Array<{ mentionCount: number }> }).entities.map((item) => item.mentionCount)).toEqual([1, 1]);
   });
 
@@ -87,7 +87,7 @@ describe("实体图谱与查询路由", () => {
       layer: "L2", field: undefined, summary: "小鹿是用户的朋友", sourceQuote: "小鹿是我的朋友",
       evidenceQuotes: ["小鹿是我的朋友"], facets: { primaryKind: "fact", retrievalKinds: ["fact"] },
     })]), new AbortController().signal, undefined, (texts) => graph.ingest(texts));
-    expect(graph.view()).toEqual({ count: 2 });
+    expect(graph.view()).toEqual({ count: 2, relations: 0 });
     expect(graph.search("小鹿最近怎么样")).toContain("· 小鹿（人物）");
     expect(graph.search("去上海")).toContain("· 上海（地点）");
   });

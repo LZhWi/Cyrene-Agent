@@ -29,6 +29,8 @@ import { completePlanRun } from "./harness/adapter/plan-lifecycle";
 import { prepareHarnessRun } from "./harness/adapter/run-preparation";
 import { prepareToolRuntime } from "./harness/adapter/tool-runtime";
 import type { ChatMessage } from "./vendors/types";
+import { getTimeoutSettings } from "../timeout-manager";
+import { resolveModelRequestTimeoutMs } from "./config/model-timeout";
 
 const LOG_PREFIX = "[HarnessAdapter]";
 export { filterToolsForConversationMode } from "./harness/adapter/run-preparation";
@@ -88,6 +90,8 @@ export async function runHarnessWithAdapter(
     tools,
     vendorConfig,
     config: {
+      modelRequestMaxRetries: options.settings.modelRequestMaxRetries ?? 5,
+      modelRequestIdleTimeoutMs: resolveModelRequestTimeoutMs(getTimeoutSettings()),
       maxParallelToolCalls: options.maxParallelToolCalls,
       // 陪伴 Chat 与本地 2FC 一致：避免工具模型失控时无限循环。
       ...(toolOnlyChat ? { maxRounds: 20 } : {}),
@@ -116,6 +120,7 @@ export async function runHarnessWithAdapter(
         state: checkpoint.state,
         toolOutputs: checkpoint.toolOutputs,
         rounds: checkpoint.rounds,
+        cache: checkpoint.cache,
       });
     },
     onToolLifecycle: (event) => {
@@ -223,6 +228,7 @@ export async function runHarnessWithAdapter(
     toolResults,
     completionReason,
     terminal,
+    ...(result.modelFailure ? { modelFailure: result.modelFailure } : {}),
     totalUsage: soulResult?.totalUsage,
   };
 }

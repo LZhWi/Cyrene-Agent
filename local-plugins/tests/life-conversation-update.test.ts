@@ -30,6 +30,27 @@ function fixture() {
 }
 
 describe("对话中调整未来生活", () => {
+  it("对话可单独更新未来意向，用户目标保持原样，未知引用不落盘", () => {
+    const f = fixture();
+    f.life.saveGoal({ title: "每天读书", activity: "读书" });
+    const userGoal = f.life.view().journal.goals[0];
+    const token = f.offer("intention-only").planToken;
+    expect(f.life.applyConversationUpdate("intention-only", JSON.stringify({ action: "intentions", planToken: token,
+      intentions: [{ id: null, title: "在周末前画一幅画", activity: "给盆栽画速写", targetDate: "2026-09-30" }] }))).toBe(true);
+    expect(f.life.view().journal.goals.find((goal) => goal.id === userGoal.id)).toEqual(userGoal);
+    expect(f.life.view().journal.goals.find((goal) => goal.source === "model")?.id).toMatch(/^intent:/);
+    expect(f.life.view().planning.conversationChanges?.[0].intentions).toMatchObject({ before: [],
+      after: [{ id: expect.stringMatching(/^intent:/), title: "在周末前画一幅画" }] });
+    f.setTime(9, 16);
+    const bad = JSON.parse(f.proposal("unknown", "画速写"));
+    bad.window.segments[0].goalRef = "intent:unknown";
+    expect(f.life.applyConversationUpdate("unknown", JSON.stringify(bad))).toBe(false);
+    expect(f.life.view().planning.conversationPlans).toHaveLength(0);
+    const clearToken = f.offer("clear").planToken;
+    expect(f.life.applyConversationUpdate("clear", JSON.stringify({ action: "intentions", planToken: clearToken,
+      intentions: [] }))).toBe(true);
+    expect(f.life.view().journal.goals).toEqual([userGoal]);
+  });
   it("对话提案收到与早上规划一致的生活决策资料，并截取近期消息", () => {
     const f = fixture();
     f.life.saveGoal({ title: "每天读一会儿书", activity: "读书" });
@@ -42,19 +63,26 @@ describe("对话中调整未来生活", () => {
     const context = JSON.parse(match![1]);
     expect(context.self).toMatchObject({ energy: expect.any(Number), focus: expect.any(Number),
       restNeed: expect.any(Number), activity: expect.any(String), habits: expect.any(Object) });
-    expect(context.goals).toEqual([{ id: expect.any(String), title: "每天读一会儿书", activity: "读书" }]);
+    expect(context.goals).toMatchObject([{ id: expect.any(String), title: "每天读一会儿书", activity: "读书", source: "user" }]);
     expect(context.recentMessages).toHaveLength(12);
     expect(context.recentMessages[0].content.startsWith("2:")).toBe(true);
     expect(context.recentMessages.every((item: { content: string }) => item.content.length <= 400)).toBe(true);
-    expect(context.recentDiaries.length).toBeGreaterThan(0);
+    expect(context.latestDiary).toMatchObject({ date: expect.any(String), summary: expect.any(String) });
+    expect(context.recalledDiaries).toEqual(expect.any(Array));
     expect(context.recentEvents.length).toBeGreaterThan(0);
   });
   it("成功落盘的一轮只能修改未来窗口一次，冷却后仍可再次修改", () => {
     const f = fixture();
     const first = f.proposal("run-1", "读书：《星灯游记》");
-    expect(f.life.applyConversationUpdate("run-1", first)).toBe(true);
+    expect(f.life.applyConversationUpdate("run-1", first, "message-1")).toBe(true);
     expect(f.life.applyConversationUpdate("run-1", first)).toBe(false);
     expect(f.life.view().planning.conversationPlans).toHaveLength(1);
+    const change = f.life.view().planning.conversationChanges?.[0];
+    expect(change).toMatchObject({ runId: "run-1", messageId: "message-1",
+      window: { after: [{ activity: "读书：《星灯游记》", minutes: expect.any(Number), goalRef: null }] } });
+    expect(change?.window?.before.length).toBeGreaterThan(0);
+    expect(change!.window!.before.reduce((sum, item) => sum + item.minutes, 0))
+      .toBe((change!.window!.endAt - change!.window!.startAt) / 60_000);
     expect(f.life.build("下一段做什么")).toContain("读书：《星灯游记》");
     expect(f.life.build("想改计划", { conversationRunId: "run-too-soon" })).not.toContain("cyrene-life-update");
     f.setTime(9, 16);
@@ -67,8 +95,9 @@ describe("对话中调整未来生活", () => {
     f.setTime(9, 50);
     expect(f.life.status()?.text).toContain("沿河边小路散步");
     expect(f.life.view().planning.conversationPlans).toHaveLength(1);
+    expect(f.life.view().planning.conversationChanges).toHaveLength(2);
     expect(createLifeContext({ get: <T>() => f.state() as T, set: () => {}, rootDir: () => "memory-only" }, () => time(9, 50),
-      { generate: vi.fn() }).view().planning.conversationPlans).toHaveLength(1);
+      { generate: vi.fn() }).view().planning.conversationChanges).toHaveLength(2);
   });
 
   it("旧版本、过期窗口、外部动作与不合规时长都不写入", () => {
@@ -84,6 +113,7 @@ describe("对话中调整未来生活", () => {
     f.setTime(9, 16);
     expect(f.life.applyConversationUpdate("late", tooLate)).toBe(false);
     expect(f.life.view().planning.conversationPlans).toHaveLength(0);
+    expect(f.life.view().planning.conversationChanges).toHaveLength(0);
   });
 
   it("多次对话调整不受每日次数限制，损坏的持久化计划拒绝加载", () => {

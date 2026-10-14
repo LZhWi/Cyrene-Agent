@@ -54,7 +54,7 @@ export function createSemanticIndexer(ctx: PluginContext, memory: MemorySource, 
       const generatedHash = vectors.generatedHash(entry.id);
       return !vectors.hasRecord(entry.id)
         || (generatedHash !== undefined && generatedHash !== contentHash)
-        || baseline!.hashes[entry.id] !== contentHash;
+        || (generatedHash === undefined && baseline!.hashes[entry.id] !== contentHash);
     });
   }
 

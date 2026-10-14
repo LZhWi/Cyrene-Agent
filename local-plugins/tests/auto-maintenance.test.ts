@@ -8,7 +8,7 @@ function fixture(scan = vi.fn(() => 2)) {
   const off = vi.fn(), events: PluginEvents = { on: (_event, next: any) => { listener = next; return off; }, emit: async () => undefined };
   let now = 100_000;
   const service = createAutoMaintenance(storage, events, scan, () => now);
-  const desktop = { eventId: "e", timestamp: "2026-01-01T00:00:00Z", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
+  const desktop = { eventId: "e", timestamp: "2026-01-01T00:00:00Z", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
   return { map, scan, service, off, emit: (event: PluginTurnFinishedEvent = desktop) => listener?.(event), advance: (ms: number) => { now += ms; } };
 }
 
@@ -16,8 +16,10 @@ describe("低频本地候选自动收集", () => {
   it("默认关闭；启用后仅成功 desktop 事件每 24 小时触发一次", () => {
     const data = fixture(); data.emit(); expect(data.scan).not.toHaveBeenCalled(); expect(data.map.has("auto-maintenance-state")).toBe(false);
     data.service.set(true);
+    data.emit({ eventId: "native", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "native", conversationId: "c", inputMessageId: "m", status: "success" });
+    expect(data.scan).not.toHaveBeenCalled();
     data.emit({ eventId: "x", timestamp: "", runId: "r", mode: "chat", source: "channel", channel: "x", status: "success" }); expect(data.scan).not.toHaveBeenCalled();
-    for (const mode of ["work", "code", "learn"] as const) data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.scan).not.toHaveBeenCalled(); expect(data.map.has("auto-maintenance-state")).toBe(false);
     data.emit(); expect(data.scan).toHaveBeenCalledTimes(1); expect(data.service.view()).toMatchObject({ enabled: true, lastAdded: 2, lastScanAt: 100_000 });
     data.emit(); expect(data.scan).toHaveBeenCalledTimes(1);

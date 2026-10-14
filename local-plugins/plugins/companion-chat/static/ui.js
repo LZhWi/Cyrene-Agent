@@ -193,16 +193,16 @@ function renderLifeJournal() {
   }
   for (const id of ["life-goal-title", "life-goal-activity", "life-goal-due", "life-goal-remind", "life-goal-reset", "life-diary-rebuild"]) $(id).disabled = lifeJournalPending;
   $("life-goal-save").textContent = lifeEditingGoalId ? "保存目标修改" : "创建目标";
-  $("life-goal-save").disabled = lifeJournalPending || !activities.length || (!lifeEditingGoalId && journal.goals.filter((goal) => goal.status === "active").length >= 3);
+  $("life-goal-save").disabled = lifeJournalPending || !activities.length || (!lifeEditingGoalId && journal.goals.filter((goal) => goal.source !== "model" && goal.status === "active").length >= 3);
   $("life-goals").replaceChildren();
   const goalStatuses = { active: "进行中", paused: "已暂停", completed: "手动确认完成", cancelled: "已取消" };
   for (const goal of journal.goals) {
     const row = document.createElement("section"), title = document.createElement("strong"), detail = document.createElement("p");
     row.className = "life-record";
-    title.textContent = `${goal.title} · ${goalStatuses[goal.status] ?? goal.status}`;
-    detail.textContent = `${goal.activity}${goal.dueDate ? ` · 期限 ${goal.dueDate}` : ""} · ${goal.remind !== false ? "允许提醒" : "不提醒"} · 关联已发生片段 ${goal.eventRefs?.length ?? 0} 条（不表示目标完成）`;
+    title.textContent = `${goal.source === "model" ? "昔涟的意向" : "你的目标"} · ${goal.title} · ${goalStatuses[goal.status] ?? goal.status}`;
+    detail.textContent = `${goal.activity}${goal.dueDate ? ` · ${goal.source === "model" ? "计划日" : "期限"} ${goal.dueDate}` : ""}${goal.source !== "model" ? ` · ${goal.remind !== false ? "允许提醒" : "不提醒"}` : ""} · 关联已发生片段 ${goal.eventRefs?.length ?? 0} 条（不表示目标完成）`;
     row.append(title, detail);
-    if (goal.status === "active" || goal.status === "paused") {
+    if (goal.source !== "model" && (goal.status === "active" || goal.status === "paused")) {
       const actions = document.createElement("div"); actions.className = "actions";
       const addButton = (label, action, handler) => {
         const button = document.createElement("button"); button.type = "button"; button.textContent = label;
@@ -225,7 +225,7 @@ function renderLifeJournal() {
     }
     $("life-goals").append(row);
   }
-  if (!journal.goals.length) $("life-goals").textContent = "还没有目标。模型不会替你创建目标。";
+  if (!journal.goals.length) $("life-goals").textContent = "还没有目标或未来意向。";
   $("life-diaries").replaceChildren();
   const eventsById = new Map((lifeSettings.continuity?.events ?? []).map((event) => [event.id, event]));
   for (const diary of [...journal.diaries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7)) {

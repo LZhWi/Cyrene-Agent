@@ -28,6 +28,7 @@ export interface MemorySchedulerDeps {
 export class MemoryScheduler {
   private recentTurns: Array<MemoryJudgeTurn & { seq: number }> = []
   private nextTurnSeq = 0
+  private retryJudge = false
 
   constructor(private readonly deps: MemorySchedulerDeps) {}
 
@@ -49,7 +50,8 @@ export class MemoryScheduler {
     const l1 = await this.deps.getL1()
     const newCount = (l1.roundCount || 0) + 1
 
-    if (newCount % MEMORY_JUDGE_INTERVAL === 0) {
+    let judgeFailure: unknown
+    if (this.retryJudge || newCount % MEMORY_JUDGE_INTERVAL === 0) {
       try {
         const turns = this.recentTurns
           .filter((turn) => turn.seq <= seq)
@@ -64,12 +66,16 @@ export class MemoryScheduler {
         if (entities.length > 0) {
           this.deps.ingestEntities(entities)
         }
+        this.retryJudge = false
       } catch (err) {
-        console.error("[PMRS/Scheduler] Judge/Manager 执行失败，本轮仍会计数", err)
+        this.retryJudge = true
+        judgeFailure = err
+        console.error("[PMRS/Scheduler] Judge/Manager 执行失败，下一轮对话后重试", err)
       }
     }
 
     await this.deps.replaceL1Field("roundCount", newCount)
+    if (this.retryJudge) throw judgeFailure
 
     if (newCount % 5 === 0) {
       try {

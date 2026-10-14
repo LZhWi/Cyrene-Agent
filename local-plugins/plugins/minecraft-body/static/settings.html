@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><style>
+body{font:14px system-ui;color:var(--text-primary,#333);background:transparent;margin:16px}label{display:block;margin:8px 0 4px}input,select,button{font:inherit;padding:7px;border:1px solid #999;border-radius:5px}input,select{color:inherit;background:var(--surface,#fff);box-sizing:border-box;width:100%}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{margin:12px 6px 4px 0;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:480px;overflow:auto;background:#8881;padding:12px}#notice{white-space:pre-wrap}
+[hidden]{display:none!important}
+</style></head><body>
+<p>Java 版 MC 身体验证。游戏聊天仅显示，不触发动作。Vanilla 1.21.11 已实测；26.x 尚不支持。首次连接请使用测试服。</p>
+<div class="grid">
+<div><label for="host">服务器</label><input id="host" value="localhost"></div>
+<div><label for="port">端口</label><input id="port" type="number" min="1" max="65535" value="25565"></div>
+<div><label for="username">机器人名 / 微软登录账号</label><input id="username" value="Cyrene"></div>
+<div><label for="owner">主人游戏名</label><input id="owner" placeholder="你的 Minecraft 玩家名"></div>
+<div><label for="auth">登录方式</label><select id="auth"><option value="offline">离线服务器</option><option value="microsoft">微软正版登录</option></select></div>
+<div><label for="version">协议版本（留空自动识别）</label><input id="version" placeholder="例如 1.21.4"></div>
+</div>
+<label><input id="survival" type="checkbox" style="width:auto"> 自动生存（连接时生效）：空闲时饥饿进食，低血量撤回安全点。默认关闭。</label>
+<button id="connect">连接</button><button id="disconnect">断开</button>
+<div class="grid">
+<div><label for="action">动作</label><select id="action">
+<optgroup label="陪伴与移动"><option value="come">过来</option><option value="follow">跟随</option><option value="goto">走到指定位置</option><option value="set_home">当前位置设为家</option><option value="home">回家</option><option value="look">看向主人</option><option value="retreat">撤回安全点</option><option value="escape">一格浅坑垫脚脱困</option></optgroup>
+<optgroup label="背包与装备"><option value="pickup">拾取附近掉落物</option><option value="give">投出物品给主人</option><option value="equip">手持物品</option><option value="equip_armor">穿上更好的护甲</option><option value="equip_shield">装备副手盾牌</option><option value="eat">吃安全食物</option></optgroup>
+<optgroup label="采集制作与基地"><option value="collect">安全表面采集</option><option value="craft">合成</option><option value="place">放置一块建材 / 常用设施</option><option value="smelt">烧炼</option><option value="door">开门 / 关门</option><option value="bind_chest">绑定附近普通箱子</option><option value="list_chest">查看绑定箱子</option><option value="deposit">存入箱子</option><option value="withdraw">从箱子取出</option><option value="bind_bed">绑定附近主世界床</option><option value="sleep">在绑定床睡觉</option><option value="wake">起床</option></optgroup>
+<optgroup label="农耕与保护"><option value="till">开垦临水土地</option><option value="plant">种植</option><option value="harvest">收割成熟作物</option><option value="defend">近身自卫（单个敌对目标）</option></optgroup>
+</select></div>
+<div><label for="material">材料 / 物品</label><input id="material" value="木头" placeholder="采集：木头/石头/泥土；合成：木板/木棍"></div>
+<div><label for="count">数量 / 拾取堆上限（1..16）</label><input id="count" type="number" min="1" max="16" value="1"></div>
+<div><label for="timeout">期限（秒，1..300）</label><input id="timeout" type="number" min="1" max="300" value="60"></div>
+</div>
+<div id="coordinates" class="grid" hidden><div><label for="x">目标 X</label><input id="x" type="number" value="0"></div><div><label for="y">目标 Y</label><input id="y" type="number" value="64"></div><div><label for="z">目标 Z</label><input id="z" type="number" value="0"></div></div>
+<label id="door-field" hidden><input id="door-open" type="checkbox" checked style="width:auto"> 打开木门（取消勾选为关闭）</label>
+<p id="action-help"></p>
+<button id="execute">执行动作</button><button id="cancel">停止动作</button>
+<p id="notice" role="status"></p><p id="summary"></p><p id="result" aria-live="polite"></p><details><summary>详细状态、背包与动作证据</summary><pre id="state" aria-label="身体状态和动作结果"></pre></details>
+<script src="/.cyrene/panel-bridge.js"></script><script src="settings.js"></script>
+</body></html>

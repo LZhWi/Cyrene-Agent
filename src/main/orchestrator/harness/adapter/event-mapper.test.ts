@@ -31,6 +31,13 @@ describe("harness event mapper", () => {
     ]);
   });
 
+  it("forwards temporary retry progress as a run-scoped custom event, not assistant text", () => {
+    const status = { phase: "waiting" as const, retryNumber: 1, maxRetries: 5, delayMs: 2000 };
+    expect(capture({ type: "model_retry", status })).toEqual([
+      expect.objectContaining({ type: "CUSTOM", name: "cyrene.model.retry", value: status, runId: "run-1", threadId: "thread-1" }),
+    ]);
+  });
+
   it("maps task lifecycle presentation to a stamped custom event", () => {
     const sent: BaseEvent[] = [];
     sendTaskLifecycleAsAgui({ taskId: "task-1", status: "running" } as never, "thread-1", "run-1", (event) => sent.push(event));

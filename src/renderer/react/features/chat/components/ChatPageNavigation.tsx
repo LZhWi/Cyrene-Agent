@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Input, Modal } from "antd";
 import { CalendarClock, Search } from "lucide-react";
 import type { ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
+import type { SidebarOrganizationDraft, SidebarOrganizationSnapshot } from "../../../../../shared/sidebar-organization";
 import { useTranslation } from "../../../i18n";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { ModelModeButton } from "../../../components/ui/ModelModeButton";
@@ -16,8 +17,10 @@ import { UserAvatar } from "../../../components/ui/UserAvatar";
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { AppUpdateEntry } from "./AppUpdateEntry";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { WorkspaceConversationSidebar } from "./WorkspaceConversationSidebar";
+import { sessionSearchResults, sessionTime } from "./workspace-ui";
 
-export type ChatPagePanel = "tool" | "skill" | "model" | "plugin" | "moments";
+export type ChatPagePanel = "tool" | "skill" | "model" | "plugin" | "moments" | "scheduledTasks";
 
 export interface ChatPageNavigationProps {
   windowKind?: "chat" | "workspace";
@@ -27,6 +30,9 @@ export interface ChatPageNavigationProps {
   companionLifeStatus?: { text: string; resting: boolean } | null;
   titlebarControls?: React.ReactNode;
   sessions: ChatSessionMeta[];
+  sidebarSessions?: ChatSessionMeta[];
+  sidebarOrganization?: SidebarOrganizationSnapshot | null;
+  onSaveSidebarOrganization?: (draft: SidebarOrganizationDraft) => Promise<boolean>;
   activeSessionId?: string;
   onToggleCollapsed: () => void;
   onModeChange: (mode: string) => void;
@@ -54,6 +60,9 @@ export function ChatPageNavigation({
   companionLifeStatus,
   titlebarControls,
   sessions,
+  sidebarSessions,
+  sidebarOrganization,
+  onSaveSidebarOrganization,
   activeSessionId,
   onToggleCollapsed,
   onModeChange,
@@ -77,15 +86,15 @@ export function ChatPageNavigation({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSessions, setSearchSessions] = useState<ChatSessionMeta[]>([]);
-  const searchResults = searchSessions.filter((session) =>
-    `${session.title} ${session.workspaceDisplayName ?? ""} ${session.workspaceRoot ?? ""}`
-      .toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase()),
-  ).slice(0, 20);
+  const [searchError, setSearchError] = useState("");
+  const searchResults = sessionSearchResults(searchSessions, searchQuery);
 
   function openSearch() {
     setSearchQuery("");
+    setSearchSessions(sidebarSessions ?? sessions);
+    setSearchError("");
     setSearchOpen(true);
-    void onSearchSessions?.().then(setSearchSessions);
+    void onSearchSessions?.().then(setSearchSessions).catch((error) => setSearchError(String(error)));
   }
 
   useEffect(() => {
@@ -130,11 +139,11 @@ export function ChatPageNavigation({
           <NewTaskButton onClick={onNewTask} />
           {windowKind === "workspace" && (
             <>
-              <button className="cy-workspace-side-action" type="button" onClick={openSearch}>
-                <Search size={18} /><span>{t("sidebar.searchAction")}</span><kbd>Ctrl+K</kbd>
+              <button className="cy-side-action cy-workspace-side-action" type="button" onClick={openSearch}>
+                <span className="cy-side-action-icon"><Search size={18} /></span><span className="cy-side-action-label">{t("sidebar.searchAction")}</span><kbd>Ctrl+K</kbd>
               </button>
-              <button className="cy-workspace-side-action" type="button" onClick={onOpenTasks}>
-                <CalendarClock size={18} /><span>{t("sidebar.scheduledTasks")}</span>
+              <button className="cy-side-action cy-workspace-side-action" type="button" onClick={onOpenTasks}>
+                <span className="cy-side-action-icon"><CalendarClock size={18} /></span><span className="cy-side-action-label">{t("sidebar.scheduledTasks")}</span>
               </button>
             </>
           )}
@@ -147,7 +156,18 @@ export function ChatPageNavigation({
           <MomentsModeButton active={activePanel === "moments"} onClick={() => onTogglePanel("moments")} />
         </div>
         <div className="cy-page-conversations">
-          <ConversationSidebar
+          {windowKind === "workspace" && (mode === "work" || mode === "code") && sidebarOrganization && onSaveSidebarOrganization ? <WorkspaceConversationSidebar
+            mode={mode}
+            sessions={sidebarSessions ?? sessions}
+            organization={sidebarOrganization}
+            activeSessionId={activeSessionId}
+            onSaveOrganization={onSaveSidebarOrganization}
+            onSelect={onSelectSession}
+            onOpenProject={onOpenProject}
+            onRename={onRenameSession}
+            onDelete={onDeleteSession}
+            onTogglePin={onTogglePinSession}
+          /> : <ConversationSidebar
             mode={mode}
             sessions={sessions}
             activeSessionId={activeSessionId}
@@ -156,7 +176,7 @@ export function ChatPageNavigation({
             onRename={onRenameSession}
             onDelete={onDeleteSession}
             onTogglePin={onTogglePinSession}
-          />
+          />}
         </div>
         <AppUpdateEntry />
         <div className="cy-page-sidebar-bottom">
@@ -167,10 +187,12 @@ export function ChatPageNavigation({
       {windowKind === "workspace" && <Modal open={searchOpen} footer={null} title={t("sidebar.searchAction")} onCancel={() => setSearchOpen(false)} width={520} destroyOnHidden>
         <Input autoFocus allowClear prefix={<Search size={16} />} placeholder={t("sidebar.searchSessions")} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} />
         <div className="cy-workspace-search-results">
+          {searchError && <p role="alert">{searchError}</p>}
+          {!searchQuery.trim() && <p>{t("workspaceUi.recentSessions")}</p>}
           {searchResults.length === 0 ? <p>{t("sidebar.noSearchResults")}</p> : searchResults.map((session) => (
-            <button key={session.id} type="button" className="cy-workspace-search-result" onClick={() => { setSearchOpen(false); onSelectSearchSession?.(session); }}>
+            <button key={session.id} type="button" className="cy-workspace-search-result" aria-current={session.id === activeSessionId ? "page" : undefined} onClick={() => { setSearchOpen(false); onSelectSearchSession?.(session); }}>
               <span>{session.title || t("sidebar.defaultSessionTitle")}</span>
-              <small>{session.workspaceDisplayName || session.mode}</small>
+              <small>{session.workspaceDisplayName || session.mode} · {sessionTime(session.updatedAt)}</small>
             </button>
           ))}
         </div>

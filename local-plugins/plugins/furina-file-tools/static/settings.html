@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><style>
+body{font:14px system-ui;color:var(--text-primary,#333);background:transparent;margin:16px}label{display:block;margin:12px 0 5px}input{box-sizing:border-box;width:100%;padding:8px;color:inherit;background:var(--surface,#fff);border:1px solid #999;border-radius:5px}button{margin-top:12px;padding:7px 16px}#status{white-space:pre-wrap}
+</style></head><body>
+<p>在 work / code / learn 中处理当前工作区的图片和 PDF。</p>
+<label for="source">FurinaKit 源码目录</label><input id="source" placeholder="包含 cyrene-api 文件夹的目录">
+<label for="python">Python 可执行文件</label><input id="python" placeholder="python.exe 的完整路径">
+<button id="save">保存连接设置</button><p id="status" role="status"></p>
+<button id="open-panel">打开文件工具面板</button>
+<script src="/.cyrene/panel-bridge.js"></script><script src="settings.js"></script>
+</body></html>

@@ -1,3 +1,4 @@
+import { resolveChatModuleModel } from "../settings/chat-module-routes";
 // Moments（动态 / 朋友圈）的 LLM 调用：评价用户动态 + 生成评论回复 + 主动发帖。
 //
 // 后台调用规范（照 runProactiveModel 的约束）：
@@ -435,6 +436,7 @@ export async function runMomentsModel(input: RunMomentsModelInput): Promise<Mome
     return { kind: "error", reason: "tool_content_forbidden" };
   }
 
+  input = { ...input, settings: resolveChatModuleModel("moments", input.settings) };
   const adapter = getAdapterForConfig(input.settings);
   const request = adapter.buildRequest({
     model: input.settings.model,

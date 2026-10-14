@@ -16,10 +16,16 @@ vi.mock("@ant-design/x-markdown", () => ({ XMarkdown: ({ content }: { content?: 
 vi.mock("@ant-design/x-markdown/plugins/Latex", () => ({ default: () => ({}) }));
 vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
 
-import { createMessageItems, formatChannelSourceLabel, formatMessageTime, resolveChannelConversationLabel, RunActivityDetail, type ChatMessageItem } from "./ChatMessageList";
+import { createMessageItems, formatChannelSourceLabel, formatMessageTime, resolveChannelConversationLabel, reasoningPreview, RunActivityDetail, type ChatMessageItem } from "./ChatMessageList";
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 
 describe("React chat sticker messages", () => {
+  it("previews only the latest nonempty thinking line, bounded by Unicode characters", () => {
+    expect(reasoningPreview("旧思考\n\n最新进度\n")).toBe("最新进度");
+    expect(reasoningPreview("")).toBe("");
+    expect(Array.from(reasoningPreview("🌸".repeat(100)))).toHaveLength(80);
+  });
+
   it("extracts a persisted user sticker marker and hides the raw marker", () => {
     expect(extractMessageStickerId("[sticker:hugtight]")).toBe("hugtight");
     expect(stripMessageStickerMarkers("[sticker:hugtight]")).toBe("");

@@ -3,13 +3,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { migrationStartupArguments } from "./migration/startup-arguments.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const containerRoot = path.basename(projectRoot) === ".upstream-latest"
   ? path.dirname(projectRoot)
   : projectRoot;
-if (path.basename(containerRoot) !== "Cyrene-Agent-N") {
-  throw new Error("隔离启动入口只能在 Cyrene-Agent-N 内运行");
+if (!["Cyrene-Agent-N", "Cyrene-Agent-N-life-conversation"].includes(path.basename(containerRoot))) {
+  throw new Error("隔离启动入口只能在 Cyrene-Agent-N 或 Cyrene-Agent-N-life-conversation 内运行");
 }
 
 function assertPlainDirectory(directory) {
@@ -62,6 +63,7 @@ if (!fs.existsSync(executable)) throw new Error(`Electron 可执行文件不存�
 assertPlainDirectory(containerRoot);
 const temporary = process.argv.includes("--temporary");
 const preflight = process.argv.includes("--preflight");
+const migrationArgs = migrationStartupArguments(process.argv.slice(2));
 let runtimeRoot;
 let runRoot;
 let paths;
@@ -101,19 +103,22 @@ function cleanupTemporaryRun() {
   if (!temporary || !runtimeRoot || !runRoot) return;
   assertPlainDirectory(runtimeRoot);
   assertPlainDirectory(runRoot);
+  if (path.dirname(runRoot) !== runtimeRoot || !path.basename(runRoot).startsWith("session-")) {
+    throw new Error("拒绝清理非本次隔离会话目录");
+  }
   fs.rmSync(runRoot, { recursive: true, force: true });
   if (fs.readdirSync(runtimeRoot).length === 0) fs.rmdirSync(runtimeRoot);
 }
 
 if (preflight) {
-  console.log(JSON.stringify({ mode: temporary ? "temporary" : "persistent", paths }, null, 2));
+  console.log(JSON.stringify({ mode: temporary ? "temporary" : "persistent", paths, migrationArgs }, null, 2));
   cleanupTemporaryRun();
   process.exit(0);
 }
 
 let exitCode = 1;
 try {
-  const child = spawn(executable, [projectRoot, `--user-data-dir=${paths.userData}`], {
+  const child = spawn(executable, [projectRoot, `--user-data-dir=${paths.userData}`, ...migrationArgs], {
     cwd: projectRoot,
     env: {
       ...process.env,

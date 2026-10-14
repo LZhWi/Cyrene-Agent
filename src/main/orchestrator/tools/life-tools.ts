@@ -1,3 +1,4 @@
+import { resolveChatModuleModel } from "../../settings/chat-module-routes";
 // 生活类工具 —— 记账/汇率/翻译/代码补丁。
 //
 // 设计原则：
@@ -242,7 +243,8 @@ function registerTranslateTool(): void {
       const to = String(args.to || "");
       if (!text || !to) return "[错误] text 和 to 不能为空";
 
-      const settings = modelSettingsGetter?.();
+      const original = modelSettingsGetter?.();
+      const settings = original && resolveChatModuleModel("translation", original);
       if (!settings || !settings.apiKey) {
         return "[错误] 未配置模型，翻译不可用";
       }

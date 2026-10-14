@@ -1,6 +1,46 @@
 const $ = (id) => document.getElementById(id);
 let currentState;
 let legacyPreview;
+let legacyPendingPreview;
+$("legacy-pending-preview").onclick = async () => {
+  legacyPendingPreview = undefined; $("legacy-pending-restore").disabled = true;
+  try {
+    const conversationIds = [...$("history-conversations").selectedOptions].map(option => option.value);
+    const preview = await invoke("preview-legacy-pending", { conversationIds });
+    legacyPendingPreview = { ...preview, conversationIds };
+    $("legacy-pending-status").textContent = `已核验 ${preview.eligible} 轮，隔离 ${preview.rejected.length} 轮；旧计数 ${preview.historicalRoundCount} 仅作历史记录，不冒充新系统轮次。`;
+    $("legacy-pending-restore").disabled = !preview.eligible;
+  } catch (e) { $("legacy-pending-status").textContent = e.message; }
+};
+$("legacy-pending-restore").onclick = async () => {
+  if (!legacyPendingPreview || !window.confirm("将已核验的旧轮次恢复到待处理队列，重复轮次会跳过。后续提取会按插件的运行设置执行。确认恢复？")) return;
+  try {
+    const result = await invoke("restore-legacy-pending", legacyPendingPreview);
+    legacyPendingPreview = undefined; $("legacy-pending-restore").disabled = true;
+    $("legacy-pending-status").textContent = `已恢复 ${result.restored} 轮，待处理 ${result.pending} 轮。`;
+  } catch (e) { $("legacy-pending-status").textContent = e.message; }
+};
+let legacyContextPreview;
+const contextRequest = () => ({ directory: $("legacy-context-directory").value, conversationIds: [...$("history-conversations").selectedOptions].map(option => option.value) });
+$("legacy-context-preview").onclick = async () => {
+  legacyContextPreview = undefined; $("legacy-context-import").disabled = true;
+  try {
+    const request = contextRequest(), preview = await invoke("preview-legacy-context", request);
+    legacyContextPreview = { request, preview };
+    $("legacy-context-status").textContent = `实体 ${preview.entities}，关系 ${preview.relations}，关系记录 ${preview.relationshipEntries}，每日摘要 ${preview.dailySummaries}，社交背景 ${preview.socialAtoms}（已核验 ${preview.verifiedSocialAtoms}，待核验 ${preview.unboundSocialAtoms}），Dream 日志 ${preview.dreamLogs}。`;
+    $("legacy-context-import").disabled = false;
+  } catch (e) { $("legacy-context-status").textContent = e.message; }
+};
+$("legacy-context-import").onclick = async () => {
+  if (!legacyContextPreview) return;
+  if (JSON.stringify(contextRequest()) !== JSON.stringify(legacyContextPreview.request)) { $("legacy-context-status").textContent = "目录或会话选择已变化，请重新预检。"; return; }
+  if (!window.confirm("将旧上下文复制到插件私有快照。源文件只读，已有状态文件不会覆盖，不启用后台任务。重启插件后生效。确认导入？")) return;
+  try {
+    await invoke("import-legacy-context", { ...legacyContextPreview.request, sourceHash: legacyContextPreview.preview.sourceHash });
+    legacyContextPreview = undefined; $("legacy-context-import").disabled = true;
+    $("legacy-context-status").textContent = "上下文快照已保存，请重启插件。";
+  } catch (e) { $("legacy-context-status").textContent = e.message; }
+};
 let vectorPreview;
 let historyPreview;
 let semanticBackfillPreview;
@@ -93,7 +133,7 @@ async function refresh() {
     if (legacyPreview) $("legacy-import").disabled = !legacyPreview.canImport || !importTargetEmpty(state);
     if (!$(`legacy-source`).value) $(`legacy-source`).value = state.defaultLegacyMemoryPath ?? "";
     if (!$("vector-source").value) $("vector-source").value = state.defaultLegacyVectorPath ?? "";
-    if (vectorPreview) $("vector-import").disabled = !vectorPreview.canImport || !state.legacyImport || state.vectorIndex?.imported;
+    if (vectorPreview) $("vector-import").disabled = !vectorPreview.canImport || !state.legacyImport;
     $("embedding-enabled").checked = Boolean(state.embedding?.enabled);
     $("embedding-url").value = state.embedding?.baseUrl ?? "";
     $("embedding-model").value = state.embedding?.model ?? "";
@@ -373,7 +413,7 @@ $("native-integration-form").onsubmit = async (event) => {
     return;
   }
   if (next.captureEnabled && !previous.captureEnabled && !window.confirm("启用后，插件会读取以后成功完成的原生桌面聊天，并把该轮用户与助手纯文本复制到插件私有存储。不会扫描旧会话，也不会修改宿主聊天或宿主记忆。确认启用？")) { await refresh(); return; }
-  if (next.autoExtractEnabled && !previous.autoExtractEnabled && !window.confirm("启用后，插件每积累 10 个待处理轮次，会把当前 10 轮及最多 2 轮前置上下文发送给主程序当前模型提取记忆，可能产生费用。确认启用？")) { await refresh(); return; }
+  if (next.autoExtractEnabled && !previous.autoExtractEnabled && !window.confirm("启用后，插件每积累 6 个待处理轮次，会把当前 6 轮、最多 2 轮前置上下文及其相关记忆发送给主程序当前模型提取记忆，可能产生费用。确认启用？")) { await refresh(); return; }
   if (next.promptInjectionEnabled && !previous.promptInjectionEnabled && !window.confirm("启用后，每次上游原生桌面 Chat 都会用当前用户问题检索插件记忆，并把命中结果作为参考资料交给主程序当前模型；外部渠道不会使用。若语义检索也已启用，当前查询还会发送到该 Embedding 服务。确认启用？")) { await refresh(); return; }
   if (next.socialContextEnabled && !previous.socialContextEnabled && !window.confirm("启用后，每个成功落盘的 companion 桌面 Chat 回合都会额外调用一次主程序当前模型，只提取有逐字用户证据的两周内短期状态或三天内未完话题，并写入插件私有存储；相关内容会在同一会话的后续回复中按需注入。若语义检索已启用，新摘要和当前查询可能发送到该 Embedding 服务。确认启用？")) { await refresh(); return; }
   if (next.momentsInjectionEnabled && !previous.momentsInjectionEnabled && !window.confirm("启用后，动态发帖决策会用宿主提供的最近对话摘录检索插件记忆，并把命中摘要作为参考资料。不会更新 DMAE、生命周期或梦境上下文；若语义检索已启用，对话摘录还会发送到该 Embedding 服务。确认启用？")) { await refresh(); return; }
@@ -433,7 +473,7 @@ $("legacy-preview-form").onsubmit = async (event) => {
       `Evidence：${preview.evidence.total} 条，有效结构 ${preview.evidence.valid}，无效 ${preview.evidence.invalid}，孤立 ${preview.evidence.orphaned}，deleted ${preview.evidence.deleted}`,
       `Facets：${preview.facets.present} 条，结构有效 ${preview.facets.valid}，无效 ${preview.facets.invalid}，待分类 ${preview.facets.pending}`,
       `画像：L0 ${preview.profiles.l0} 项 · L1 ${preview.profiles.l1} 项 · 无效 ${preview.profiles.invalid} · 暂不映射旧字段 ${preview.profiles.ignoredLegacyFields}`,
-      `本阶段排除：Embedding ${preview.excluded.embeddings} · facets ${preview.excluded.facets} · DMAE ${preview.excluded.dmaeStates} · 梦境 ${preview.excluded.dreams} · 反思日志 ${preview.excluded.reflectionLogs} · 冲突日志 ${preview.excluded.conflictLogs} · 待处理轮次 ${preview.excluded.pendingTurns}`,
+      `完整原始字段会留档：内嵌向量 ${preview.excluded.embeddings} · Dream ${preview.excluded.dreams} · 反思日志 ${preview.excluded.reflectionLogs} · 冲突日志 ${preview.excluded.conflictLogs} · 待处理轮次 ${preview.excluded.pendingTurns}；向量单独转换，未核验轮次不会自动提取`,
       `旧运行状态只读映射：生命周期 ${preview.runtime?.lifecycleRecords ?? 0} 条 · DMAE ${preview.runtime?.dmaeStates ?? 0} 条 · ${preview.runtime?.valid ? "字段兼容，尚未导入" : "存在缺失或异常，禁止宣称状态保真"}`,
       `导入门禁：${preview.canImport ? "结构允许进入下一步（仍未导入）" : "禁止导入"}`,
       `目标插件库：${importTargetEmpty(currentState) ? "空库，可在再次确认后导入" : "非空，禁止覆盖或自动合并"}`,
@@ -445,7 +485,7 @@ $("legacy-import").onclick = async () => {
   if (!legacyPreview?.canImport || !currentState) return;
   const sourceAttested = $("legacy-source-attested").checked;
   const preserveRuntime = $("legacy-preserve-runtime").checked && legacyPreview.runtime?.valid === true;
-  const warning = `将把 ${legacyPreview.entries.total} 条L2（含有效facets）、${legacyPreview.evidence.total}条证据和画像复制到本插件私有空库。源文件只读；Embedding、梦境和维护日志不会导入。${preserveRuntime ? "旧权重、访问统计及 DMAE 状态会一同复制，但插件更新开关不自动启用。" : "旧权重、访问统计及 DMAE 状态不会导入。"}${sourceAttested ? "你确认旧库已核验；插件会如实标注为用户确认，但不会伪造消息 ID。" : "旧来源仍标为未核对。"}插件会先保存空库备份。确认继续？`;
+  const warning = `将把 ${legacyPreview.entries.total} 条L2、${legacyPreview.evidence.total}条证据和画像复制到本插件私有空库。源文件只读；兼容的梦境叙事和冲突候选一同导入，完整旧库留档。向量与独立上下文文件使用各自导入入口。${preserveRuntime ? "旧权重、访问统计及 DMAE 状态会一同复制，但插件更新开关不自动启用。" : "旧权重、访问统计及 DMAE 状态不会导入。"}${sourceAttested ? "你确认旧库已核验；插件仍需核对原始消息才能绑定宿主来源。" : "旧来源仍标为未核对。"}插件会先保存空库备份。确认继续？`;
   if (!window.confirm(warning)) return;
   $("legacy-import").disabled = true;
   try {
@@ -461,15 +501,16 @@ $("vector-preview-form").onsubmit = async (event) => {
   vectorPreview = undefined; $("vector-import").disabled = true; $("vector-preview").textContent = "";
   try {
     const preview = await invoke("preview-legacy-vectors", { sourcePath: $("vector-source").value }); vectorPreview = preview;
-    $("vector-import").disabled = !preview.canImport || !currentState?.legacyImport || currentState?.vectorIndex?.imported;
+    $("vector-import").disabled = !preview.canImport || !currentState?.legacyImport;
     $("vector-preview").textContent = [`源文件：${preview.sourceBytes} 字节 · SHA-256 ${preview.sourceHash}`, `全部记录 ${preview.total} · user_memory ${preview.userMemory} · 可关联L2 ${preview.usable}`, `无效 ${preview.invalid} · 重复L2 ID ${preview.duplicateL2Ids} · 未匹配L2 ${preview.unmatchedL2Ids}`, `维度 ${preview.dimensions.join(", ") || "无"}`, `导入门禁：${preview.canImport ? "允许进入下一步（仍未导入）" : "禁止导入"}`].join("\n");
   } catch (e) { $("status").textContent = e.message; }
 };
 $("vector-import").onclick = async () => {
   if (!vectorPreview?.canImport || !currentState?.legacyImport) return;
-  if (!window.confirm(`将 ${vectorPreview.usable} 条 user_memory 向量复制到插件私有索引，并先保存空索引备份。不会复制 chat_history 或修改源文件。确认继续？`)) return;
+  const incremental = currentState?.vectorIndex?.imported === true;
+  if (!window.confirm(incremental ? "仅补齐缺失且正文完全匹配的向量；已有索引不覆盖，不调用模型。确认继续？" : `将 ${vectorPreview.usable} 条 user_memory 向量复制到插件私有索引，并先保存空索引备份。不会复制 chat_history 或修改源文件。确认继续？`)) return;
   $("vector-import").disabled = true;
-  try { const result = await invoke("import-legacy-vectors", { sourcePath: $("vector-source").value, sourceHash: vectorPreview.sourceHash }); vectorPreview = undefined; $("vector-preview").textContent = ""; await refresh(); $("status").textContent = `已导入 ${result.entries} 条、${result.dimensions} 维向量；源文件未修改。`; }
+  try { const result = await invoke(incremental ? "import-legacy-vectors-incremental" : "import-legacy-vectors", { sourcePath: $("vector-source").value, sourceHash: vectorPreview.sourceHash }); vectorPreview = undefined; $("vector-preview").textContent = ""; await refresh(); $("status").textContent = incremental ? `补入 ${result.added} 条，源中缺失 ${result.missingSource} 条；已有索引不变。` : `已导入 ${result.entries} 条、${result.dimensions} 维向量；源文件未修改。`; }
   catch (e) { $("status").textContent = e.message; $("vector-import").disabled = false; }
 };
 $("embedding-form").onsubmit = async (event) => {

@@ -19,7 +19,6 @@ const MAX_PROMPT_RECEIPTS = 128;
 const COLD_RECALL_KEY = "native-cold-recall-usage";
 const COLD_DISMISSALS_KEY = "native-cold-recall-dismissals";
 const MAX_COLD_RECORDS = 200;
-const MEMORY_OVERLAP_THRESHOLD = 0.6;
 
 export interface NativeIntegrationSettings {
   captureEnabled: boolean;
@@ -43,6 +42,7 @@ interface NativeTask {
   inputMessageId: string;
   finalMessageId: string;
   receivedAt: string;
+  timezone?: string;
   mode?: "chat";
 }
 
@@ -97,35 +97,6 @@ function companionBlocks(items: Array<{ kind: "call" | "minecraft" | "music"; co
   };
 }
 
-function lexicalOverlap(left: string, right: string): number {
-  const leftSet = new Set(left.toLowerCase().replace(/\s+/gu, ""));
-  const rightSet = new Set(right.toLowerCase().replace(/\s+/gu, ""));
-  if (!leftSet.size || !rightSet.size) return 0;
-  let intersection = 0;
-  for (const character of leftSet) if (rightSet.has(character)) intersection += 1;
-  return intersection / Math.min(leftSet.size, rightSet.size);
-}
-
-/** 与本地 Soul 注入一致：短期连续性资料优先，避免同一事实又以 L2 形式重复出现。 */
-export function suppressOverlappingMemoryEntries(memoryText: string, socialAtoms: any[]): string {
-  const shortTerm = socialAtoms.filter((atom) => atom?.type === "short_term" && typeof atom.content === "string")
-    .map((atom) => atom.content.trim()).filter(Boolean);
-  if (!memoryText || !shortTerm.length) return memoryText;
-  return memoryText.split(/\n\n(?=【)/u).map((block) => {
-    if (!block.startsWith("【相关记忆】")) return block;
-    const lines = block.split("\n"), entries: string[] = [], tail: string[] = [];
-    for (const line of lines.slice(1)) {
-      if (line.startsWith("· ")) entries.push(line);
-      else if (line.trim()) tail.push(line);
-    }
-    const kept = entries.filter((line) => {
-      const text = line.replace(/^·\s*/u, "").replace(/\s*[（(].*$/u, "").trim();
-      return !shortTerm.some((socialText) => lexicalOverlap(text, socialText) >= MEMORY_OVERLAP_THRESHOLD);
-    });
-    return kept.length ? [lines[0], ...kept, ...tail].filter((line) => line.trim()).join("\n") : "";
-  }).filter(Boolean).join("\n\n");
-}
-
 function insertReferenceContext(memoryText: string, referenceContext: string): string {
   const reference = referenceContext.trim();
   if (!reference) return memoryText;
@@ -162,7 +133,8 @@ function validTask(value: unknown): value is NativeTask {
   const task = value as Record<string, unknown>;
   return ["eventId", "conversationId", "inputMessageId", "finalMessageId", "receivedAt"]
     .every((key) => typeof task[key] === "string" && (task[key] as string).length > 0 && (task[key] as string).length <= 500)
-    && (task.mode === undefined || task.mode === "chat");
+    && (task.mode === undefined || task.mode === "chat")
+    && (task.timezone === undefined || typeof task.timezone === "string");
 }
 
 function loadQueue(ctx: PluginContext): NativeQueueState {
@@ -305,9 +277,11 @@ export function createNativeIntegration(
       assistant: output.text,
       userAt,
       assistantAt,
+      timezone: task.timezone,
       inputMessageId: input.id,
       finalMessageId: output.id,
       origin: "host",
+      memoryContext: await ctx.deps.companionContext?.memoryContext?.({ conversationId: task.conversationId, inputMessageId: input.id, kinds: ["call", "minecraft"], signal }),
     };
   }
 
@@ -339,7 +313,8 @@ export function createNativeIntegration(
         mode: "chat",
       }, signal);
       if (current.user === turn.user && current.assistant === turn.assistant
-        && current.userAt === turn.userAt && current.assistantAt === turn.assistantAt) valid.push(turn.id);
+        && current.userAt === turn.userAt && current.assistantAt === turn.assistantAt
+        && (turn.memoryContext === undefined || (current.memoryContext ?? "") === turn.memoryContext)) valid.push(turn.id);
     }
     return valid;
   }
@@ -453,6 +428,7 @@ export function createNativeIntegration(
       inputMessageId: event.inputMessageId,
       finalMessageId: event.finalMessageId,
       receivedAt: event.timestamp,
+      timezone: event.timezone,
       mode: "chat",
     };
     saveQueue({ ...queue, pending: [...queue.pending, task], lastError: undefined });
@@ -496,12 +472,15 @@ export function createNativeIntegration(
         const route = memoryEnabled && desktopConversation
           ? await resolveRoute(input.userText, input.signal, input.runId)
           : undefined;
-        const historyBlock = memoryEnabled && desktopConversation && history
-          ? route === undefined
-            ? await history.searchForAuto(input.userText, input.signal, 90)
-            : await history.searchForAuto(input.userText, input.signal, 90, route)
-          : "";
-        const companionContext = desktopConversation && ctx.deps.companionContext
+        let historyBlock = "";
+        if (memoryEnabled && desktopConversation && history) {
+          try { historyBlock = await history.searchForAuto(input.userText, input.signal, 90, route); }
+          catch (error) { ctx.log("[companion-memory] 历史检索失败，仅跳过历史块", error); }
+        }
+        const visibleEvents = input.source === "conversation" ? input.visibleCompanionEvents : undefined;
+        const companionContext = desktopConversation && visibleEvents !== undefined
+          ? companionBlocks(visibleEvents)
+          : desktopConversation && ctx.deps.companionContext
           ? companionBlocks((await ctx.deps.companionContext.snapshot({
             conversationId: input.conversationId,
             userText: input.userText,
@@ -520,7 +499,6 @@ export function createNativeIntegration(
               ? await retrieval.searchForPrompt(input.userText, input.signal, false, memoryBudget)
               : await retrieval.searchForPrompt(input.userText, input.signal, false, memoryBudget, route), includedMemoryIds: [], recalledMemoryIds: [] }
           : { text: "", includedMemoryIds: [], recalledMemoryIds: [] };
-        const filteredMemoryText = suppressOverlappingMemoryEntries(receipt.text, socialAtoms);
         const runId = (input as { runId?: unknown }).runId;
         let coldBlock = "";
         if (memoryEnabled && desktopConversation && typeof runId === "string" && runId) {
@@ -537,9 +515,8 @@ export function createNativeIntegration(
           ? String((input as typeof input & { referenceContext?: string }).referenceContext ?? "")
           : "";
         // 本地 buildMemoryInjection 的固定次序：L2 → 导入文档 → 实体关系。
-        const memoryBlock = insertReferenceContext(filteredMemoryText, referenceContext);
-        // 与本地 Soul 的动态段顺序一致；检索去重仍优先保留更新的 social
-        // 内容，只调整模型看到的近因顺序，不改变候选选择。
+        const memoryBlock = insertReferenceContext(receipt.text, referenceContext);
+        // 保留 L2 与短期背景的独立证据，字面重叠不能证明重复或相互替代。
         const result = [
           memoryBlock,
           coldBlock,

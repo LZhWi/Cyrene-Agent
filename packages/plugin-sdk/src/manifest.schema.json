@@ -69,6 +69,7 @@
         "llm",
         "secrets",
         "workspace",
+        "window-navigation",
         "conversations",
         "assistant-delivery",
         "screen-observation",

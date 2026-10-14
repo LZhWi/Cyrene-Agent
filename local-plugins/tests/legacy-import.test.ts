@@ -14,6 +14,34 @@ const evidence = (patch: Record<string, unknown> = {}) => ({ id: "e1", memoryId:
 const source = (patch: Record<string, unknown> = {}) => ({ l0: { preferredName: "小林", occupation: "", longTermInterests: "", language: "", permanentNote: "", nickname: "旧昵称", updatedAt: 10 }, l1: { recentGoals: "学习", recentPreferences: "", currentProject: "", generatedAt: 10 }, l2: [entry()], evidence: [evidence()], ...patch });
 const temporaryDirectories: string[] = [];
 
+it("旧冲突 RAG 引用转换为插件条目 ID，导入和重启均保留 DMAE 排除", () => {
+  const dir = temporaryDirectory("legacy-conflicts-"), file = path.join(dir, "memory.json");
+  const raw = source({ l2: [entry({ ragId: "r1", conflictWith: ["r2"] }), entry({ id: "m2", ragId: "r2", conflictWith: [] })] });
+  writeFileSync(file, JSON.stringify(raw));
+  const plan = createLegacyImportPlan(file, previewLegacyMemoryFile(file).sourceHash);
+  expect(plan.entries[0].conflictWith).toEqual(["m2"]);
+  expect(plan.entries[1].conflictWith).toBeUndefined();
+  expect(plan.archive?.raw).toEqual(raw);
+  const map = new Map<string, any>();
+  const storage: PluginStorage = { get: (key) => structuredClone(map.get(key)), set: (key, value) => { map.set(key, structuredClone(value)); }, rootDir: () => "unused" };
+  const memory = createMemory(storage);
+  memory.importLegacy(plan, { revision: 0 });
+  expect(memory.dmaeExcludedEntryIds()).toContain("m1");
+  expect(createMemory(storage).view().entries[0].conflictWith).toEqual(["m2"]);
+  expect(createMemory(storage).dmaeExcludedEntryIds()).toContain("m1");
+});
+
+it.each([null, "r2", ["missing"], ["r1"], ["r2", "r2"], [2], Array(21).fill("r2")].map((value) => [value]))("非法旧冲突引用阻止导入：%j", (conflictWith) => {
+  const preview = analyzeLegacyMemory(source({ l2: [entry({ ragId: "r1", conflictWith }), entry({ id: "m2", ragId: "r2" })] }));
+  expect(preview.canImport).toBe(false);
+  expect(preview.entries.brokenRelations).toBeGreaterThan(0);
+});
+
+it("旧冲突 RAG 标识指向多个条目时不猜测目标", () => {
+  const preview = analyzeLegacyMemory(source({ l2: [entry({ conflictWith: ["r2"] }), entry({ id: "m2", ragId: "r2" }), entry({ id: "m3", ragId: "r2" })] }));
+  expect(preview.canImport).toBe(false);
+});
+
 function temporaryDirectory(prefix: string): string {
   const parent = path.resolve(".test-runtime");
   mkdirSync(parent, { recursive: true });
@@ -88,6 +116,33 @@ it("压缩摘要保留子项谱系并从叶子推导来源时间包络", () => {
   expect(imported).toMatchObject({ isSummary: true, subEntryIds: ["a", "b"], sourceAt: 10, sourceEndAt: 40, provenance: "legacy-unverified" });
 });
 
+it("完整留档包含未知字段和旧维护队列，但不会把它们当成可执行轮次或伪造复核", () => {
+  const dir = temporaryDirectory("legacy-full-"), file = path.join(dir, "memory.json");
+  const raw = source({ l0: { preferredName: "称呼", updatedAt: 10, isPinned: true },
+    l2: [entry({ ragId: "r1", syncStatus: "synced", evidenceIds: ["e1"], sourceMessageIds: ["u1"] })],
+    reflectionLogs: [{ id: "old-log", details: "旧操作" }], pendingTurns: [{ userInput: "未核实", assistantReply: "原回复" }],
+    futureField: { values: [1, 2, 3] } });
+  writeFileSync(file, JSON.stringify(raw));
+  const plan = createLegacyImportPlan(file, previewLegacyMemoryFile(file).sourceHash);
+  const map = new Map<string, any>(), storage: PluginStorage = { get: (key) => structuredClone(map.get(key)), set: (key, value) => { map.set(key, structuredClone(value)); }, rootDir: () => "unused" };
+  const memory = createMemory(storage);
+  memory.importLegacy(plan, { revision: 0 });
+  expect(map.get("legacy-memory-archive").raw).toEqual(raw);
+  expect(memory.view()).toMatchObject({ turns: [], pending: 0, profiles: { l0Locked: true }, legacyCompatibility: { summary: { pendingTurns: 1 } } });
+  expect(memory.view().profileChanges).toEqual([]);
+  expect(createMemory(storage).view().entries).toEqual(memory.view().entries);
+});
+
+it("留档写入失败时不提交运行记忆", () => {
+  const dir = temporaryDirectory("legacy-archive-fail-"), file = path.join(dir, "memory.json");
+  writeFileSync(file, JSON.stringify(source()));
+  const plan = createLegacyImportPlan(file, previewLegacyMemoryFile(file).sourceHash), map = new Map<string, any>();
+  const memory = createMemory({ get: (key) => map.get(key), set: (key, value) => { if (key === "legacy-memory-archive") throw new Error("disk"); map.set(key, value); }, rootDir: () => "unused" });
+  expect(() => memory.importLegacy(plan, { revision: 0 })).toThrow("disk");
+  expect(memory.view().entries).toEqual([]);
+  expect(map.has("memory-state")).toBe(false);
+});
+
 it("压缩摘要缺子项或循环时关闭导入门禁，不使用摘要自身时间兜底", () => {
   const missing = analyzeLegacyMemory(source({ l2: [entry({ id: "s", isSummary: true, subEntryIds: ["missing"] })], evidence: [] }));
   expect(missing).toMatchObject({ canImport: false, entries: { summaries: 1, summaryLineageIssues: 1 } });
@@ -140,7 +195,7 @@ it("只向空插件库导入，先保存备份，状态提交失败不在内存�
   const failedStorage: PluginStorage = { get: (key) => structuredClone(failedMap.get(key)), set: (key, value) => { writes++; if (key === "memory-state") throw new Error("disk"); failedMap.set(key, structuredClone(value)); }, rootDir: () => "unused" };
   const failed = createMemory(failedStorage);
   expect(() => failed.importLegacy(plan, { revision: 0 })).toThrow("disk");
-  expect(failed.view().entries).toEqual([]); expect(writes).toBe(2);
+  expect(failed.view().entries).toEqual([]); expect(writes).toBe(3);
 });
 
 it.runIf(process.env.CYRENE_READONLY_IMPORT_PREVIEW_TEST === "1")("正式预检入口只读真实 memory.json", () => {

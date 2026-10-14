@@ -18,7 +18,7 @@ function fixture(opts: { candidates?: AutoReviewCandidate[]; review?: (item: Aut
   const review = vi.fn(opts.review ?? (async () => ({ verdict: "uncertain" })));
   const apply = vi.fn(opts.apply ?? (() => ({ applied: false })));
   const service = createAutoReview(storage, events, () => opts.candidates ?? [candidate], review, () => now, apply);
-  const desktop = { eventId: "e", timestamp: "2026-01-01T00:00:00Z", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
+  const desktop = { eventId: "e", timestamp: "2026-01-01T00:00:00Z", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
   return { map, review, apply, service, off, emit: (event: PluginTurnFinishedEvent = desktop) => listener?.(event), advance: (ms: number) => { now += ms; } };
 }
 
@@ -30,7 +30,7 @@ describe("后台维护候选模型复核", () => {
     await data.emit({ eventId: "x", timestamp: "", runId: "r", mode: "chat", source: "channel", channel: "x", status: "success" });
     for (let i = 0; i < 4; i += 1) await data.emit();
     expect(data.review).not.toHaveBeenCalled();
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.service.view().pendingTurns).toBe(4);
     expect(data.review).not.toHaveBeenCalled();
     await data.emit();

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'">
+<title>Furina 文件工具</title><link rel="stylesheet" href="ui.css"></head><body>
+<main>
+<header><span class="eyebrow">FURINA · LOCAL TOOLS</span><h1>文件处理，按你的方式</h1><p>选择文件和操作，再决定直接处理，或交给昔涟执行。</p></header>
+<section class="card">
+<div class="row"><h2>1. 选择工作区</h2><button id="workspace-pick" class="secondary">选择文件夹</button></div>
+<p id="workspace" class="path">尚未选择工作区</p><p class="hint">输入和产物保存在这个工作区内。</p>
+<label for="tool">2. 选择操作</label><select id="tool">
+<option value="image-compress">图片压缩 → JPEG</option><option value="image-resize">图片缩放</option><option value="image-convert">图片格式转换</option><option value="pdf-merge">PDF 合并</option><option value="pdf-split">PDF 拆分</option>
+<option value="html-to-pdf">HTML → PDF</option><option value="html-to-image">HTML → 图片</option>
+</select>
+<div class="row files-heading"><h2>3. 选择文件</h2><button id="files-pick" class="secondary" disabled>选择文件</button></div>
+<ol id="files"><li class="hint">尚未选择文件</li></ol>
+<div id="compress-fields" class="fields"><label>JPEG 质量<input id="quality" type="number" min="1" max="95" value="75"></label><label>最大宽度（可选）<input id="max-width" type="number" min="1" max="16384" placeholder="保持原宽度"></label></div>
+<div id="resize-fields" class="fields" hidden><label>宽度<input id="width" type="number" min="1" max="16384" placeholder="像素"></label><label>高度<input id="height" type="number" min="1" max="16384" placeholder="像素"></label><label class="check"><input id="keep-ratio" type="checkbox" checked>保持比例</label></div>
+<div id="convert-fields" hidden><label for="format">输出格式</label><select id="format"><option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="bmp">BMP</option><option value="tiff">TIFF</option></select></div>
+<div id="split-fields" hidden><label for="ranges">页码范围</label><input id="ranges" value="1-3,5" placeholder="例如 1-3,5"><p class="hint">页码从 1 开始，每一段生成一个 PDF。</p></div>
+<div id="html-fields" hidden><label for="html-method">导出方式</label><select id="html-method"><option value="render">按网页排版导出</option><option value="extract">提取原图</option></select>
+<div id="html-render-fields"><div id="html-image-fields" class="fields"><label>图片宽度<input id="html-width" type="number" min="1" max="16384" value="1200"></label><label>图片高度<input id="html-height" type="number" min="1" max="16384" value="900"></label></div>
+<label id="html-landscape-field" class="check"><input id="html-landscape" type="checkbox">横向 PDF</label><label>等待加载（毫秒）<input id="html-wait" type="number" min="0" max="30000" value="1500"></label></div>
+<p class="hint">处理静态 HTML，仅加载内嵌图片和工作区内的资源。网页排版导出图片为 PNG；提取原图会按 img 元素顺序去重，保留图片格式，或合成为 PDF。</p></div>
+<p id="operation-hint" class="hint">压缩输出 JPEG，透明区域会铺白底。</p>
+<div class="actions"><button id="direct" class="primary" disabled>直接执行</button><button id="model" class="model" disabled>让模型执行</button></div>
+<p class="hint">直接执行在本机处理，不调用模型。让模型执行会把所选路径和参数交给当前宿主模型，运行独立的 Work 任务。</p>
+<p id="model-unavailable" class="hint" hidden>当前宿主不支持模型任务，可使用直接执行。</p>
+</section>
+<section class="card result" aria-live="polite"><div class="row"><h2>任务结果</h2><button id="cancel" class="secondary" disabled>取消任务</button></div><p id="status">准备就绪</p><p id="error" role="alert"></p><ul id="artifacts"></ul><pre id="model-text" hidden></pre></section>
+</main><script src="ui.js"></script></body></html>

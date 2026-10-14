@@ -17,6 +17,7 @@ export type PluginCapability =
   | "llm"
   | "secrets"
   | "workspace"
+  | "window-navigation"
   | "conversations"
   | "assistant-delivery"
   | "screen-observation"
@@ -34,6 +35,7 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = [
   "llm",
   "secrets",
   "workspace",
+  "window-navigation",
   "conversations",
   "assistant-delivery",
   "screen-observation",
@@ -208,10 +210,14 @@ export interface PluginLlmMessage {
 }
 
 export interface PluginLlmGenerateOptions {
+  /** Module-specific Chat model selection; omitted requests use plugin routing. */
+  routingModule?: "soul" | "proactive" | "tools" | "vision" | "memory" | "reflection" | "compression" | "resolver" | "retrieval" | "social" | "cita" | "moments" | "voice" | "translation" | "plugin" | "scheduled";
   /** 1-32768; defaults to 1024. */
   maxTokens?: number;
   /** 1000-300000 ms; defaults to the current chat timeout capped at 120s. */
   timeoutMs?: number;
+  /** Extra attempts, 0-10; defaults to host settings. Use 0 for one-shot requests. */
+  maxRetries?: number;
   /** Optional cancellation signal owned by the plugin. */
   signal?: AbortSignal;
   /** Short diagnostic label appended to plugin:<id>. */
@@ -256,6 +262,8 @@ export interface PluginAgentRunResult {
 }
 
 export interface PluginLlmService {
+  /** Returns null when the caller should retain its existing custom provider. */
+  generateTextIfRouted?(messages: PluginLlmMessage[], options?: PluginLlmGenerateOptions): Promise<string | null>;
   generateText(
     messages: PluginLlmMessage[],
     options?: PluginLlmGenerateOptions,
@@ -379,6 +387,8 @@ export type PluginTurnFinishedEvent =
       finalMessageId?: string;
       /** 已保存的陪伴回复附带的生活修改提案 JSON；仅在成功落盘后提供。 */
       companionLifeUpdate?: string;
+      /** 本轮提示词使用的用户时区，供异步记忆抽取沿用。 */
+      timezone?: string;
       /** 本轮开始时冻结的 Chat 后端；插件可据此避免把原生与陪伴会话混写。 */
       chatBackend?: "native" | "companion";
     })
@@ -438,12 +448,13 @@ export interface PluginConversationSummary {
   updatedAt: string;
 }
 
-/** 会话消息的稳定投影；只含 user/assistant 两种角色和纯文本内容。 */
+/** 会话消息的稳定投影；只含 user/assistant 角色、文本和已保存的图片描述。 */
 export interface PluginConversationMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
   at: string;
+  images?: Array<{ name: string; caption: string; summary?: string; indexedAt?: number }>;
 }
 
 export interface PluginConversationListInput {
@@ -683,6 +694,8 @@ export interface PluginCompanionContextItem {
 }
 
 export interface PluginCompanionContextService {
+  /** Frozen-turn context for memory interpretation; never a verbatim user quote. Minecraft is reserved. */
+  memoryContext?(input: { conversationId: string; inputMessageId: string; kinds: Array<"call" | "minecraft">; signal?: AbortSignal }): Promise<string>;
   /**
    * 读取指定会话可见的上下文；只读，不推进游标、激活值或消费状态。
    * kinds 省略时由宿主返回全部可用来源。
@@ -758,6 +771,20 @@ export interface PluginMemoryRetrievalService {
   }): Promise<PluginMemoryQueryRoute>;
 }
 
+/** User-triggered UI navigation only; no message content or model execution. */
+export interface PluginWindowNavigationService {
+  listSessions(mode: "chat" | "work" | "code" | "learn"): Promise<Array<{
+    id: string;
+    title: string;
+    mode: "chat" | "work" | "code" | "learn";
+  }>>;
+  open(input: {
+    target: "chat" | "work" | "code" | "learn" | "settings";
+    session?: "existing" | "new";
+    sessionId?: string | null;
+  }): Promise<{ sessionId: string | null }>;
+}
+
 export interface PluginDeps {
   /** Read-only channel discovery. Registration must use PluginContext methods. */
   channels?: { has(id: string): boolean };
@@ -772,6 +799,7 @@ export interface PluginDeps {
   memoryRetrieval?: PluginMemoryRetrievalService;
   secrets?: PluginSecretsService;
   workspace?: PluginWorkspaceService;
+  windowNavigation?: PluginWindowNavigationService;
   scheduler?: PluginSchedulerService;
   speechInput?: PluginSpeechInputService;
 }
@@ -801,6 +829,8 @@ interface PluginPromptBuildInputCommon {
 
 /** 用户会话轮次；mode 为当前会话模式。 */
 export interface ConversationPromptBuildInput extends PluginPromptBuildInputCommon {
+  /** Frozen shared-window selection; an empty array explicitly excludes all external events. */
+  visibleCompanionEvents?: PluginCompanionContextItem[];
   source: "conversation";
   mode: PluginPromptMode;
   /** 仅桌面 Chat 可为 companion；其他模式与渠道始终为 native。 */

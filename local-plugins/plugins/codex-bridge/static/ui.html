@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self' data:">
+  <title>Codex 任务工作台</title><link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <header><div><p class="eyebrow">CYRENE / CODEX</p><h1>任务工作台 <span>测试版</span></h1></div><div id="connection" role="status">尚未连接</div></header>
+  <main>
+    <section class="compose">
+      <h2>连接与执行范围</h2>
+      <label>Codex 可执行文件<input id="executable" placeholder="留空自动发现已安装的 Codex"></label>
+      <label>工作区绝对路径<input id="cwd" placeholder="例如 E:\Projects\demo"></label>
+      <button id="connect">连接 / 刷新目录</button>
+      <p class="hint">使用本机 Codex 的 ChatGPT 登录。切换工作区后请重新连接；模型目录不代表账号一定有权使用所有模型。</p>
+      <hr><h2>提交任务</h2>
+      <label>模型<select id="model" disabled><option value="">请先连接</option></select></label>
+      <div class="row"><label>思考强度<select id="effort" disabled></select></label><label>执行范围<select id="sandbox"><option value="read-only">只读</option><option value="workspace-write">允许修改工作区</option></select></label></div>
+      <label>Codex 技能<select id="skill" disabled><option value="">不指定技能</option></select></label>
+      <p id="skillDescription" class="hint"></p>
+      <label>任务会话<select id="continuation"><option value="">创建新任务</option></select></label>
+      <label>用户消息<textarea id="message" rows="6" placeholder="消息原样提交给 Codex，不经过 Cyrene 模型转述。"></textarea></label>
+      <label class="check"><input id="autoExplain" type="checkbox" checked>完成后由 Cyrene 解读回执</label>
+      <p class="hint">解读使用 Cyrene 已配置的宿主模型及其计费方式，不共享 Codex 的订阅额度或完整陪伴记忆。</p>
+      <button id="submit" class="primary" disabled>发送给 Codex</button>
+      <p id="error" role="alert"></p>
+    </section>
+    <section class="results"><h2>执行记录</h2><div id="tasks"><div class="empty">连接 Codex，开始第一个任务。<br>进度、提问和原始回执都会保留在这里。</div></div></section>
+  </main><script src="ui.js"></script>
+</body></html>

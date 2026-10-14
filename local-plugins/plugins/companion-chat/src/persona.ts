@@ -80,12 +80,16 @@ export function createPersonaService(root = resolvePersonaRoot()) {
   const tool = readPersonaFile(root, "tools_system.md");
   const tone = readPersonaFile(root, "tone-rules.md");
   const tail = readPersonaFile(root, "tone-anchor.md");
+  const diary = readPersonaFile(root, "diary-system.md");
   const styles = Object.fromEntries(PERSONA_STYLE_IDS.map((id) => [
     id,
     readPersonaFile(root, path.join("styles", STYLE_FILES[id])),
   ])) as Record<PersonaStyleId, string>;
 
   return {
+    buildDiary(): string {
+      return diary;
+    },
     buildProactive(): string {
       return [talkSystem, adapted.soul.split("\n## Live2D 与聊天文字的分工")[0].trim(), canon, styles["01_default"]]
         .filter(Boolean)

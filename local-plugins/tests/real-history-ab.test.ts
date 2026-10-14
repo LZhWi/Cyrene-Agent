@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { env, pipeline } from "@xenova/transformers";
-import { JsonVectorStore } from "../../../../Cyrene-Agent/src/main/rag/vectorstore";
-import { HybridRetriever } from "../../../../Cyrene-Agent/src/main/rag/retriever";
 import { sanitizeHistoryRetrievalQuery } from "../plugins/companion-memory/src/history-retrieval";
 
 const localRag = "C:/Users/ASUS/AppData/Roaming/live2d-cyrene/rag-data/memory-store.json";
@@ -12,6 +10,8 @@ const casesFile = "C:/Users/ASUS/AppData/Roaming/live2d-cyrene/rag-data/eval/his
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 it.skipIf(process.env.CYRENE_REAL_DATA_AB !== "1")("real-data history baseline A/B compares raw and sanitized query without writes", async () => {
+  const { JsonVectorStore } = await import("../../../Cyrene-Agent/src/main/rag/vectorstore");
+  const { HybridRetriever } = await import("../../../Cyrene-Agent/src/main/rag/retriever");
   const before = [hash(localRag), hash(casesFile)];
   const cases = JSON.parse(fs.readFileSync(casesFile, "utf8")) as Array<{ query: string; expectedAny: string[] }>;
   const entries = JSON.parse(fs.readFileSync(localRag, "utf8")) as Array<{ source: string; createdAt: number }>;

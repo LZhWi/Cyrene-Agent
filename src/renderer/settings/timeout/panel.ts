@@ -6,6 +6,7 @@ import {
   timeoutUserChoiceInput, timeoutUserChoiceReset,
   timeoutTestInput, timeoutTestReset,
   maxParallelToolCallsInput,
+  modelRequestMaxRetriesInput,
 } from "./dom";
 import { modelRequestTimeoutSecInput, modelRequestTimeoutSecReset } from "../api/dom";
 import { setSaveStatus, setRuntimeSaveStatus } from "../shared/save-status";
@@ -15,6 +16,8 @@ import type { TimeoutSettings } from "../../../shared/timeout-types";
 export async function loadTimeoutSettings(): Promise<void> {
   try {
     const cfg = await window.settings!.getTimeoutSettings();
+    const model = await window.settings!.getConfig();
+    modelRequestMaxRetriesInput.value = String(model.modelRequestMaxRetries ?? 5);
     timeoutUserChoiceInput.value = String(cfg.userChoiceTimeout / 1000);
     timeoutTestInput.value = String(cfg.testTimeout);
     modelRequestTimeoutSecInput.value = cfg.modelRequestTimeoutSec != null ? String(cfg.modelRequestTimeoutSec) : "";
@@ -30,6 +33,10 @@ export async function saveTimeoutSettings(saveTestTimeout: boolean): Promise<boo
   let settings: Partial<TimeoutSettings>;
   try {
     if (!saveTestTimeout) {
+      const retries = Number(modelRequestMaxRetriesInput.value);
+      if (modelRequestMaxRetriesInput.value.trim() === "" || !Number.isInteger(retries) || retries < 0 || retries > 10) {
+        throw new Error("模型重试次数必须是 0–10 的整数");
+      }
       settings = {
         userChoiceTimeout: 1000 * parsePositiveIntOrThrow(timeoutUserChoiceInput.value, "询问等待时间"),
         modelRequestTimeoutSec: modelRequestTimeoutSecInput.value === "" ? undefined : parsePositiveIntOrThrow(modelRequestTimeoutSecInput.value, "模型请求超时"),
@@ -50,6 +57,7 @@ export async function saveTimeoutSettings(saveTestTimeout: boolean): Promise<boo
   try {
     await window.settings!.saveTimeoutSettings(settings);
     if (!saveTestTimeout) {
+      await window.settings!.saveConfig({ modelRequestMaxRetries: Number(modelRequestMaxRetriesInput.value) });
       const requested = Number(maxParallelToolCallsInput.value);
       await window.settings!.saveGeneral({
         maxParallelToolCalls: Number.isFinite(requested) ? requested : 4,

@@ -52,7 +52,7 @@ export function createAutoLifecycle(
   let stopped = false;
   const save = (next: AutoLifecycleState) => { storage.set(STATE_KEY, next); state = next; };
   const onTurn = (event: PluginTurnFinishedEvent) => {
-    if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.status !== "success") return;
+    if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion" || event.status !== "success") return;
     const at = now();
     if (state.lastScanAt !== undefined && at - state.lastScanAt < INTERVAL_MS) return;
     try {

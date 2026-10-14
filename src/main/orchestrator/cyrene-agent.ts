@@ -21,6 +21,8 @@ import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
 import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tools/registry/tool-context";
 import { runChatLoop } from "./chat-loop";
+import { chatModuleHasOverride, resolveChatModuleModel, withChatModuleRoutes } from "../settings/chat-module-routes";
+import { captionImage } from "./vision-captioner";
 import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
 
@@ -35,6 +37,7 @@ export interface SkillRouteInfo {
  * 两个 Agent loop 共同使用的结果形状。
  */
 export interface AgentLoopResult {
+  modelFailure?: import("../../shared/model-error").ModelFailureInfo;
   reply: string;
   companionLifeUpdate?: string;
   toolResults: import("./types").ToolCallResult[];
@@ -65,6 +68,7 @@ export interface AgentLoopEvent {
   taskPlan?: unknown;
   /** 上下文容量快照（chat-loop 发射；type 为 "context_usage"）。 */
   contextUsage?: import("../../shared/context-usage").ContextUsageSnapshot;
+  retryStatus?: import("../../shared/model-retry").ModelRetryStatus;
 }
 
 import type { SocialAtom } from "../social-context/types";
@@ -81,6 +85,7 @@ import { executeToolDefinition } from "./tools/registry/tool-executor";
 const executionLedgers = new ExecutionLedgerStore();
 
 export interface AgentLoopSettings {
+  modelRequestMaxRetries?: number;
   provider: string;
   baseUrl: string;
   model: string;
@@ -212,6 +217,7 @@ export interface CyreneRunOptions {
 
 /** Agent run 最终结果（供桥层做副作用用）。 */
 export interface CyreneRunResult {
+  modelFailure?: import("../../shared/model-error").ModelFailureInfo;
   reply: string;
   companionLifeUpdate?: string;
   toolResults: ToolCallResult[];
@@ -269,6 +275,8 @@ export function resolveExecutionMode(mode: unknown): AgentExecutionMode {
  */
 export function toAguiEvent(event: AgentLoopEvent): BaseEvent {
   switch (event.type) {
+    case "model_retry":
+      return { type: EventType.CUSTOM, name: "cyrene.model.retry", value: event.retryStatus } as BaseEvent;
     case "step_started":
       return { type: EventType.STEP_STARTED, stepName: event.stepName };
     case "step_finished":
@@ -393,6 +401,10 @@ export class CyreneAgent extends AbstractAgent {
    * 传入的 options 会原样跑——settings/messages/timeout 都在这里。
    */
   runWithEvents(options: CyreneRunOptions): Observable<BaseEvent> {
+    return new Observable(subscriber => withChatModuleRoutes(resolveExecutionMode(options.executionMode), () => this.runWithModuleEvents(options).subscribe(subscriber)));
+  }
+
+  private runWithModuleEvents(options: CyreneRunOptions): Observable<BaseEvent> {
     const threadId = this.threadId;
     // canonical runId。Bridge 必须通过 options.runId 注入，
     // 保证 ack.runId / RUN_STARTED.runId / Harness adapter / ToolContext 全链路一致。
@@ -433,6 +445,16 @@ export class CyreneAgent extends AbstractAgent {
       (async () => {
         try {
           subscriber.next({ type: EventType.RUN_STARTED, threadId, runId });
+
+          if (resolveExecutionMode(options.executionMode) === "chat" && chatModuleHasOverride("vision")) {
+            const messages = await Promise.all(options.messages.map(async message => !Array.isArray(message.content) ? message : {
+              ...message, content: await Promise.all(message.content.map(async block => block.type !== "image_url" ? block : {
+                type: "text" as const, text: "[图片观察，仅作事实参考]\n" + await captionImage({ url: block.image_url.url }, extractLastUserQuery(options.messages), options.settings, abortController.signal, 2048),
+              })),
+            }));
+            options = { ...options, messages };
+            runOptions.messages = messages;
+          }
 
           const adapterTimer = perf.begin("get_adapter");
           const adapter = getAdapterForConfig(options.settings);
@@ -493,7 +515,7 @@ export class CyreneAgent extends AbstractAgent {
             // Work / Learn / Code 统一通过 CyreneHarness。
             // 传 runOptions（含 canonical runId），不传原始 options。
             result = await perf.track("harness_loop", () => runHarnessWithAdapter(
-              runOptions,
+              executionMode === "chat" ? { ...runOptions, settings: resolveChatModuleModel("tools", runOptions.settings) } : runOptions,
               abortController.signal,
               (baseEvent: BaseEvent) => {
                 if (!cancelled) subscriber.next(baseEvent);
@@ -530,6 +552,7 @@ export class CyreneAgent extends AbstractAgent {
             soulPhaseReason: result.completionReason,
             executionMode,
             socialContext: options.socialContext,
+            ...(result.modelFailure ? { modelFailure: result.modelFailure } : {}),
             // 优先使用 harness-adapter 上报的 terminal；否则按 completionReason 推断
             terminal: result.terminal ?? terminalFromCompletionReason(result.completionReason),
           };
@@ -543,6 +566,7 @@ export class CyreneAgent extends AbstractAgent {
             threadId,
             runId,
             result: this.lastResult.terminal,
+            ...(this.lastResult.modelFailure ? { metadata: { cyreneModelFailure: this.lastResult.modelFailure } } : {}),
           });
           finished = true;
           detachExternalAbort();
@@ -575,7 +599,9 @@ export class CyreneAgent extends AbstractAgent {
             subscriber.complete();
             return;
           }
-          const safeErr = new Error(classification.userMessage);
+          const safeErr = new AgentRuntimeError("E_MODEL_REQUEST_FAILED", classification.userMessage, {
+            ...(classification.modelFailure ? { modelFailure: classification.modelFailure } : {}),
+          });
           finished = true;
           detachExternalAbort();
           subscriber.error(safeErr);
@@ -622,6 +648,7 @@ export interface AbortDiagnostic {
   phase: AbortPhase;
   userMessage: string;
   diagnostics: Record<string, unknown>;
+  modelFailure?: import("../../shared/model-error").ModelFailureInfo;
 }
 
 /** 分类 abort/error 来源，返回用户安全消息和诊断信息 */
@@ -694,6 +721,7 @@ export function classifyRunError(
       phase,
       userMessage,
       diagnostics,
+      ...(err.modelFailure ? { modelFailure: err.modelFailure } : {}),
     };
   }
 

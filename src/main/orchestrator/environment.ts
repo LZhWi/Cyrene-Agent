@@ -22,6 +22,7 @@ const LOG_PREFIX = "[Env]";
 export interface ModelInfo {
   provider: string;
   model: string;
+  multimodal?: boolean;
 }
 
 /** 用户信息片段（由 index.ts 注入，避免循环依赖）。 */
@@ -125,9 +126,9 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
   let supportsVision = false;
   if (modelInfo) {
     const cap = getCapability(modelInfo.provider);
-    supportsVision = cap?.supportsVision ?? false;
+    supportsVision = modelInfo.multimodal ?? cap?.supportsVision ?? false;
   }
-  lines.push(`- 当前模型是否支持查看图片：${supportsVision ? "支持（可调 read_image 看图）" : "不支持（看不了图片，遇到图片问题必须如实说明，不许编造图片内容）"}`);
+  lines.push(`- 当前模型是否支持查看图片：${supportsVision ? "已启用图片输入，可直接查看本轮附带的图片；其他图片仅在有相应工具时读取。看不清时如实说明。" : "未启用图片直传；如有视觉模型提供的图片描述，可依据描述回答，否则如实说明无法查看，不要编造。"}`);
   lines.push("");
 
   // 用户信息：昵称、称呼偏好、生日、默认城市等。让模型知道"在和谁说话、用户在哪"，

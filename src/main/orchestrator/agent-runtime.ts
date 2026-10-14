@@ -1,3 +1,5 @@
+import { withChatModuleRoutes, resolveChatModuleModel } from "../settings/chat-module-routes";
+import { loadCallContextEvents, formatCallContextEvent } from "../call/call-context-store";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { AguiRunInput } from "../agui-bridge";
 import type { ScheduledTask } from "../scheduler/types";
@@ -127,7 +129,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       "心情观察器",
       async () => {
         const observerContent = await rawDeps.llmClient.chat(
-          settings as ModelSettings,
+          resolveChatModuleModel("observer", settings as ModelSettings),
           [
             {
               role: "system",
@@ -247,6 +249,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       getWorkspaceBinding: (conversationId: string) => {
         return rawDeps.chatsStore.getWorkspaceBinding(conversationId);
       },
+      getCompanionTimelineEvents: () => loadCallContextEvents().map(event => ({
+        kind: "call" as const, startedAt: event.startedAt, content: formatCallContextEvent(event),
+        observedAt: new Date(event.startedAt).toISOString(),
+      })),
       buildPluginPromptContext: (input) => rawDeps.buildPluginPromptContext(input),
       buildPluginStablePrompt: (input) => rawDeps.buildPluginStablePrompt(input),
     };
@@ -288,7 +294,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
   return {
     buildOptions: async (input) => {
       const buildOptionsDeps = buildBuildOptionsDeps();
-      const { options, latestUserText } = await buildAgentRunOptions(input, buildOptionsDeps);
+      const { options, latestUserText } = await withChatModuleRoutes(input.mode ?? "chat", () => buildAgentRunOptions(input, buildOptionsDeps));
       return { options: { ...options, onToolFinished }, latestUserText };
     },
 
@@ -339,7 +345,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       const systemContent = [
         buildModePrompt(mode),
         buildEnvironmentContext(
-          { provider: settings.provider, model: settings.model },
+          { provider: settings.provider, model: settings.model, multimodal: settings.multimodal },
           {
             nickname: profile.nickname,
             callPreference: profile.callPreference,

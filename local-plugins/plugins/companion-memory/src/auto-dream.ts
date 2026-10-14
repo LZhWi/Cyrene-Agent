@@ -1,4 +1,5 @@
 import type { PluginEvents, PluginStorage, PluginTurnFinishedEvent } from "@playa0v0/cyrene-plugin-sdk";
+import { legacyContextState } from "./legacy-context-state";
 
 const SETTINGS_KEY = "auto-dream-enabled";
 const APPLY_SETTINGS_KEY = "auto-dream-apply-enabled";
@@ -29,7 +30,7 @@ interface DreamCycleTailResult {
 }
 
 function load(storage: PluginStorage): AutoDreamState {
-  const raw = storage.get<unknown>(STATE_KEY);
+  const raw = storage.get<unknown>(STATE_KEY) ?? legacyContextState(storage, STATE_KEY);
   if (raw === undefined) return { version: 1 };
   if (!raw || typeof raw !== "object") throw new Error("后台梦境状态损坏");
   const state = raw as Partial<AutoDreamState>;
@@ -112,7 +113,7 @@ export function createAutoDream(
     }
   };
   const onTurn = (event: PluginTurnFinishedEvent) => {
-    if (stopped || event.mode !== "chat" || event.source !== "desktop") return;
+    if (stopped || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion") return;
     controller?.abort();
     save({ ...state, lastActivityAt: now() });
     schedule();

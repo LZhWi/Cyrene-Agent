@@ -61,11 +61,10 @@ function createReactWindowShell(kind: ReactWindowKind): BrowserWindow {
     minHeight: 540,
     title: kind === "chat" ? "Cyrene · 聊天" : "Cyrene · 工作/学习",
     icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
+    backgroundColor: "#fff8fb",
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: true,
     resizable: true,
     webPreferences: {
       preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
@@ -80,8 +79,9 @@ function createReactWindowShell(kind: ReactWindowKind): BrowserWindow {
   // 聊天窗口内出现外链（如插件收录仓库）时转交系统浏览器打开，不再派生新窗口
   attachExternalLinkHandler(window);
 
-  window.webContents.on("did-start-loading", () => {
-    dispatcher.markLoading();
+  window.webContents.on("did-start-navigation", (details) => {
+    // replaceState / 锚点及子帧导航不重建 React，不能清除已挂好的会话监听。
+    if (details.isMainFrame && !details.isSameDocument) dispatcher.markLoading();
   });
 
   window.on("focus", () => activeChatTargetRegistry.focusSender(window.webContents));

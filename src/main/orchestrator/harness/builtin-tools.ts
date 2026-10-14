@@ -16,7 +16,6 @@ import type {
 } from "./types";
 import { parseToolCallArgs } from "./types";
 import { isAbortError } from "../../abort-utils";
-import { resolveUncertainEffect } from "./uncertain-effect-guard";
 import type { TaskExecuteRequest, TaskExecuteResult } from "../task-runtime";
 import { buildGoldenDescendantsPrompt, getGoldenDescendantNames } from "../../tasks/task-character-pool";
 import { READ_TOOL_RESULT_TOOL_ID, readToolResultToolSpec } from "./tool-output/read-tool-result";
@@ -509,6 +508,7 @@ export async function executeConfirmUncertainEffect(
   call: ToolCall,
   state: AgentState,
   requestUserClarification: ((card: unknown) => Promise<unknown>) | undefined,
+  persistState?: () => void,
 ): Promise<ToolObservation> {
   const effectId = String(parseToolCallArgs(call).effectId ?? "").trim();
   const effect = state.uncertainEffects.find((candidate) => candidate.id === effectId);
@@ -554,7 +554,12 @@ export async function executeConfirmUncertainEffect(
     const matchedEffect = state.uncertainEffects.find((effect) => effect.id === effectId);
     const authorized = decision === "allow_repeat" && Boolean(matchedEffect);
     if (authorized && matchedEffect) {
-      resolveUncertainEffect(state, matchedEffect.toolCallId);
+      matchedEffect.repeatAuthorization = { source: "user", grantedAt: Date.now() };
+      try { persistState?.(); }
+      catch (error) { delete matchedEffect.repeatAuthorization; throw error; }
+    } else if (matchedEffect?.repeatAuthorization) {
+      delete matchedEffect.repeatAuthorization;
+      persistState?.();
     }
     return {
       outcome: "success",

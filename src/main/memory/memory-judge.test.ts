@@ -23,8 +23,35 @@ vi.mock("./memory-llm-shared", () => ({
 }));
 
 import { MemoryJudge } from "./memory-judge";
+import { invokeMemoryStructuredOutput } from "./memory-llm-client";
 
 describe("MemoryJudge B-tier output contract", () => {
+  test("propagates failed extraction instead of returning an empty success", async () => {
+    const error = new Error("MODEL_REQUEST_TIMEOUT");
+    vi.mocked(invokeMemoryStructuredOutput).mockRejectedValueOnce(error);
+    await expect(new MemoryJudge().judge("我教陶艺", "好的", "test")).rejects.toBe(error);
+  });
+  test.each([
+    ["眼前景色只是梦境", "眼前景色在梦里面", true],
+    ["用户只喝茶", "用户喝茶", false],
+    ["用户只喝茶", "用户只是喜欢喝茶", false],
+    ["用户永远喝茶", "用户喝茶", false],
+    ["用户只喝茶", "用户只喝茶", true],
+  ])("checks absolute wording without rejecting explanatory 只是: %s", async (summary, quote, accepted) => {
+    vi.mocked(invokeMemoryStructuredOutput).mockImplementationOnce(async options => {
+      const candidate = { layer: "L2", content: summary, summary,
+        confidence: 0.9, triggerText: quote, evidenceQuotes: [quote], shouldWrite: true };
+      try { return options.parseSchema({candidates:[candidate],entities:[]}); }
+      catch {
+        expect(options.repairInstructions?.()).toContain("需要语义复核");
+        return options.parseSchema({candidates:[{...candidate,reason:accepted
+          ? "语义复核通过：原文与摘要表达相同范围，没有增加限制或确定性。" : "仍然不复核"}],entities:[]});
+      }
+    });
+    const result = new MemoryJudge().judge(quote, "好的", "s");
+    if (accepted) expect((await result).candidates).toHaveLength(1);
+    else await expect(result).rejects.toThrow();
+  });
   beforeEach(() => {
     mocks.structuredOptions = undefined;
   });

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --config vitest.config.mjs",
+    "test": "vitest run --config vitest.config.mjs && node --test scripts/build.test.mjs",
     "build": "node scripts/build.mjs",
     "host-smoke": "node scripts/run-isolated-host-smoke.mjs",
     "electron-host-smoke": "node scripts/run-electron-host-smoke.mjs",

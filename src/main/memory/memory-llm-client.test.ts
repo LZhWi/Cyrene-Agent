@@ -17,6 +17,10 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/tmp/test-user-data" },
 }));
 
+vi.mock("../timeout-manager", () => ({
+  getTimeoutSettings: () => ({ modelRequestTimeoutSec: 60, profileMinimumRemainingBudgetMs: -1 }),
+}));
+
 vi.mock("../runtime-policy", () => ({
   resolveTimeoutPolicy: () => ({ totalMs: 30_000 }),
   resolveMaxOutputTokens: ({ stage }: { stage: string }) => {
@@ -79,6 +83,50 @@ beforeEach(() => {
 });
 
 describe("invokeMemoryStructuredOutput — repair context", () => {
+  it("allows a 45-second response within the structured 60-second budget", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn((_url, init) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve({ ok: true, json: async () => ({ text: '{"candidates":[]}' }) }), 45000);
+        init.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("aborted", "AbortError")); });
+      })));
+      const pending = invokeMemoryStructuredOutput({ operation: "judge", systemPrompt: "system", userPrompt: "test", maxOutputTokens: 800,
+        parseSchema: parseMemoryJudgeResult, validateBusiness: validateMemoryJudgeBusiness });
+      const check = expect(pending).resolves.toEqual({ candidates: [], entities: [] });
+      await vi.advanceTimersByTimeAsync(45000);
+      await check;
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+
+  it("aborts a stalled response body at the structured budget instead of waiting forever", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    try {
+      vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+        signal = init.signal;
+        return { ok: true, json: () => new Promise((_resolve, reject) => {
+          signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }) };
+      }));
+      const pending = invokeMemoryStructuredOutput({ operation: "judge", systemPrompt: "system", userPrompt: "test", maxOutputTokens: 800,
+        parseSchema: parseMemoryJudgeResult, validateBusiness: validateMemoryJudgeBusiness });
+      const check = expect(pending).rejects.toThrow("MODEL_REQUEST_TIMEOUT");
+      await vi.advanceTimersByTimeAsync(60000);
+      await check;
+      expect(signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+  it("includes specific semantic feedback only in the existing repair request", async () => {
+    const responses = [ {text:'{"candidates":[]}',finishReason:"stop"}, {text:'{"candidates":[]}',finishReason:"stop"} ];
+    vi.stubGlobal("fetch", vi.fn(async()=>({ok:true,json:async()=>responses.shift()})));
+    let attempts=0;
+    await invokeMemoryStructuredOutput({operation:"judge",systemPrompt:"system",userPrompt:"conversation",maxOutputTokens:800,
+      parseSchema:value=>{if(attempts++===0)throw new Error("semantic review");return parseMemoryJudgeResult(value);},
+      validateBusiness:validateMemoryJudgeBusiness,repairInstructions:()=>"摘要一定喜欢；原文不一定喜欢；核对否定"});
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(mockConfig.requests[0])).not.toContain("核对否定");
+    expect(JSON.stringify(mockConfig.requests[1])).toContain("核对否定");
+  });
   it("adds validation feedback to a judge repair request", async () => {
     const responses = [
       { text: "not json", finishReason: "stop" },

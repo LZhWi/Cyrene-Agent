@@ -6,12 +6,15 @@ import { emptyProfiles, profileContext, profileField, FRESHNESS_MS, type Profile
 import { type Entry, ENTRY_STATUSES, validateEntry, isRecallable, quoteLabel } from "./entries";
 import { type Evidence, validateEvidence, linkedEvidence, evidenceContext } from "./evidence";
 import type { LegacyImportPlan } from "./legacy-import";
+import { explicitLegacySources, excerptLegacySources, messageVersion, sourceNodes } from "./legacy-source";
 import { inferQueryKind, isFacetListQuery, matchesFacet, resolveRetrievalPlan, type RetrievalPlan } from "./facets";
 import { matchTrigger, type SourceSession } from "./source-matcher";
 import { deriveSummarySources } from "./summary-sources";
 import { stripAssistantHiddenText } from "./derived-text";
 import { buildRelationshipContext } from "./relationship-context";
 import { buildMemoryExtractionMessages, parseMemoryExtraction, type ExtractionPromptMessage } from "./memory-extraction";
+import { relatedMemories, bindExtractionEvidence, patchMemory } from "./memory-incremental";
+import { requireSemanticReview } from "./memory-semantic-review";
 export type { Entry } from "./entries";
 interface ReflectionSource { entry: Entry; kind: "turn" | "verified-evidence"; evidence?: Evidence; confidence: number; reason: string }
 interface ProfileChange { id: string; layer: "L0" | "L1"; field: string; before: ProfileFact; after: ProfileFact; status: "pending" | "kept" | "accepted" | "undone"; reflection?: ReflectionSource }
@@ -26,12 +29,12 @@ interface EntryReview { id: string; left: Entry; right: Entry; leftEvidence?: Ev
 interface CompressionReview { id: string; entries: Entry[]; evidence: Evidence[][]; kind?: "manual" | "regular" | "dream"; verdict: "mergeable" | "different" | "uncertain"; summary?: string; reason: string; confidence?: number; coverageConfirmed?: boolean; status: "pending" | "dismissed" | "stale" | "applied" | "undone"; createdAt: number; appliedAt?: number; undoneAt?: number; staleAt?: number; staleReason?: "source-changed" | "source-expired" | "evidence-changed"; resultId?: string }
 interface LifecycleChange { id: string; entries: Entry[]; target: "active" | "aging" | "archived"; status: "applied" | "undone"; createdAt: number }
 interface ConflictChange { id: string; entries: Entry[]; action: "mark-candidate" | "fast-supersede"; status: "applied" | "undone"; createdAt: number }
-interface State { version: 2; revision: number; turns: Turn[]; processed: string[]; entries: Entry[]; evidence: Evidence[]; profiles: Profiles; profileChanges: ProfileChange[]; entryReviews: EntryReview[]; compressionReviews: CompressionReview[]; lifecycleChanges: LifecycleChange[]; conflictChanges: ConflictChange[]; legacyImport?: { sourceHash: string; sourceBytes: number; importedAt: number; sourceAttested?: boolean; runtimePreserved?: boolean }; legacyRuntime?: NonNullable<LegacyImportPlan["runtime"]> }
+interface State { version: 2; revision: number; turns: Turn[]; processed: string[]; entries: Entry[]; evidence: Evidence[]; profiles: Profiles; profileChanges: ProfileChange[]; entryReviews: EntryReview[]; compressionReviews: CompressionReview[]; lifecycleChanges: LifecycleChange[]; conflictChanges: ConflictChange[]; legacyImport?: { sourceHash: string; sourceBytes: number; importedAt: number; sourceAttested?: boolean; runtimePreserved?: boolean }; legacyRuntime?: NonNullable<LegacyImportPlan["runtime"]>; legacyCompatibility?: LegacyImportPlan["compatibility"] }
 interface AuditRecord { revision: number; at: number; changes: string[]; entryIds: string[]; turnIds: string[] }
 const AUDIT_KEY = "memory-trace";
 export const PROFILE_REFLECTION_MIN_CONFIDENCE = 0.7;
 const normalize = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]/gu, "");
-const EXTRACTION_BATCH_TURNS = 10;
+const EXTRACTION_BATCH_TURNS = 6;
 const EXTRACTION_CONTEXT_TURNS = 2;
 function resolverPlan(raw: any): ResolverPlan {
   if (!raw || !["unrelated", "context_difference", "preference_evolution", "direct_conflict", "uncertain"].includes(raw.resolutionType) || !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 || !raw.actions || typeof raw.actions !== "object") throw new Error("L2 Resolver 计划无效");
@@ -50,6 +53,7 @@ export function validateTurn(t: any): asserts t is Turn {
     || !Number.isFinite(t.userAt) || !Number.isFinite(t.assistantAt) || t.userAt < 0 || t.assistantAt < t.userAt
     || (t.inputMessageId !== undefined && (typeof t.inputMessageId !== "string" || !t.inputMessageId || t.inputMessageId.length > 500))
     || (t.finalMessageId !== undefined && (typeof t.finalMessageId !== "string" || !t.finalMessageId || t.finalMessageId.length > 500))
+    || (t.memoryContext !== undefined && (typeof t.memoryContext !== "string" || t.memoryContext.length > 32000))
     || (t.origin !== undefined && !["companion-chat", "host"].includes(t.origin))) throw new Error("轮次数据无效");
 }
 
@@ -524,9 +528,11 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
         || plan.runtime.summary.dmaeStates !== Object.keys(plan.runtime.dmae.states).length)) throw new Error("旧运行状态计划不完整");
       const backupKey = "memory-state-pre-legacy-import-backup";
       if (storage.get(backupKey) !== undefined) throw new Error("已存在旧记忆导入备份，请先人工核对");
+      if (plan.archive && (plan.archive.sourceHash !== plan.preview.sourceHash || storage.get("legacy-memory-archive") !== undefined)) throw new Error("旧记忆完整档案不符或已存在，拒绝覆盖");
       storage.set(backupKey, structuredClone(state));
+      if (plan.archive) storage.set("legacy-memory-archive", structuredClone(plan.archive));
       const importedAt = Date.now();
-      save({ ...state, entries: structuredClone(plan.entries), evidence: structuredClone(plan.evidence), profiles: structuredClone(plan.profiles), legacyImport: { sourceHash: plan.preview.sourceHash, sourceBytes: plan.preview.sourceBytes, importedAt, sourceAttested: plan.sourceAttested, runtimePreserved: Boolean(plan.runtime) }, ...(plan.runtime ? { legacyRuntime: structuredClone(plan.runtime) } : {}) });
+      save({ ...state, entries: structuredClone(plan.entries), evidence: structuredClone(plan.evidence), profiles: structuredClone(plan.profiles), legacyImport: { sourceHash: plan.preview.sourceHash, sourceBytes: plan.preview.sourceBytes, importedAt, sourceAttested: plan.sourceAttested, runtimePreserved: Boolean(plan.runtime) }, ...(plan.runtime ? { legacyRuntime: structuredClone(plan.runtime) } : {}), ...(plan.compatibility ? { legacyCompatibility: structuredClone(plan.compatibility) } : {}) });
       return { importedEntries: plan.entries.length, importedEvidence: plan.evidence.length, importedProfiles: Object.keys(plan.profiles.l0).length + Object.keys(plan.profiles.l1).length, revision: state.revision, sourceHash: plan.preview.sourceHash };
     },
     async reviewEntries(raw: any, generate: (prompt: string) => Promise<string>, signal: AbortSignal) {
@@ -846,26 +852,44 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
       const messageIds = new Set<string>(raw.invalidatedMessageIds);
       const affectedTurns = new Set(state.turns.filter((turn) => turn.origin === "host" && turn.sessionId === raw.conversationId
         && (raw.allMessages || Boolean(turn.inputMessageId && messageIds.has(turn.inputMessageId)) || Boolean(turn.finalMessageId && messageIds.has(turn.finalMessageId)))).map((turn) => turn.id));
-      const directEntryIds = new Set(state.entries.filter((entry) => entry.sessionId === raw.conversationId && (
-        affectedTurns.has(entry.turnId) || (entry.turnId.startsWith("host-message:") && (raw.allMessages || messageIds.has(entry.turnId.slice("host-message:".length))))
-      )).map((entry) => entry.id));
-      const evidence = state.evidence.map((item) => item.conversationId === raw.conversationId && (raw.allMessages || item.messageIds?.some((id) => messageIds.has(id)))
+      const linkedIds = new Set(state.evidence.filter(item => item.provenance === "verified" && item.conversationId === raw.conversationId
+        && (raw.allMessages || item.messageIds?.some(id => messageIds.has(id)))).map(item => item.memoryId));
+      const directEntryIds = new Set(state.entries.filter((entry) => linkedIds.has(entry.id) || (entry.sessionId === raw.conversationId && (
+        affectedTurns.has(entry.turnId) || entry.sourceEvidence?.some(item => affectedTurns.has(item.turnId)) || (entry.turnId.startsWith("host-message:") && (raw.allMessages || messageIds.has(entry.turnId.slice("host-message:".length))))
+      ))).map((entry) => entry.id));
+      const evidence = state.evidence.map((item) => item.provenance === "verified" && item.conversationId === raw.conversationId && (raw.allMessages || item.messageIds?.some((id) => messageIds.has(id)))
         ? { ...item, sourceStatus: "deleted" as const }
         : item);
       const at = Date.now();
+      // Persist a source tombstone with the archival write, so replay still finds entries after turns are removed.
+      for (const entry of state.entries) if (directEntryIds.has(entry.id) && !linkedIds.has(entry.id)) {
+        evidence.push({ id: randomUUID(), memoryId: entry.id, quoteSnippet: entry.quote.slice(0, 1200), createdAt: at,
+          conversationId: raw.conversationId, ...(messageIds.size ? { messageIds: [...messageIds] } : {}),
+          sourceStatus: "deleted", provenance: "verified" });
+      }
       let entries = state.entries.map((entry) => directEntryIds.has(entry.id) && (entry.status === "active" || entry.status === "aging")
         ? { ...entry, status: "archived" as const, validTo: entry.validTo ?? at }
         : entry);
-      const unavailable = new Set(entries.filter((entry) => entry.status === "archived" || entry.status === "superseded" || entry.status === "merged").map((entry) => entry.id));
-      entries = entries.map((entry) => entry.isSummary && entry.subEntryIds?.every((id) => unavailable.has(id)) && (entry.status === "active" || entry.status === "aging")
-        ? { ...entry, status: "archived" as const, validTo: entry.validTo ?? at }
-        : entry);
-      const invalidatedEntryIds = entries.filter((entry, index) => entry.status !== state.entries[index].status || entry.validTo !== state.entries[index].validTo).map((entry) => entry.id);
+      // A summary derived from an invalidated source must not keep presenting its claims.
+      const invalidated = new Set(directEntryIds);
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const entry of entries) if ((entry.isSummary || entry.legacySource?.parentEntryIds) && !invalidated.has(entry.id)
+          && (entry.subEntryIds ?? entry.legacySource?.parentEntryIds)?.some(id => invalidated.has(id))) { invalidated.add(entry.id); expanded = true; }
+      }
+      entries = entries.map(entry => invalidated.has(entry.id) && (entry.status === "active" || entry.status === "aging")
+        ? { ...entry, status: "archived" as const, validTo: entry.validTo ?? at } : entry);
+      const invalidatedEntryIds = [...invalidated];
+      const profiles = structuredClone(state.profiles);
+      for (const facts of [profiles.l0, profiles.l1]) for (const [field, fact] of Object.entries(facts)) {
+        if (fact.origin === "extracted" && affectedTurns.has(fact.turnId)) delete (facts as Record<string, unknown>)[field];
+      }
       const turns = state.turns.filter((turn) => !affectedTurns.has(turn.id));
       const processed = state.processed.filter((id) => !affectedTurns.has(id));
       const changed = turns.length !== state.turns.length || processed.length !== state.processed.length
-        || invalidatedEntryIds.length > 0 || evidence.some((item, index) => item.sourceStatus !== state.evidence[index].sourceStatus);
-      if (changed) save({ ...state, turns, processed, entries, evidence });
+        || invalidatedEntryIds.length > 0 || evidence.some((item, index) => item.sourceStatus !== state.evidence[index]?.sourceStatus);
+      if (changed) save({ ...state, turns, processed, entries, evidence, profiles });
       return { changed, invalidatedTurnIds: [...affectedTurns], invalidatedEntryIds };
     },
     ingest(raw: unknown) {
@@ -875,10 +899,35 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
         if (JSON.stringify(old) !== JSON.stringify(raw)) throw new Error("相同轮次 ID 对应不同内容");
         return { accepted: true };
       }
+      // 再生成可能先于失效通知到达；同一用户消息只保留当前完成的回复。
+      if (raw.origin === "host" && raw.inputMessageId) {
+        const replaced = state.turns.filter(t => t.origin === "host" && t.sessionId === raw.sessionId && t.inputMessageId === raw.inputMessageId);
+        if (replaced.some(t => t.finalMessageId === raw.finalMessageId && t.user === raw.user && t.assistant === raw.assistant
+          && t.userAt === raw.userAt && t.assistantAt === raw.assistantAt)) return { accepted: true };
+        if (replaced.length) this.invalidateHostSources({ conversationId: raw.sessionId, allMessages: false,
+          invalidatedMessageIds: replaced.flatMap(t => t.finalMessageId ? [t.finalMessageId] : []) });
+      }
       save({ ...state, turns: [...state.turns, structuredClone(raw)] });
       try { onNewTurn?.(raw); }
       catch (error) { console.warn("[companion-memory] 实体图谱提取失败:", error); }
       return { accepted: true };
+    },
+    restoreLegacyPending(turns: Turn[], revision: number) {
+      checkRevision(revision);
+      const next = [...state.turns];
+      for (const turn of turns) {
+        validateTurn(turn);
+        if (turn.origin !== "host" || !turn.id.startsWith("legacy-pending:") || !turn.inputMessageId || !turn.finalMessageId) throw new Error("旧待处理来源未核验");
+        const old = next.find(t => t.sessionId === turn.sessionId && t.inputMessageId === turn.inputMessageId);
+        if (old) {
+          if (old.finalMessageId !== turn.finalMessageId || old.user !== turn.user || old.assistant !== turn.assistant || old.userAt !== turn.userAt || old.assistantAt !== turn.assistantAt) throw new Error("待处理轮次与目标来源版本冲突");
+          continue;
+        }
+        next.push(structuredClone(turn));
+      }
+      const restored = next.length - state.turns.length;
+      if (restored) save({ ...state, turns: next });
+      return { restored, pending: next.length - state.processed.length };
     },
     bindHistoricalSources(raw: any) {
       checkRevision(raw?.revision);
@@ -897,36 +946,46 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
         ids.add(binding.entryId);
         const index = entries.findIndex((entry) => entry.id === binding.entryId);
         const entry = entries[index];
-        if (!entry || entry.provenance !== "legacy-unverified" || entry.isSummary) throw new Error("记忆已绑定、属于压缩摘要或不属于待核验旧记忆");
+        if (!entry || !["legacy-unverified", "legacy-user-attested"].includes(entry.provenance ?? "") || entry.isSummary) throw new Error("记忆已绑定、属于压缩摘要或不属于待核验旧记忆");
         const trigger = entry.triggerText?.trim() || entry.quote.trim();
         const session: SourceSession = { id: binding.conversationId, messages: [{ id: binding.messageId, role: "user", content: binding.text, at: binding.at }] };
         const match = matchTrigger(trigger, [session]);
-        if (!trigger || !["exact", "normalized-exact"].includes(match.method)) throw new Error("所选消息不再匹配旧触发片段");
+        const explicit = explicitLegacySources(entry, binding.sessions ?? [session])
+          ?? (!["exact", "normalized-exact", "ambiguous"].includes(match.method) ? excerptLegacySources(entry, binding.sessions ?? [session]) : undefined);
+        if (!explicit && (!trigger || !["exact", "normalized-exact"].includes(match.method))) throw new Error("所选消息不再匹配旧触发片段");
+        const sources = explicit ?? [{ session: (binding.sessions as SourceSession[] | undefined)?.find(s => s.id === session.id) ?? session, message: session.messages[0] }];
+        if (!sources.some(s => s.session.id === binding.conversationId && s.message.id === binding.messageId && s.message.content === binding.text && s.message.at === binding.at)) throw new Error("所选消息与核验来源不一致");
         const quote = binding.text.slice(0, 1500);
         entries[index] = {
           ...entry,
           quote,
-          sourceAt: binding.at,
+          sourceAt: Math.min(...sources.map(s => s.message.at)),
+          sourceEndAt: Math.max(...sources.map(s => s.message.at)),
           turnId: `host-message:${binding.messageId}`,
           sessionId: binding.conversationId,
           provenance: "verified",
         };
+        for (const source of sources) {
+        const next = source.session.messages[source.session.messages.findIndex(m => m.id === source.message.id) + 1];
+        const snapshots = [source.message, ...(next && ["assistant", "model"].includes(next.role) ? [next] : [])];
         evidence.push({
           id: randomUUID(),
           memoryId: entry.id,
-          quoteSnippet: binding.text.slice(0, 1200),
+          quoteSnippet: source.message.content.slice(0, 1200),
           createdAt: Date.now(),
           sourceStatus: "active",
-          conversationId: binding.conversationId,
-          messageIds: [binding.messageId],
+          conversationId: source.session.id,
+          messageIds: snapshots.map(m => m.id),
+          messageVersions: snapshots.map(m => ({ id: m.id, hash: messageVersion(m) })),
           ...(binding.before ? { contextBeforeSnippet: binding.before.slice(0, 1200) } : {}),
           ...(binding.after ? { contextAfterSnippet: binding.after.slice(0, 1200) } : {}),
           provenance: "verified",
         });
+        }
       }
-      const verifiedRanges = new Map(entries.filter((entry) => !entry.isSummary && entry.provenance === "verified").map((entry) => [entry.id, { start: entry.sourceAt, end: entry.sourceEndAt ?? entry.sourceAt }]));
-      const derived = deriveSummarySources(entries, verifiedRanges);
-      for (let index = 0; index < entries.length; index++) if (entries[index].isSummary) {
+      const verifiedRanges = new Map(entries.filter((entry) => !entry.isSummary && !entry.legacySource?.parentEntryIds && entry.provenance === "verified").map((entry) => [entry.id, { start: entry.sourceAt, end: entry.sourceEndAt ?? entry.sourceAt }]));
+      const derived = deriveSummarySources(sourceNodes(entries), verifiedRanges);
+      for (let index = 0; index < entries.length; index++) if (entries[index].isSummary || entries[index].legacySource?.parentEntryIds) {
         const result = derived.get(entries[index].id);
         if (result?.status === "derived") entries[index] = { ...entries[index], sourceAt: result.range.start, sourceEndAt: result.range.end, provenance: "derived-source-verified" };
       }
@@ -983,7 +1042,7 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
       maintaining = true;
       let batches = 0;
       try {
-        // 每次从最早未处理轮次取连续的同会话 10 轮，前两轮仅提供上下文。
+        // 每次取同会话 6 个新轮次，额外提供前两轮及其可核验的旧记忆。
         for (const sessionId of new Set(state.turns.map((t) => t.sessionId))) {
           while (!signal.aborted) {
             const all = state.turns.filter((t) => t.sessionId === sessionId);
@@ -1006,41 +1065,67 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
               userAt: new Date(t.userAt).toISOString(),
               assistantAt: new Date(t.assistantAt).toISOString(),
               user: t.user,
+              memoryContext: t.memoryContext,
               assistant: stripAssistantHiddenText(t.assistant),
               writable: batch.some((b) => b.id === t.id),
             }));
             const revision = state.revision;
-            const raw = await generate(buildMemoryExtractionMessages(transcript, sessionId));
+            const previous = relatedMemories(state.entries, before);
+            const messages = buildMemoryExtractionMessages(transcript, sessionId, previous.map(({ id, content }) => ({ id, content })));
+            let candidates: ReturnType<typeof parseMemoryExtraction> = [];
+            const semanticRequests = new Set<string>();
+            for (let attempt = 0; attempt < 2; attempt++) {
+              const raw = await generate(messages);
+              if (signal.aborted) throw new Error("提取已取消");
+              checkRevision(revision);
+              try {
+                candidates = parseMemoryExtraction(raw, transcript.length, previous);
+                for (const candidate of candidates) {
+                  bindExtractionEvidence(candidate, [...before, ...batch], batch);
+                  if (candidate.targetMemoryId) patchMemory(previous.find(entry => entry.id === candidate.targetMemoryId)!, candidate);
+                }
+                requireSemanticReview(candidates, semanticRequests, attempt > 0);
+                break;
+              } catch (error) {
+                if (attempt === 1) throw error;
+                messages.push({ role: "user", content: `上次响应未通过校验：${String(error)}。请重新输出完整 JSON 数组，保留全部旧记忆审阅，证据必须逐字来自用户。` });
+              }
+            }
             if (signal.aborted) throw new Error("提取已取消");
             checkRevision(revision);
             if (validateSources) {
-              const validIds = new Set(await validateSources(batch, signal));
+              const validIds = new Set(await validateSources([...before, ...batch], signal));
               if (signal.aborted) throw new Error("提取已取消");
               checkRevision(revision);
+              if (before.some(turn => !validIds.has(turn.id))) throw new Error("前置来源已变化，保留待处理队列");
               const invalidBatchIds = new Set(batch.filter((turn) => !validIds.has(turn.id)).map((turn) => turn.id));
               if (invalidBatchIds.size > 0) {
                 save({ ...state, turns: state.turns.filter((turn) => !invalidBatchIds.has(turn.id)), processed: state.processed.filter((id) => !invalidBatchIds.has(id)) });
                 continue;
               }
             }
-            const candidates = parseMemoryExtraction(raw, transcript.length);
             const entries = [...state.entries];
             const profiles = structuredClone(state.profiles);
             const profileChanges = structuredClone(state.profileChanges);
             for (const c of candidates) {
-              const referenced = c.evidenceTurnRefs.flatMap((ref) => {
-                const index = Number(/^T(\d+)$/.exec(ref)?.[1] ?? 0) - 1;
-                return transcript[index] ? [{ transcript: transcript[index], turn: [...before, ...batch][index] }] : [];
-              });
-              const writableSources = referenced.filter((item) => item.transcript.writable);
-              const quoteSources = writableSources.filter((item) => c.evidenceQuotes.some((quote) => item.turn.user.includes(quote)));
-              const fallback = batch.filter((turn) => turn.user.includes(c.triggerText));
-              const sources = quoteSources.length ? writableSources : fallback.length === 1 ? [{ transcript: transcript.find((item) => item.id === fallback[0].id)!, turn: fallback[0] }] : [];
-              if (!sources.length || c.evidenceQuotes.some((quote) => !sources.some((item) => item.turn.user.includes(quote)))) continue;
+              const bound = bindExtractionEvidence(c, [...before, ...batch], batch);
+              const sources = bound.sources.map(turn => ({ turn }));
               const source = sources.find((item) => item.turn.user.includes(c.triggerText))?.turn ?? sources[0].turn;
               const sourceAt = Math.min(...sources.map((item) => item.turn.userAt));
               const sourceEndAt = Math.max(...sources.map((item) => item.turn.userAt));
               const layer = c.layer;
+              if (c.targetMemoryId) {
+                const index = entries.findIndex(entry => entry.id === c.targetMemoryId);
+                const old = entries[index];
+                const content = patchMemory(old, c);
+                entries[index] = { ...old, content,
+                  sourceQuote: [...c.evidenceQuotes, old.sourceQuote || old.quote].join("\n").slice(0, 500),
+                  sourceEndAt: Math.max(old.sourceEndAt ?? old.sourceAt, sourceEndAt),
+                  sourceEvidence: [...(old.sourceEvidence ?? [{ turnId: old.turnId, quote: old.quote }]), ...bound.evidence],
+                  incrementalChanges: [...(old.incrementalChanges ?? []), { action: c.memoryAction as "supplement" | "correct", previousContent: old.content, at: Date.now() }],
+                };
+                continue;
+              }
               if (layer === "L0" || layer === "L1") {
                 const inferredL1 = /目标|想要|计划|打算/u.test(c.content) ? "recentGoals" : /项目|工程|开发|制作/u.test(c.content) ? "currentProject" : "recentPreferences";
                 const field = profileField(layer, layer === "L1" ? inferredL1 : c.field);
@@ -1060,7 +1145,7 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
               } else if (layer === "L2") {
                 if (!entries.some((e) => normalize(e.content) === normalize(c.content))) entries.push({
                   id: randomUUID(), content: c.content.trim(), quote: c.triggerText, triggerText: c.triggerText,
-                  ...(c.sourceQuote ? { sourceQuote: c.sourceQuote } : {}),
+                  sourceQuote: c.evidenceQuotes.join("\n").slice(0, 500), sourceEvidence: bound.evidence,
                   sourceAt, ...(sourceEndAt > sourceAt ? { sourceEndAt } : {}), turnId: source.id, sessionId,
                   pinned: false, status: "active", provenance: "verified", importance: c.importance, stability: c.stability,
                   certainty: c.certainty, attribution: c.attribution, evidenceQuotes: c.evidenceQuotes,

@@ -560,7 +560,7 @@ describe("build-options", () => {
       timezoneMode: "manual",
     })
 
-    await buildAgentRunOptions({
+    const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],
       style: "01_default.md",
     }, deps)
@@ -569,6 +569,7 @@ describe("build-options", () => {
       defaultCity: "杭州",
       timezone: "America/New_York",
     })
+    expect(result.timezone).toBe("America/New_York")
   })
 
   it("passes the trusted runtime environment to the agent decision stages", async () => {
@@ -1460,3 +1461,46 @@ describe("moments context 注入（Phase 3 Chat Awareness）", () => {
     expect(result.options.soulRuntimeContext).not.toMatch(/(^|\n)---(\n|$)\s*(^|\n)---/)
   })
 })
+
+it("companion freezes the shared event window for both Soul messages and plugin injection", async () => {
+  const deps = createBuildDeps();
+  deps.loadGeneralSettings = () => ({chatBackend: "companion"});
+  deps.getCompanionTimelineEvents = () => [
+    {kind: "call", content: "OLD_CALL", startedAt: 0},
+    {kind: "minecraft", content: "VISIBLE_MC", startedAt: 165},
+  ];
+  const context = vi.fn(async (_input: any) => "");
+  deps.buildPluginPromptContext = context;
+  const input = {sessionId: "window", mode: "chat" as const, executionMode: "chat" as const,
+    messages: Array.from({length: 18}, (_, i) => ({role: "user", content: "msg" + i, at: i * 10 + 1}))};
+  const { options } = await buildAgentRunOptions(input, deps);
+  expect(options.messages).toHaveLength(15);
+  const soul = context.mock.calls.map(call => call[0] as any).find(call => call.target !== "tool");
+  expect(soul.visibleCompanionEvents.map((event: any) => event.content)).toEqual(["VISIBLE_MC"]);
+  context.mockClear();
+  await buildAgentRunOptions({...input, channel: "wechat"}, deps);
+  expect(context.mock.calls.every(call => (call[0] as any).visibleCompanionEvents === undefined)).toBe(true);
+});
+
+it.each([59, 60, 120])("moves only the companion gap notice behind persona and tone (%s minutes)", async (minutes) => {
+  const deps = createBuildDeps();
+  deps.loadGeneralSettings = () => ({chatBackend: "companion"});
+  deps.loadUserProfile = () => ({timezoneMode: "manual", timezone: "Asia/Shanghai"});
+  deps.buildPluginStablePrompt = async ({target}) => target === "soul" ? "FIXED_PERSONA" : target === "tone" ? "FIXED_TONE" : "";
+  deps.buildPluginPromptContext = async () => "DYNAMIC_LIFE_MEMORY";
+  const at = Date.UTC(2026, 9, 14, 6, 0);
+  const options = (await buildAgentRunOptions({sessionId: "gap-position", mode: "chat", executionMode: "chat",
+    messages: [{role: "assistant", content: "earlier", at: at - minutes * 60000}, {role: "user", content: "now", at}]}, deps)).options;
+  const text = options.soulSystemBaseContent;
+  expect(text.indexOf("[时间戳使用规则]")).toBeLessThan(text.indexOf("FIXED_PERSONA"));
+  if (minutes < 60) {
+    expect(text).not.toContain("[对话时间信息]");
+    expect(text).toContain("FIXED_TONEDYNAMIC_LIFE_MEMORY");
+  } else {
+    const notice = "[对话时间信息]\n当前时间：2026-10-14 14:00, Asia/Shanghai\n距离上一条有效聊天消息：约 "
+      + (minutes / 60) + " 小时\n仅用于理解对话连续性；除非与当前语境有关，否则不要主动提及时间间隔，也不要复述本段内容。";
+    expect(text.split(notice)).toHaveLength(2);
+    expect(text).toContain("FIXED_TONE\n\n" + notice + "\n\nDYNAMIC_LIFE_MEMORY");
+    expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf("FIXED_PERSONA"));
+  }
+});

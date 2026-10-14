@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>昔涟地下城决策预演</title>
+<style>body{font:15px system-ui;margin:24px;color:#243146;background:#faf9fc}h1{font-size:24px}p{line-height:1.7}button,select{font:inherit;padding:9px 12px;margin:4px;border:1px solid #ddd;border-radius:9px;background:white}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}textarea{box-sizing:border-box;width:100%;min-height:300px;font:13px monospace;padding:12px;border:1px solid #ddd;border-radius:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}#decision{padding:16px;border:1px solid #d8cce8;border-radius:12px;background:white}.stop{color:#b63451}label{display:block;margin:12px 0}#notice{color:#b63451}</style></head><body>
+<h1>昔涟地下城决策预演</h1>
+<p><strong>此面板只预演，不控制游戏。</strong>你可以继续测试输入插件。这里使用模拟或手工填写的观察，不截图、不调用模型；模拟反馈不会证明任何游戏动作成功。</p>
+<p>先选择示例并加载，再点「重新加载示例并预演」查看结果。也可编辑观察 JSON：位置使用画面中的 0..1 坐标，未知状态填 null。手工观察应填写真实采集时间；超过 1.5 秒会停止，不能刷新时间冒充新画面。</p>
+<label for="scenario">模拟场景<select id="scenario"></select></label>
+<button id="load" disabled>加载示例</button><button id="run-example" disabled>重新加载示例并预演</button><button id="preview" disabled>预演当前观察</button>
+<textarea id="observation" aria-label="结构化观察 JSON" spellcheck="false"></textarea>
+<p id="decision" role="status">尚未预演</p>
+<button id="complete" disabled>反馈：模拟完成</button><button id="fail" disabled>反馈：模拟失败</button><button id="stop" class="stop" disabled>停止预演</button><button id="reset" disabled>重置预演</button>
+<p>停止、失焦、菜单、倒地、过期或不可靠观察会取消旧提案。一次只保留一个待反馈提案；下一步必须依据新观察。跟随坐标还未转换为摇杆方向，药水、攻击和救援按钮也等待游戏内确认。</p>
+<p id="notice" aria-live="polite"></p><details><summary>预演过程与结果</summary><pre id="history"></pre></details>
+<script src="/.cyrene/panel-bridge.js"></script><script src="settings.js"></script></body></html>

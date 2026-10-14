@@ -49,6 +49,7 @@ export class ProviderProtocolError extends Error {
   constructor(
     readonly code: ProviderProtocolErrorCode,
     message: string,
+    readonly providerDetails?: { vendorCode?: string; vendorType?: string; status?: number; requestId?: string },
   ) {
     super(message);
     this.name = "ProviderProtocolError";

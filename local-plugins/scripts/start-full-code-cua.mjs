@@ -1,0 +1,16 @@
+import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} from 'node:url';import {spawn} from 'node:child_process';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
+const run=path.join(root,'local-plugins/.test-runtime',`full-code-cua-${Date.now()}`);
+fs.mkdirSync(run,{recursive:true});
+for(const name of ['appData','localAppData','home','temp','userData'])fs.mkdirSync(path.join(run,name));
+const userData=path.join(run,'userData');
+fs.cpSync(path.join(root,'local-plugins/artifacts/codex-bridge'),path.join(userData,'plugins/codex-bridge'),{recursive:true});
+fs.writeFileSync(path.join(userData,'app-settings.json'),JSON.stringify({plugins:{'codex-bridge':true},chatBackend:'native',proactiveChatMode:'off',momentsEnabled:false,playwrightMcpEnabled:false,ttsEngine:'off',asrEngine:'off',searchEngine:'off',autoLaunch:false}));
+fs.writeFileSync(path.join(userData,'model-settings.json'),JSON.stringify({provider:'ChatGPT（OpenAI）',baseUrl:'http://127.0.0.1:9/v1',model:'fixture',apiKey:'synthetic-only',explicitTransport:'openai',stickerEnabled:false,embeddingModel:'none'}));
+fs.writeFileSync(path.join(userData,'mcp-servers.json'),'[]');fs.writeFileSync(path.join(userData,'scheduled-tasks.json'),'[]');
+const env={...process.env,CYRENE_CODE_CUA_ROOT:run,APPDATA:path.join(run,'appData'),LOCALAPPDATA:path.join(run,'localAppData'),HOME:path.join(run,'home'),USERPROFILE:path.join(run,'home'),TEMP:path.join(run,'temp'),TMP:path.join(run,'temp'),TMPDIR:path.join(run,'temp'),CODEX_HOME:path.join(run,'home/.codex'),XDG_CACHE_HOME:path.join(run,'home/.cache'),HF_HOME:path.join(run,'home/.cache/huggingface')};
+delete env.ELECTRON_RUN_AS_NODE;delete env.VITE_DEV;for(const key of Object.keys(env))if(/API_KEY|ACCESS_TOKEN|SECRET/.test(key))delete env[key];
+fs.writeFileSync(path.join(root,'local-plugins/.test-runtime/full-code-cua-latest.json'),JSON.stringify({run}));
+const output=fs.openSync(path.join(run,'process.log'),'a');
+const child=spawn(path.join(root,'node_modules/electron/dist/electron.exe'),[path.join(root,'local-plugins/scripts/full-code-cua.cjs'),`--user-data-dir=${userData}`],{cwd:root,env,stdio:['ignore',output,output],windowsHide:true});
+console.log(JSON.stringify({run,pid:child.pid}));child.on('exit',code=>{process.exitCode=code??1});

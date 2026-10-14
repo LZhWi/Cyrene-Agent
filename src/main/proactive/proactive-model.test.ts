@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  split: false,
   buildRequest: vi.fn(),
   parseResponse: vi.fn(),
   recordUsage: vi.fn(),
   recordRequest: vi.fn(),
+}));
+vi.mock("../settings/chat-module-routes", () => ({
+  resolveChatModuleModel: (module: string, settings: object) => mocks.split && module === "proactiveDecision" ? { ...settings, model: "judge-model" } : settings,
 }));
 
 vi.mock("../orchestrator/vendors", () => ({
@@ -21,6 +25,7 @@ import { runProactiveModel } from "./proactive-model";
 describe("runProactiveModel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.split = false;
     mocks.buildRequest.mockImplementation((request: unknown) => ({
       url: "https://example.test/chat",
       method: "POST",
@@ -55,6 +60,19 @@ describe("runProactiveModel", () => {
     expect(JSON.stringify(request)).not.toContain("tool_calls");
     expect(result).toEqual({ kind: "send", text: "休息一下吧♪" });
     expect(mocks.recordUsage).toHaveBeenCalledWith(12, 8, 1, undefined, "model", undefined);
+  });
+  it("uses the judge model before content and stops on silence", async () => {
+    mocks.split = true;
+    const fetchFn = vi.fn(async () => new Response("{}", { status: 200 }));
+    const input = { settings: { provider: "test", baseUrl: "https://example.test", model: "content-model", apiKey: "key" }, messages: [{ role: "user" as const, content: "original context" }], timeoutMs: 1000, fetchFn };
+    mocks.parseResponse.mockReturnValueOnce({ text: '{"decision":"send"}' }).mockReturnValueOnce({ text: '{"decision":"send","text":"hello"}' });
+    expect(await runProactiveModel(input)).toEqual({ kind: "send", text: "hello" });
+    expect(mocks.buildRequest.mock.calls.map(call => call[0].model)).toEqual(["judge-model", "content-model"]);
+    expect(mocks.buildRequest.mock.calls[1][0].messages[0].content).toBe("original context");
+    mocks.buildRequest.mockClear(); fetchFn.mockClear();
+    mocks.parseResponse.mockReturnValueOnce({ text: '{"decision":"silent"}' });
+    expect(await runProactiveModel(input)).toEqual({ kind: "silent" });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("returns silent only after parsing the complete response", async () => {

@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { buildEnvironmentContext } from "./environment";
 
+describe("image input capability", () => {
+  it("honors direct image input for an OAuth provider absent from the static table", () => {
+    const ctx = buildEnvironmentContext({ provider: "ChatGPT（OAuth）", model: "test-model", multimodal: true });
+    expect(ctx).toContain("可直接查看本轮附带的图片");
+    expect(ctx).not.toContain("看不了图片");
+    expect(ctx).not.toContain("可调 read_image");
+  });
+  it("honors an explicit opt-out even for a vision-capable provider", () => {
+    const ctx = buildEnvironmentContext({ provider: "Claude（Anthropic）", model: "test-model", multimodal: false });
+    expect(ctx).toContain("未启用图片直传");
+    expect(ctx).not.toContain("可直接查看本轮附带的图片");
+  });
+});
+
 // 这些测试验证：
 // 1) 日期行与本地版一致：使用系统时区，精确时间以消息时间戳为准
 // 2) 用户信息文案：除 -N 单独保留的性别约束外，与本地版字段保持一致

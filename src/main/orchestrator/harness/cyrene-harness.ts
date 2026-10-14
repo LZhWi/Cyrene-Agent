@@ -23,6 +23,8 @@
  * - harness-observability.ts — 上下文容量快照与缓存结构诊断（调用点仍在主循环）
  */
 
+import { AgentRuntimeError } from "../agent-runtime-error";
+
 import type {
   ChatMessage,
   ChatResponse,
@@ -92,6 +94,12 @@ export interface HarnessRun {
  */
 export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResult> {
   const run = createRun(input);
+  const persistSafetyState = () => {
+    checkpoint(run);
+    if (run.checkpointFailure) throw new Error(`执行状态保存失败：${run.checkpointFailure}`);
+  };
+  run.askDispatchContext.persistSafetyState = persistSafetyState;
+  run.toolDispatchContext.persistSafetyState = persistSafetyState;
   run.clock.startActive();
   materializeInitialContext(run);
 
@@ -139,7 +147,10 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       if (input.signal?.aborted) return cancelledResult(run);
       console.error(`${LOG_PREFIX} LLM call failed:`, err);
       const errorMsg = err instanceof Error ? err.message : String(err);
-      return finishRun(run, `抱歉，模型调用失败：${errorMsg}`, true, "error");
+      const failed = finishRun(run, `抱歉，模型调用失败：${errorMsg}`, true, "error");
+      return err instanceof AgentRuntimeError && err.modelFailure
+        ? { ...failed, modelFailure: err.modelFailure }
+        : failed;
     }
 
     // ── 截断可见化：finishReason=length 表示命中输出上限 ──
@@ -362,6 +373,9 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
       history,
       run.allToolSpecs,
       input.signal,
+      { maxRetries: config.modelRequestMaxRetries, idleTimeoutMs: config.modelRequestIdleTimeoutMs,
+        onStatus: (status) => input.onEvent?.({ type: "model_retry", status }),
+        getRemainingBudgetMs: () => run.clock.remainingExecutionMs() },
     ),
   });
   if (compactedMessages !== run.messages) {
@@ -398,6 +412,8 @@ async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers): Promis
         }
         run.input.onEvent?.({ type: "reasoning_delta", messageId: reasoningMessageId, delta });
       },
+      (status) => run.input.onEvent?.({ type: "model_retry", status }),
+      () => run.clock.remainingExecutionMs(),
     );
   } finally {
     if (reasoningStarted) {

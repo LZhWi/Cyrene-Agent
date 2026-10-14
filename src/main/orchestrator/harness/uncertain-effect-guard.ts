@@ -3,7 +3,8 @@
  *
  * 仅保留副作用 fingerprint 拦截：
  * - isBlockedByUncertainEffect：阻止相同 non-idempotent 副作用的自动重放
- * - resolveUncertainEffect：通过 reconcile / ask_user 解除一次 uncertain effect
+ * - resolveUncertainEffect：查证结果后解除一次 uncertain effect
+ * 用户确认只授予一次重复授权，消费后原未知事实仍保留。
  *
  * 重要边界：本文件只决定"是否允许下一次相同危险调用"，
  * 不参与 final settlement、不否决模型诚实 final。
@@ -28,7 +29,7 @@ export function isBlockedByUncertainEffect(
   state: AgentState,
   fingerprint: string,
 ): boolean {
-  return state.uncertainEffects.some((effect) => effect.fingerprint === fingerprint);
+  return state.uncertainEffects.some((effect) => effect.fingerprint === fingerprint && !effect.repeatAuthorization);
 }
 
 /**

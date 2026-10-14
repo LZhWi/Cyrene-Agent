@@ -8,7 +8,7 @@ function fixture(scan = vi.fn(() => ({ agingCandidates: 2, archivedCandidates: 1
   const off = vi.fn(), events: PluginEvents = { on: (_event, next: any) => { listener = next; return off; }, emit: async () => undefined };
   let now = 100_000;
   const service = createAutoLifecycle(storage, events, scan, () => now, apply);
-  const desktop = { eventId: "e", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
+  const desktop = { eventId: "e", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
   return { map, scan, apply, service, off, emit: (event: PluginTurnFinishedEvent = desktop) => listener?.(event), advance: (ms: number) => { now += ms; } };
 }
 
@@ -16,7 +16,7 @@ describe("后台生命周期候选扫描", () => {
   it("默认关闭，启用后每 24 小时最多扫描一次且只保存数量", async () => {
     const data = fixture(); await data.emit(); expect(data.scan).not.toHaveBeenCalled();
     data.service.set(true);
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.scan).not.toHaveBeenCalled(); expect(data.apply).not.toHaveBeenCalled(); expect(data.service.view().lastScanAt).toBeUndefined();
     await data.emit();
     expect(data.scan).toHaveBeenCalledTimes(1);
@@ -29,7 +29,7 @@ describe("后台生命周期候选扫描", () => {
   it("忽略 channel 和未成功轮次，失败只保存通用时间", async () => {
     const scan = vi.fn(() => { throw new Error("secret-entry-content"); }), data = fixture(scan); data.service.set(true);
     await data.emit({ eventId: "c", timestamp: "", runId: "r", mode: "chat", source: "channel", channel: "x", status: "success" });
-    await data.emit({ eventId: "f", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "runtime_error" });
+    await data.emit({ eventId: "f", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "runtime_error" });
     expect(scan).not.toHaveBeenCalled();
     await data.emit(); expect(scan).toHaveBeenCalledTimes(1);
     expect(data.service.view().lastErrorAt).toBe(100_000);

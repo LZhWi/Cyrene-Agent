@@ -18,7 +18,7 @@ function fixture(opts: { candidates?: AutoCompressionCandidate[]; review?: (item
   const review = vi.fn(opts.review ?? (async () => ({ verdict: "uncertain" })));
   const apply = vi.fn(opts.apply ?? (() => ({ applied: false })));
   const service = createAutoCompression(storage, events, () => opts.candidates ?? [candidate], review, () => now, apply, opts.suppressed);
-  const desktop = { eventId: "e", timestamp: "2026-01-01T00:00:00Z", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
+  const desktop = { eventId: "e", timestamp: "2026-01-01T00:00:00Z", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" } as PluginTurnFinishedEvent;
   return { map, review, apply, service, off, emit: (event: PluginTurnFinishedEvent = desktop) => listener?.(event), advance: (ms: number) => { now += ms; } };
 }
 
@@ -29,7 +29,7 @@ describe("后台压缩建议", () => {
     data.service.set(true);
     for (let index = 0; index < 19; index++) await data.emit();
     expect(data.review).not.toHaveBeenCalled();
-    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", conversationId: "c", inputMessageId: "m", status: "success" });
+    for (const mode of ["work", "code", "learn"] as const) await data.emit({ eventId: mode, timestamp: "", runId: "r", mode, source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "success" });
     expect(data.service.view().pendingTurns).toBe(19);
     expect(data.review).not.toHaveBeenCalled();
     await data.emit();
@@ -53,8 +53,8 @@ describe("后台压缩建议", () => {
   it("忽略 channel、失败和取消轮次，且不重复处理已完成候选", async () => {
     const data = fixture(); data.service.set(true);
     await data.emit({ eventId: "channel", timestamp: "", runId: "r", mode: "chat", source: "channel", channel: "x", status: "success" });
-    await data.emit({ eventId: "error", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "runtime_error" });
-    await data.emit({ eventId: "cancelled", timestamp: "", runId: "r", mode: "chat", source: "desktop", conversationId: "c", inputMessageId: "m", status: "cancelled" });
+    await data.emit({ eventId: "error", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "runtime_error" });
+    await data.emit({ eventId: "cancelled", timestamp: "", runId: "r", mode: "chat", source: "desktop", chatBackend: "companion", conversationId: "c", inputMessageId: "m", status: "cancelled" });
     expect(data.service.view().pendingTurns).toBe(0);
     for (let index = 0; index < 20; index++) await data.emit();
     data.advance(60_000);

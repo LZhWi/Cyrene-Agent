@@ -12,6 +12,7 @@ export interface PendingTurnInput {
   assistantMessageId?: string;
   /** 本轮开始时冻结的 Chat 后端；非 Chat 模式可省略。 */
   chatBackend?: "native" | "companion";
+  timezone?: string;
   startedAt: number;
   /** 本轮运行超时（毫秒）；整体期限 = startedAt + runTimeoutMs + graceMs。 */
   runTimeoutMs?: number;
@@ -95,6 +96,7 @@ export function createPendingTurnLifecycle(deps: PendingTurnLifecycleDeps) {
       ...(entry.terminal.status === "success" && finalMessageId && entry.input.chatBackend === "companion"
         && entry.terminal.companionLifeUpdate ? { companionLifeUpdate: entry.terminal.companionLifeUpdate } : {}),
       ...(entry.input.chatBackend ? { chatBackend: entry.input.chatBackend } : {}),
+      ...(entry.input.timezone ? { timezone: entry.input.timezone } : {}),
       status: entry.terminal.status,
       ...(entry.terminal.durationMs !== undefined ? { durationMs: entry.terminal.durationMs } : {}),
     });

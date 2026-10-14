@@ -9,6 +9,9 @@ import type {
   SpeechInputCommitRequest,
   SpeechInputCommitResult,
 } from "../../../../../shared/ipc-channels";
+import type { SidebarOrganizationDraft, SidebarOrganizationResult, SidebarOrganizationSnapshot } from "../../../../../shared/sidebar-organization";
+import type { ModelFailureInfo } from "../../../../../shared/model-error";
+import type { WorkspaceInspectorApi } from "../../../../../shared/workspace-inspector";
 import type {
   PopQuizCard,
   PopQuizResolveResponse,
@@ -16,8 +19,11 @@ import type {
   PopQuizSubmission,
 } from "../../../../../shared/pop-quiz";
 
-export interface ChatStoreApi {
+export interface ChatStoreApi extends WorkspaceInspectorApi {
   list: (options?: { mode?: ConversationMode }) => Promise<ChatSessionMeta[]>;
+  getSidebarOrganization: () => Promise<SidebarOrganizationSnapshot>;
+  applySidebarOrganization: (expectedRevision: number, draft: SidebarOrganizationDraft) => Promise<SidebarOrganizationResult>;
+  onSidebarOrganizationChanged: (callback: () => void) => () => void;
   get: (id: string) => Promise<ChatSession | null>;
   create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
   append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
@@ -91,6 +97,7 @@ export interface AguiEvent {
   stepName?: string;
   status?: string;
   changes?: ToolFileChange[];
+  metadata?: { cyreneModelFailure?: ModelFailureInfo };
 }
 
 export interface AguiApi {

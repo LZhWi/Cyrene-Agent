@@ -450,6 +450,9 @@ html, body {
   transform: translateX(-100%);
 }
 
+/* Match the New button's native sans-serif family throughout this sidebar. */
+.is-workspace-window .cy-page-sidebar,
+.is-workspace-window .cy-page-sidebar * { font-family: Arial, sans-serif; }
 .cy-workspace-side-action {
   display: flex;
   align-items: center;
@@ -482,6 +485,14 @@ html, body {
 }
 .cy-workspace-search-result:hover { background: var(--cy-bg-hover); }
 .cy-workspace-search-result small { opacity: .6; }
+.cy-workspace-search-result[aria-current] { background: var(--cy-bg-active); }
+.cy-workspace-titlebar { display: flex; flex: none; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--cy-border); font-size: 12px; }
+.cy-workspace-titlebar strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cy-workspace-titlebar button { display: flex; align-items: center; gap: 5px; background: transparent; border: 1px solid var(--cy-border); border-radius: 7px; color: var(--cy-text-muted); padding: 6px 8px; cursor: pointer; }
+.cy-workspace-titlebar button span { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cy-workspace-titlebar button:hover { background: var(--cy-bg-hover); }
+.is-workspace-window .cy-page-drag-region { position: absolute; display: block; left: 0; right: 0; top: 0; height: 48px; -webkit-app-region: drag; }
+.cy-task-delegation__inspect { border: 0; background: transparent; color: var(--cy-accent); cursor: pointer; font-size: 11px; }
 
 @media (max-width: 900px) {
   .cy-page.is-workspace-window { padding-left: 182px; }

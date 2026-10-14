@@ -110,6 +110,16 @@ function cloneSession(session: TaskSession): TaskSession {
   return JSON.parse(JSON.stringify(session)) as TaskSession;
 }
 
+/** Inspector reads must not run startup recovery or mutate a running task. */
+export function readTaskSession(root: string, taskId: string): TaskSession | null {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(taskId)) return null;
+  try {
+    const file = path.join(root, ROOT_DIR_NAME, SESSIONS_DIR_NAME, `${taskId}.json`);
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isTaskSession(parsed) && parsed.id === taskId ? { ...parsed, todoItems: cloneTodoItems(parsed.todoItems) } : null;
+  } catch { return null; }
+}
+
 /**
  * Task 私有会话存储。它不依赖 Electron，方便测试；生产启动时传入 app.getPath("userData")。
  */
