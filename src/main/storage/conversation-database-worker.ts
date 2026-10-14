@@ -13,6 +13,7 @@ import { assertValidPresentationPatch, type TranscriptAppendInput, type Transcri
 import { reduceTranscriptProjection, isUserTurnRewindableInModelView } from "../orchestrator/conversation-transcript-projection";
 import { buildLegacyBackfillDrafts } from "../orchestrator/conversation-transcript-coordinator";
 import { diagnosticHash } from "./conversation-store-error";
+import { runMemoryCommand } from "./conversation-memory-repository";
 const database = initializeConversationDatabase(workerData.root);
 chats.initialize();
 importRuns(database);
@@ -160,6 +161,11 @@ async function execute(method: string, args: any[]): Promise<unknown> {
   }
   if (method === 'barrier')
     return;
+  if (method.startsWith('memory.')) {
+    if (method === 'memory.record') await importTranscript(args[0].conversationId);
+    if (method === 'memory.batch') await importTranscript(args[0]);
+    return database.transaction(() => runMemoryCommand(database, method, args));
+  }
   if (method.startsWith('runs.')) {
     if (method === 'runs.admit') {
       await importTranscript(args[0]);
@@ -321,7 +327,7 @@ async function execute(method: string, args: any[]): Promise<unknown> {
         database.db.prepare('UPDATE conversations SET archived_through=? WHERE id=?').run(boundary, id);
       });
     if (name === 'delete') {
-      database.transaction(() => { database.db.prepare('DELETE FROM transcript_entries WHERE conversation_id=?').run(id); database.db.prepare("UPDATE conversations SET max_seq=0,archived_through=0,projection_json=NULL,transcript_imported=1 WHERE id=?").run(id); });
+      database.transaction(() => { database.db.prepare('DELETE FROM memory_pending_turns WHERE conversation_id=?').run(id); database.db.prepare('DELETE FROM transcript_entries WHERE conversation_id=?').run(id); database.db.prepare("UPDATE conversations SET max_seq=0,archived_through=0,projection_json=NULL,transcript_imported=1 WHERE id=?").run(id); });
       return;
     }
   }

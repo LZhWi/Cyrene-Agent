@@ -892,9 +892,10 @@ describe("build-options", () => {
       recordRelationshipTurn: async () => {},
     }
 
-    await onAgentRunFinished({ reply: "总结好了", toolResults: [] }, latestUserText, deps)
+    await onAgentRunFinished({ reply: "总结好了", toolResults: [] }, latestUserText, deps, undefined, "c1",
+      { vectorMemorySource: { userTurnId: "u1", assistantEntryId: "a1" } })
 
-    expect(scheduleMemoryWrite).toHaveBeenCalledWith("帮我总结这个 md", "总结好了", undefined)
+    expect(scheduleMemoryWrite).toHaveBeenCalledWith("帮我总结这个 md", "总结好了", "c1", { userTurnId: "u1", assistantEntryId: "a1" })
     expect(matchSticker).toHaveBeenCalledWith(
       "总结好了\n帮我总结这个 md",
       latestIndex,
@@ -902,7 +903,7 @@ describe("build-options", () => {
     )
   })
 
-  it("does not schedule memory writes when memory mode is off", async () => {
+  it.each(["off", "summary", "wiki"] as const)("keeps %s dispatch unchanged with vector provenance", async (memoryMode) => {
     const scheduleMemoryWrite = vi.fn()
     const scheduleSummaryTurn = vi.fn()
     const scheduleWikiTurn = vi.fn()
@@ -913,7 +914,7 @@ describe("build-options", () => {
         model: "",
         apiKey: "",
         runtimeSync: "off",
-        memoryMode: "off",
+        memoryMode,
       }),
       scheduleMemoryWrite,
       scheduleSummaryTurn,
@@ -936,12 +937,17 @@ describe("build-options", () => {
       deps,
       undefined,
       "conversation-a",
-      { assistantEntryId: "assistant-a", userTurnId: "user-a" },
+      { assistantEntryId: "assistant-a", userTurnId: "user-a",
+        vectorMemorySource: { userTurnId: "vector-user", assistantEntryId: "vector-reply" } },
     )
 
     expect(scheduleMemoryWrite).not.toHaveBeenCalled()
-    expect(scheduleSummaryTurn).not.toHaveBeenCalled()
-    expect(scheduleWikiTurn).not.toHaveBeenCalled()
+    expect(scheduleSummaryTurn).toHaveBeenCalledTimes(memoryMode === "summary" ? 1 : 0)
+    expect(scheduleWikiTurn).toHaveBeenCalledTimes(memoryMode === "wiki" ? 1 : 0)
+    if (memoryMode === "summary") expect(scheduleSummaryTurn).toHaveBeenCalledWith({
+      conversationId: "conversation-a", assistantEntryId: "assistant-a", userTurnId: "user-a",
+      userText: "记住这个信息", assistantText: "记住了",
+    })
   })
 
   it("skips sticker matching when reply and user content contain only code or math", async () => {

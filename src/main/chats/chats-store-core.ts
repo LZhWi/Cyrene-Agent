@@ -1252,7 +1252,7 @@ export function clearStalePendingAdjustMarks(): void {
 }
 export function deleteSession(id: string): boolean {
   const database = getWorkerDatabase(), exists = !!database.record(id);
-  for (const table of ['transcript_entries', 'conversation_requests', 'runs'])
+  for (const table of ['memory_pending_turns', 'transcript_entries', 'conversation_requests', 'runs'])
     database.db.prepare(`DELETE FROM ${table} WHERE conversation_id=?`).run(id);
   database.db.prepare('UPDATE conversations SET deleted=1,record_json=NULL,max_seq=0,archived_through=0,projection_json=NULL,transcript_imported=1 WHERE id=?').run(id);
   database.db.prepare('DELETE FROM tool_operations WHERE scope_id=?').run(id);

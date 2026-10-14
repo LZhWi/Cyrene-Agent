@@ -103,8 +103,9 @@ class MemoryStoreManager {
     return store.l0
   }
 
-  async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField]): Promise<void> {
+  async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField], assertSourceCurrent?: () => Promise<void>): Promise<void> {
     const store = await this.load()
+    if (assertSourceCurrent) await assertSourceCurrent()
     store.l0 = { ...store.l0, [field]: value, updatedAt: Date.now() }
     await this.save(store)
     appendMemoryTrace({
@@ -127,8 +128,9 @@ class MemoryStoreManager {
     return store.l1
   }
 
-  async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField]): Promise<void> {
+  async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField], assertSourceCurrent?: () => Promise<void>): Promise<void> {
     const store = await this.load()
+    if (assertSourceCurrent) await assertSourceCurrent()
     store.l1 = { ...store.l1, [field]: value }
     await this.save(store)
     appendMemoryTrace({
@@ -145,8 +147,9 @@ class MemoryStoreManager {
     }
   }
 
-  async addL2Memory(input: L2Input): Promise<L2Memory> {
+  async addL2Memory(input: L2Input, assertSourceCurrent?: () => Promise<void>): Promise<L2Memory> {
     const store = await this.load()
+    if (assertSourceCurrent) await assertSourceCurrent()
     const memory: L2Memory = {
       ...input,
       id: `l2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,

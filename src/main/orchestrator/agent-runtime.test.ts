@@ -112,6 +112,18 @@ describe("AgentRuntime 插件宿主事件", () => {
     });
   });
 
+  it("passes canonical source IDs through the runtime to memory completion", async () => {
+    const runtime = createAgentRuntime(createDeps(vi.fn(async () => {})));
+    await runtime.onRunFinished({ reply: "reply", toolResults: [] }, "user", {
+      source: "desktop", mode: "chat", conversationId: "c1", runId: "r1",
+      userTurnId: "u1", assistantEntryId: "a1",
+    });
+    expect(mocks.onAgentRunFinished).toHaveBeenCalledWith(
+      expect.anything(), "user", expect.anything(), undefined, "c1",
+      expect.objectContaining({ vectorMemorySource: { userTurnId: "u1", assistantEntryId: "a1" } }),
+    );
+  });
+
   it.each(["timeout", "cancelled", "runtime_error"] as const)(
     "非成功终态 %s 不发布轮次完成事件",
     async (status) => {

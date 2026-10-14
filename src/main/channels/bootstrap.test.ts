@@ -332,7 +332,15 @@ describe("createChannelsSubsystem lifecycle", () => {
       chatType: "direct",
       senderId: "user-1",
       at: new Date("2026-09-02T00:00:00Z"),
-    }, "channel-session", []);
+    }, {
+      sessionId: "channel-session",
+      target: { conversationId: "channel-session" },
+      modelContext: { messages: [], uncertainEffects: [], throughSeq: 0 },
+      userTurnId: "channel-user",
+      assistantTurnId: "channel-assistant",
+      runId: "channel-run",
+      transcriptSink: { getLastAssistantEntryId: () => "channel-reply-entry" },
+    });
 
     expect(onRunFinished).toHaveBeenCalledWith(
       { reply: "渠道回复", toolResults: [] },
@@ -342,6 +350,8 @@ describe("createChannelsSubsystem lifecycle", () => {
         mode: "chat",
         conversationId: "channel-session",
         channel: "telegram",
+        userTurnId: "channel-user",
+        assistantEntryId: "channel-reply-entry",
       },
     );
 

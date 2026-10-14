@@ -322,7 +322,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         onRunFinishedDeps,
         context.channel as ChannelId | undefined,
         context.conversationId,
-        { runId: context.runId, source: context.source, mode: context.mode },
+        { runId: context.runId, source: context.source, mode: context.mode,
+          vectorMemorySource: context.userTurnId && context.assistantEntryId
+            ? { userTurnId: context.userTurnId, assistantEntryId: context.assistantEntryId }
+            : undefined },
       );
       // 调用方应只在成功终态进入收尾；此处再守住插件事件契约，避免未来新增入口误报完成。
       const terminalStatus = result.terminal?.status;

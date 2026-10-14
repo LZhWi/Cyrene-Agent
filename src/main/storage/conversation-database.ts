@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { reconcileMemoryTurns } from "./conversation-memory-repository";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
@@ -115,6 +116,16 @@ export class ConversationDatabase {
    PRIMARY KEY(post_id, actor, type));
    INSERT INTO schema_migrations VALUES(7)`));
     }
+    if (!this.db.prepare("SELECT version FROM schema_migrations WHERE version=8").get()) {
+      this.transaction(() => this.db.exec(`CREATE TABLE memory_scheduler_state(id INTEGER PRIMARY KEY CHECK(id=1), legacy_count INTEGER NOT NULL);
+        CREATE TABLE memory_pending_turns(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          user_turn_id TEXT NOT NULL, user_entry_id TEXT NOT NULL, assistant_entry_id TEXT NOT NULL,
+          payload_json TEXT, active INTEGER NOT NULL, processed INTEGER NOT NULL,
+          UNIQUE(conversation_id,user_turn_id));
+        CREATE INDEX memory_pending_batch ON memory_pending_turns(conversation_id,active,processed,seq);
+        INSERT INTO schema_migrations VALUES(8)`));
+    }
     this.transaction(() => {
       const rows = this.db.prepare("SELECT run_id,record_json FROM runs WHERE status IN ('prepared','running')").all();
       for (const row of rows) {
@@ -219,6 +230,7 @@ export class ConversationDatabase {
       const row = this.db.prepare("SELECT max_seq FROM conversations WHERE id=?").get(id)!;
       const entry = { ...input, seq: Number(row.max_seq) + 1, at: input.at ?? Date.now() } as TranscriptEntry;
       this.insert(id, entry);
+      if (entry.kind === 'turn_rewind' || entry.kind === 'turn_tombstone') reconcileMemoryTurns(this, id);
       if (entry.kind === "tool_result" && entry.runId) {
         const operationId = `${entry.runId}:${entry.payload.toolCallId}`;
         this.db.prepare("UPDATE tool_operations SET status=CASE WHEN ?='success' AND status='ready' THEN 'succeeded' WHEN ?='unknown' THEN 'unknown' ELSE status END,receipt_entry_id=? WHERE scope_id=? AND operation_id=?")

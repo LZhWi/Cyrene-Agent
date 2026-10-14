@@ -198,7 +198,7 @@ export type BuildOptionsInput = AguiRunInput;
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
 export interface OnRunFinishedDeps {
   loadModelSettings: () => ModelSettingsLite;
-  scheduleMemoryWrite: (userText: string, reply: string, conversationId?: string) => void;
+  scheduleMemoryWrite: (userText: string, reply: string, conversationId?: string, source?: { userTurnId: string; assistantEntryId: string }) => void | Promise<void>;
   scheduleSummaryTurn?: (input: {
     conversationId: string;
     assistantEntryId: string;
@@ -1171,6 +1171,8 @@ export async function onAgentRunFinished(
     mode?: string;
     assistantEntryId?: string;
     userTurnId?: string;
+    /** Vector-memory provenance only; does not change Summary/Wiki dispatch. */
+    vectorMemorySource?: { userTurnId: string; assistantEntryId: string };
   },
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
@@ -1209,7 +1211,8 @@ export async function onAgentRunFinished(
       assistantText: chatContent,
     });
   } else if (memoryMode === "vector" && !socialContext) {
-    deps.scheduleMemoryWrite(sideEffectUserText, chatContent, conversationId);
+    await deps.scheduleMemoryWrite(sideEffectUserText, chatContent, conversationId,
+      finishedContext?.vectorMemorySource);
   }
 
   // 朋友圈主动发帖评估：输入是事件产生时冻结的快照（runId/source/mode 由 agent-runtime 透传）
