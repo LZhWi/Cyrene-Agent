@@ -2,6 +2,7 @@ import { fork, type ChildProcess, type ForkOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import type { TaskBody, AllowedRegion, TaskAction, TaskSnapshot, ActionResult } from "./contracts";
 
 export interface Connection {
   host: string; port: number; username: string; owner: string;
@@ -28,7 +29,9 @@ export function validateConnection(value: unknown): Connection {
 }
 
 type Message = { type: string; id?: string; data?: any };
-export class BodyManager {
+export class BodyManager implements TaskBody {
+  private taskOwner?: string;
+  private rpcPending = new Map<string, {resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
   private child?: ChildProcess;
   private starting = false;
   private stopping?: Promise<void>;
@@ -53,6 +56,11 @@ export class BodyManager {
 
   private message(child: ChildProcess, message: Message) {
     if (this.child !== child || this.closed || !message || typeof message.type !== "string") return;
+    if (message.type === "task-reply" && message.id) {
+      const pending=this.rpcPending.get(message.id); if(!pending) return; clearTimeout(pending.timer); this.rpcPending.delete(message.id);
+      if(message.data?.error) pending.reject(new Error(message.data.error)); else pending.resolve(message.data?.value);
+      return;
+    }
     if (message.type === "state") {
       this.state = message.data;
       if (this.state.connected) this.login = undefined;
@@ -78,6 +86,8 @@ export class BodyManager {
   private lost(child: ChildProcess, reason: string) {
     if (this.child !== child) return;
     this.child = undefined;
+    this.taskOwner=undefined;
+    for(const pending of this.rpcPending.values()) {clearTimeout(pending.timer);pending.reject(new Error(reason));} this.rpcPending.clear();
     this.login = undefined;
     this.state = { ...this.state, connected: false, activeAction: null };
     for (const timer of this.pending.values()) clearTimeout(timer);
@@ -129,11 +139,16 @@ export class BodyManager {
   }
 
   action(value: unknown) {
+    if(this.taskOwner) throw new Error("高层任务占用身体；请先取消任务");
+    return this.submitAction(value);
+  }
+
+  private submitAction(value: unknown, taskId?: string, allowedRegion?: AllowedRegion) {
     if (this.closed || !this.child?.connected || !this.state.connected) throw new Error("等待机器人出生后再执行动作");
     const input = value as Record<string, unknown>;
     const id = randomUUID();
     // The runtime owns action validation too; never accept a caller-chosen ID.
-    const request = { id, action: input?.action, material: input?.material, count: input?.count, timeoutMs: input?.timeoutMs, position: input?.position, open: input?.open };
+    const request = { id, action: input?.action, material: input?.material, count: input?.count, timeoutMs: input?.timeoutMs, position: input?.position, open: input?.open, taskId, allowedRegion };
     const { validateAction } = require(path.join(this.runtime, "body.cjs"));
     validateAction(request);
     if (this.state.activeAction || this.pending.size) throw new Error("已有动作运行，请先停止");
@@ -150,6 +165,54 @@ export class BodyManager {
       if (error) this.failed(child, error.message);
     });
     return result;
+  }
+
+
+  private rpc(op: string, taskId: string, region?: AllowedRegion): Promise<any> {
+    if(this.closed || !this.child?.connected || !this.state.connected) return Promise.reject(new Error("身体未连接"));
+    const id=randomUUID(), child=this.child;
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{this.rpcPending.delete(id);reject(new Error("身体任务查询超时；不重试"));},5000);
+      this.rpcPending.set(id,{resolve,reject,timer});
+      child.send({type:"task-control",id,op,taskId,region},error=>{if(error){clearTimeout(timer);this.rpcPending.delete(id);reject(error);}});
+    });
+  }
+  async assertQuiescent(region: AllowedRegion) {
+    if(!this.child) return;
+    if(!this.state.connected) throw new Error("先断开尚未就绪的身体进程");
+    const snapshot=await this.rpc("observe","acknowledge",region);
+    if(snapshot.activeAction || this.pending.size) throw new Error("底层动作仍在运行或 draining");
+  }
+  async acquireTask(taskId: string, region: AllowedRegion) {
+    if(this.taskOwner || this.pending.size || this.state.activeAction) throw new Error("身体已有任务或动作");
+    this.taskOwner=taskId;
+    try { await this.rpc("acquire",taskId,region); }
+    catch(error) { /* An uncertain acquire must not permit conflicting manual work. */ await this.stop(); this.taskOwner=undefined; throw error; }
+  }
+  async releaseTask(taskId: string) {
+    if(this.taskOwner!==taskId) return;
+    if(this.child?.connected && this.state.connected) await this.rpc("release",taskId);
+    this.taskOwner=undefined;
+  }
+  async observeTask(taskId: string, region: AllowedRegion): Promise<TaskSnapshot> {
+    if(this.taskOwner!==taskId) throw new Error("任务不拥有身体");
+    return this.rpc("observe",taskId,region);
+  }
+  async taskAction(taskId: string, action: TaskAction, region: AllowedRegion): Promise<ActionResult> {
+    if(this.taskOwner!==taskId) throw new Error("任务不拥有身体");
+    const submitted=this.submitAction(action,taskId,region);
+    const until=Date.now()+(action.timeoutMs??30000)+8000;
+    for(;;) {
+      const result=this.results.find(r=>r.id===submitted.id);
+      if(result && !["submitted","active"].includes(result.status)) {
+        // Finish emits while the underlying invocation may still drain. Query actual slot.
+        if(result.effectsUncertain || !this.state.connected) return result;
+        const fresh=await this.observeTask(taskId,region);
+        if(!fresh.activeAction) return {...result,after:fresh};
+      }
+      if(Date.now()>until) {this.cancel();return {id:submitted.id,action:action.action,status:"timed_out",effectsUncertain:true,reason:"未确认底层调用结束"};}
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
   }
 
   cancel() {

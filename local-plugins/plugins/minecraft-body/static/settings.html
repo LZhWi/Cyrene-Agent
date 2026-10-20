@@ -29,6 +29,7 @@ body{font:14px system-ui;color:var(--text-primary,#333);background:transparent;m
 <label id="door-field" hidden><input id="door-open" type="checkbox" checked style="width:auto"> 打开木门（取消勾选为关闭）</label>
 <p id="action-help"></p>
 <button id="execute">执行动作</button><button id="cancel">停止动作</button>
+<p>任务控制器 V1 预览：通过 start_goal 工具启动。先核对世界实际变化，等待动作停止，再解除不确定状态。</p><button id="task-cancel">停止高层任务</button><button id="task-ack">已核对现场，确认不确定效果</button><pre id="task-state" aria-label="任务状态"></pre>
 <p id="notice" role="status"></p><p id="summary"></p><p id="result" aria-live="polite"></p><details><summary>详细状态、背包与动作证据</summary><pre id="state" aria-label="身体状态和动作结果"></pre></details>
 <script src="/.cyrene/panel-bridge.js"></script><script src="settings.js"></script>
 </body></html>

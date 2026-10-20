@@ -64,6 +64,16 @@ process.on("message", async (message) => {
         close();
       });
       heartbeat = setInterval(() => { if (body) send({ type: "state", data: body.snapshot() }); }, 500);
+    } else if (message.type === "task-control") {
+      try {
+        if (!body) throw new Error("身体未出生");
+        let value;
+        if (message.op === "acquire") value = body.acquireTask(message.taskId, message.region);
+        else if (message.op === "release") value = body.releaseTask(message.taskId);
+        else if (message.op === "observe") value = body.observeTask(message.region);
+        else throw new Error("未知任务操作");
+        send({ type: "task-reply", id: message.id, data: { value: await value } });
+      } catch (error) { send({ type: "task-reply", id: message.id, data: { error: errorText(error) } }); }
     } else if (message.type === "action") {
       if (!body) throw new Error("等待机器人出生后再执行动作");
       // execute emits active and terminal results; catch only rejected requests.

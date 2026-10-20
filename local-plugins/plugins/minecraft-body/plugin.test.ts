@@ -28,7 +28,7 @@ describe("independent Minecraft body plugin", () => {
     const manager = { status: vi.fn(() => ({ running: false })), start: vi.fn(), action: vi.fn(), cancel: vi.fn(), stop: vi.fn(), close: vi.fn() };
     const plugin = createPlugin(() => manager as unknown as BodyManager);
     plugin.register(ctx);
-    expect(ctx.tools).toEqual([]);
+    expect(ctx.tools.map(tool => tool.id)).toEqual(["minecraft-body_start_goal", "minecraft-body_task_status", "minecraft-body_cancel_task"]);
     expect(ctx.promptProviders).toEqual([]);
     expect(ctx.subscriptions).toEqual([]);
     expect(ctx.emittedEvents).toEqual([]);

@@ -104,7 +104,7 @@ try {
   for (const file of ["manifest.json", "README.md"]) await cp(path.join(source, file), path.join(staged, file));
   await cp(path.join(source, "static"), staged, { recursive: true });
   // Explicit runtime files: never sweep local caches/configuration into a ZIP.
-  for (const file of ["body.cjs", "common-actions.cjs", "sidecar.cjs", "package.json", "legacy/commands.cjs", "legacy/safety.cjs", "legacy/tools.cjs", "legacy/environment.cjs", "legacy/LICENSE"]) {
+  for (const file of ["body.cjs", "task-observation.cjs", "common-actions.cjs", "sidecar.cjs", "package.json", "legacy/commands.cjs", "legacy/safety.cjs", "legacy/tools.cjs", "legacy/environment.cjs", "legacy/LICENSE"]) {
     const destination = path.join(staged, "runtime", file);
     await mkdir(path.dirname(destination), { recursive: true });
     await cp(path.join(source, "runtime", file), destination);

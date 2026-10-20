@@ -31,11 +31,11 @@ const mf=require(path.join(root,'runtime/node_modules/mineflayer'));
 for(const version of mf.testedVersions){assert.ok(d(version).blocksArray.length);assert.ok(d(version).protocol)}
 require(path.join(root,'runtime/node_modules/mineflayer-pathfinder'));
 require(path.join(root,'runtime/node_modules/prismarine-auth'));
-const channels=new Map,cleanup=[];
+const channels=new Map,cleanup=[],tools=[];
 const forbidden=()=>{throw Error('Conversation integration is forbidden')};
-const ctx={signal:new AbortController().signal,storage:{rootDir:()=>path.join(root,'private-data')},onDispose:fn=>cleanup.push(fn),registerIpc:(name,fn)=>channels.set(name,fn),registerTool:forbidden,registerPromptProvider:forbidden,registerChannelAdapter:forbidden,events:{on:forbidden,emit:forbidden},deps:new Proxy({},{get:forbidden})};
+const ctx={signal:new AbortController().signal,storage:{rootDir:()=>path.join(root,'private-data')},onDispose:fn=>cleanup.push(fn),registerIpc:(name,fn)=>channels.set(name,fn),registerTool:tool=>tools.push(tool),registerPromptProvider:forbidden,registerChannelAdapter:forbidden,events:{on:forbidden,emit:forbidden},deps:new Proxy({},{get:forbidden})};
 const plugin=require(path.join(root,'index.cjs'));(plugin.default||plugin).register(ctx);
-assert.equal(channels.get('body-status')().running,false);assert.equal(channels.size,5);
+assert.equal(channels.get('body-status')().running,false);assert.equal(channels.size,9);assert.deepEqual(tools.map(t=>t.id),["minecraft-body_start_goal","minecraft-body_task_status","minecraft-body_cancel_task"]);
 const child=fork(path.join(root,'runtime/sidecar.cjs'),[],{cwd:path.join(root,'runtime'),execArgv:['--require',guard],env:{...process.env,NODE_PATH:''},stdio:['ignore','ignore','pipe','ipc'],windowsHide:true});
 let stderr='';child.stderr.on('data',chunk=>stderr+=String(chunk));
 const timer=setTimeout(()=>{child.kill();console.error('Sidecar stop deadline exceeded');process.exitCode=1},5000);

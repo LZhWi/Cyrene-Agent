@@ -268,3 +268,68 @@ test("fractional retreat checkpoints must reach their own cell, not a rounded ad
   assert.equal(result.status, "completed");
   assert.ok(result.after.position.x <= 1);
 });
+
+const taskRegion = () => ({ dimension: "overworld", min: { x: -5, y: 60, z: -5 }, max: { x: 5, y: 70, z: 5 }, allowCollect: true, allowPlace: true });
+test("task lease excludes manual actions, reflexes, wrong regions and ungranted mutations", async () => {
+  const { body, bot } = setup(), region = taskRegion();
+  body.acquireTask("task", region);
+  await assert.rejects(body.execute(action("manual", "craft", { material: "木板", count: 1 })), /独占/);
+  await assert.rejects(body.execute(action("wrong", "craft", { taskId: "other", allowedRegion: region, material: "木板", count: 1 })), /独占/);
+  const movement = bot.pathfinder.movements.exclusionAreasStep.at(-1);
+  assert.equal(movement({ position: new Position(20) }), Infinity);
+  assert.equal(movement({ position: new Position(2) }), 0);
+  body.releaseTask("task");
+  const denied = { ...region, allowCollect: false, allowPlace: false };
+  body.acquireTask("next", denied);
+  await assert.rejects(body.execute(action("denied", "collect", { taskId: "next", allowedRegion: denied, material: "木头", count: 1, position: { x: 2,y:64,z:0 } })), /未授权/);
+});
+test("task lease is retained until cancelled craft primitive drains", async () => {
+  const { body, bot } = setup(), region = taskRegion();
+  let release;
+  bot.craft = () => new Promise(resolve => { release = resolve; });
+  body.acquireTask("task", region);
+  const pending = body.execute(action("task-craft", "craft", { taskId: "task", allowedRegion: region, material: "木板", count: 1 }));
+  body.cancel(); body.releaseTask("task");
+  assert.equal((await pending).status, "cancelled");
+  assert.equal(body.taskLease.id, "task");
+  await assert.rejects(body.execute(action("manual-after-cancel", "come")), /独占/);
+  release(); await flush();
+  assert.equal(body.taskLease, null);
+});
+test("observation is read-only and unknown protocols fail closed", () => {
+  const { body, bot } = setup();
+  bot.version = "unknown-custom";
+  const observation = body.observeTask(taskRegion());
+  assert.equal(observation.recipeCatalog.supported, false);
+  assert.deepEqual(observation.taskObservation.logs, []);
+  assert.equal(observation.taskObservation.permissions.build, "unknown");
+  assert.equal(body.active, null); assert.equal(body.seen.size, 0);
+});
+test("leased collect only mutates its exact oak target", async () => {
+  const { body, bot } = setup(), region = taskRegion();
+  bot.findBlocks = () => [new Position(20)];
+  body.acquireTask("task", region);
+  let dug = false; bot.dig = async () => { dug = true; };
+  const result = await body.execute(action("outside", "collect", { taskId: "task", allowedRegion: region, material: "木头", count: 1, position: { x: 20, y: 64, z: 0 } }));
+  assert.equal(result.status, "failed"); assert.equal(dug, false);
+});
+test("leased reflex still cancels a running primitive on low health", async () => {
+  const { body, bot } = setup(), region = taskRegion();
+  let release; bot.craft = () => new Promise(resolve => { release = resolve; });
+  body.acquireTask("task", region);
+  const pending = body.execute(action("health-craft", "craft", { taskId: "task", allowedRegion: region, material: "木板", count: 1 }));
+  bot.health = 5; body.reflex();
+  assert.equal((await pending).status, "cancelled");
+  assert.equal(body.snapshot().activeAction.draining, true);
+  release(); await flush(); body.releaseTask("task");
+});
+test("observation filters loaded log/table targets and decodes only grounded drop names", () => {
+  const { body, bot } = setup(), region = taskRegion();
+  const inside = new Position(2), outside = new Position(20);
+  bot.findBlocks = ({matching}) => matching === 1 ? [inside, outside] : [];
+  bot.blockAt = p => p.toString() === inside.toString() ? { type:1,name:"oak_log",boundingBox:"block",position:p } : air(p);
+  bot.entities = { 1:{ name:"item",position:inside,getDroppedItem:()=>({name:"oak_log",count:1}) },2:{name:"item",position:outside,getDroppedItem:()=>({name:"oak_log",count:99})},3:{name:"item",position:inside} };
+  const observed = body.observeTask(region).taskObservation;
+  assert.deepEqual(observed.logs,[{name:"oak_log",position:{x:2,y:64,z:0}}]);
+  assert.deepEqual(observed.drops,[{name:"oak_log",count:1,position:{x:2,y:64,z:0}}]);
+});

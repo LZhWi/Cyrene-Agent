@@ -14,6 +14,8 @@ element("connect").addEventListener("click", () => invoke("body-start", {
   autoSurvival: element("survival").checked,
 }));
 element("disconnect").addEventListener("click", () => invoke("body-stop"));
+element("task-cancel").addEventListener("click", () => invoke("task-cancel"));
+element("task-ack").addEventListener("click", () => { if(window.confirm("我已查看实际世界和背包，知道旧任务不会恢复。确认解除不确定状态？")) void invoke("task-acknowledge-effects"); });
 element("cancel").addEventListener("click", () => invoke("body-cancel"));
 element("execute").addEventListener("click", () => invoke("body-action", {
   action: element("action").value, material: element("material").value.trim(),
@@ -52,6 +54,9 @@ async function refresh() {
   const status = await window.CyrenePanel.invoke("body-status");
   if (!alive) return;
   element("state").textContent = JSON.stringify(status, null, 2);
+  const task = await window.CyrenePanel.invoke("task-status");
+  element("task-state").textContent = task ? JSON.stringify(task, null, 2) : "尚无高层任务";
+  element("task-ack").disabled = !task?.effectsUncertain || task.state === "running";
   const state = status.state;
   element("summary").textContent = state.connected ? `生命 ${state.health}/20 · 饥饿 ${state.food}/20 · ${state.dimension} · ${state.sleeping ? "睡眠中" : state.activeAction ? `动作 ${state.activeAction.action}${state.activeAction.draining ? " 正在停止" : " 运行中"}` : "空闲"}` : "未连接";
   const last = status.results.at(-1);

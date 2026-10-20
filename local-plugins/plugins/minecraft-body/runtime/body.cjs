@@ -6,6 +6,8 @@ const { selectUsableTool } = require("./legacy/tools.cjs");
 const { environmentDanger, HAZARDOUS_BLOCKS } = require("./legacy/environment.cjs");
 const { runCommon, COMMON_ACTIONS, COUNT_ACTIONS, ITEM_ACTIONS, CROPS, SMELTS } = require("./common-actions.cjs");
 
+const { validRegion, sameRegion, inside, recipeCatalog } = require("./task-observation.cjs");
+
 const ACTIONS = new Set(["come", "follow", "collect", "craft", "give", "pickup", "eat", "retreat", ...COMMON_ACTIONS]);
 const MATERIAL_ACTIONS = new Set(["collect", "craft", "give"]);
 const COLLECT_MATERIALS = { ...MATERIAL_ALIASES, "煤矿": ["coal_ore", "deepslate_coal_ore"], "铁矿": ["iron_ore", "deepslate_iron_ore"], "铜矿": ["copper_ore", "deepslate_copper_ore"] };
@@ -33,7 +35,7 @@ function validateAction(value) {
     if (!Number.isInteger(value.count) || value.count < 1 || value.count > MAX_COUNT) throw new Error(`数量应为 1..${MAX_COUNT}`);
   }
   let position;
-  if (["goto", "place"].includes(value.action)) {
+  if (["goto", "place"].includes(value.action) || (["collect", "pickup", "craft"].includes(value.action) && value.position)) {
     const p = value.position;
     if (!p || ![p.x, p.y, p.z].every(Number.isFinite) || Math.abs(p.x) > 30000000 || Math.abs(p.z) > 30000000 || p.y < -2048 || p.y > 2048) throw new Error("目标坐标无效");
     if (value.action === "place" && ![p.x, p.y, p.z].every(Number.isInteger)) throw new Error("放置坐标应为整数方块坐标");
@@ -41,7 +43,8 @@ function validateAction(value) {
   }
   if (value.action === "door" && typeof value.open !== "boolean") throw new Error("开门状态应为布尔值");
   if (value.action === "pickup" && (!Number.isInteger(value.count) || value.count < 1 || value.count > MAX_COUNT)) throw new Error(`掉落实体上限应为 1..${MAX_COUNT}`);
-  return { id: value.id, action: value.action, timeoutMs, material: value.material, count: value.count, position, open: value.open };
+  if (value.taskId !== undefined && (typeof value.taskId !== "string" || !validRegion(value.allowedRegion))) throw new Error("任务租约或区域无效");
+  return { taskId: value.taskId, allowedRegion: value.allowedRegion, id: value.id, action: value.action, timeoutMs, material: value.material, count: value.count, position, open: value.open };
 }
 
 class MinecraftBody {
@@ -52,6 +55,7 @@ class MinecraftBody {
     this.onResult = onResult;
     this.ready = true;
     this.active = null;
+    this.taskLease = null;
     this.seen = new Set();
     this.autoSurvival = autoSurvival;
     this.session = session;
@@ -75,7 +79,51 @@ class MinecraftBody {
       const below = bot.blockAt(block.position.offset(0, -1, 0));
       return [block, below].some((b) => b && (b.name === "farmland" || HAZARDOUS_BLOCKS.has(b.name))) ? Infinity : 0;
     });
+    movements.exclusionAreasStep.push((block) => this.taskLease && !inside(block.position, this.taskLease.region, bot.game?.dimension) ? Infinity : 0);
     bot.pathfinder.setMovements(movements);
+  }
+
+  acquireTask(taskId, region) {
+    if (!this.ready || this.active || this.taskLease || this.autoSurvival) throw new Error("身体忙碌、自动生存已开启或已有任务租约");
+    if (typeof taskId !== "string" || !taskId || !validRegion(region) || !inside(this.bot.entity?.position, region, this.bot.game?.dimension)) throw new Error("任务区域或租约无效");
+    this.taskLease = { id: taskId, region: JSON.parse(JSON.stringify(region)) };
+  }
+
+  releaseTask(taskId) {
+    if (this.taskLease?.id !== taskId) return;
+    if (this.active) { this.taskLease.releasePending = true; return; }
+    this.taskLease = null;
+  }
+
+  inTaskRegion(position) { return !this.taskLease || inside(position, this.taskLease.region, this.bot.game?.dimension); }
+
+  observeTask(region) {
+    if (!validRegion(region)) throw new Error("任务观察区域无效");
+    const bot = this.bot, within = p => inside(p, region, bot.game?.dimension);
+    const logs = [], craftingTables = [], placementCandidates = [];
+    const scan = (name, distance) => {
+      const id = bot.registry.blocksByName[name]?.id;
+      return id === undefined ? [] : bot.findBlocks({ matching: id, maxDistance: distance, count: 64 });
+    };
+    if (this.ready && bot.entity?.position && bot.game?.dimension === region.dimension) {
+      for (const p of scan("oak_log", 24)) {
+        const block = bot.blockAt(p);
+        if (within(p) && block?.name === "oak_log" && this.safeBlock(block, Math.floor(bot.entity.position.y) - 1)) logs.push({ name: "oak_log", position: point(p) });
+      }
+      for (const p of scan("crafting_table", 16)) if (within(p) && bot.blockAt(p)?.name === "crafting_table") craftingTables.push(point(p));
+      const origin = bot.entity.position.floored();
+      for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) {
+        const p = origin.offset(x, 0, z), ground = bot.blockAt(p.offset(0, -1, 0));
+        const entities = [bot.entity, ...Object.values(bot.entities || {})];
+        const clear = !entities.some(e => e.position && Math.abs(e.position.x - p.x - 0.5) < (e.width || 0.6) / 2 + 0.5 && Math.abs(e.position.z - p.z - 0.5) < (e.width || 0.6) / 2 + 0.5 && e.position.y < p.y + 1 && e.position.y + (e.height || 1.8) > p.y);
+        if (within(p) && within(p.offset(0,-1,0)) && bot.blockAt(p)?.name === "air" && clear && ground?.boundingBox === "block" && !HAZARDOUS_BLOCKS.has(ground.name) && ground.name !== "farmland" && bot.entity.position.offset(0,1.5,0).distanceTo(ground.position.offset(0.5,0.5,0.5)) <= 4) placementCandidates.push(point(p));
+      }
+    }
+    // Only use Mineflayer's decoded dropped-item API; never guess entity metadata.
+    const drops = Object.values(bot.entities || {}).filter(e => e.name === "item" && e.position && within(e.position) && e.position.distanceTo(bot.entity.position) <= 8).flatMap(e => {
+      try { const item = e.getDroppedItem?.(); return item?.name && Number.isInteger(item.count) ? [{ name: item.name, count: item.count, position: point(e.position) }] : []; } catch { return []; }
+    });
+    return { ...this.snapshot(), protocolVersion: bot.version || "unknown", recipeCatalog: recipeCatalog(bot), taskObservation: { logs, drops, craftingTables, placementCandidates, permissions: { build: "unknown", break: "unknown" } } };
   }
 
   snapshot() {
@@ -146,6 +194,7 @@ class MinecraftBody {
   }
 
   check(task) {
+    if (this.taskLease && (!this.inTaskRegion(this.bot.entity?.position) || (task.request.position && !this.inTaskRegion(task.request.position)))) throw new Error("任务超出授权区域");
     if (!this.ready || this.active !== task || task.finished) throw new Error("动作已停止");
     if (this.bot.health <= 0) throw new Error("角色已死亡，停止动作");
     if (this.bot.health <= 6 && !["eat", "retreat", "escape", "wake"].includes(task.request.action)) throw new Error("生命值过低，停止动作");
@@ -184,7 +233,7 @@ class MinecraftBody {
         if (this.active.request.action === "follow") this.ownerEntity();
       } catch (error) { this.cancel(error.message); }
     }
-    if (!this.autoSurvival || this.active || !position || this.bot.health <= 0 || Date.now() < Math.max(this.survivalPausedUntil, this.nextSurvivalAt)) return;
+    if (this.taskLease || !this.autoSurvival || this.active || !position || this.bot.health <= 0 || Date.now() < Math.max(this.survivalPausedUntil, this.nextSurvivalAt)) return;
     let action;
     if (this.bot.health <= 6 && this.safePositions.some((p) => position.distanceTo(p) >= 2)) action = "retreat";
     else if (this.bot.food < 14 && this.safeFood()) action = "eat";
@@ -196,6 +245,11 @@ class MinecraftBody {
   async execute(value) {
     const request = validateAction(value);
     if (!this.ready) throw new Error("机器人尚未出生或已断开");
+    if (this.taskLease && (request.taskId !== this.taskLease.id || !sameRegion(request.allowedRegion, this.taskLease.region))) throw new Error("任务独占身体，拒绝其他操作");
+    if (request.taskId && ((request.action === "collect" && this.taskLease?.region.allowCollect !== true) || (request.action === "place" && this.taskLease?.region.allowPlace !== true))) throw new Error("任务未授权采集或放置");
+    if (request.taskId && !this.taskLease) throw new Error("任务租约不存在");
+    if (request.taskId && request.action === "place" && (!this.inTaskRegion(request.position) || !this.inTaskRegion({ ...request.position, y: request.position.y - 1 }))) throw new Error("放置或支撑超出任务区域");
+    if (request.taskId && (!["collect", "pickup", "craft", "place", "equip"].includes(request.action) || (["collect", "pickup"].includes(request.action) && !request.position))) throw new Error("任务动作或精确目标无效");
     if (this.seen.has(request.id)) throw new Error("重复动作 ID；不会重放");
     if (this.active) throw new Error(this.active.finished ? "上一动作正在停止；请等待或断开重连" : "已有动作运行，请先停止");
     if (this.seen.size >= 4096) throw new Error("本次连接动作数已达上限，请重新连接");
@@ -226,7 +280,7 @@ class MinecraftBody {
         [...new Set([...Object.keys(inventory), ...Object.keys(task.before.inventory)])]
           .some((name) => (inventory[name] || 0) !== (task.before.inventory[name] || 0));
       this.finish(task, changed ? "partial" : "failed", error.message);
-    }).finally(() => { if (this.active === task) this.active = null; });
+    }).finally(() => { if (this.active === task) this.active = null; if (this.taskLease?.releasePending) this.taskLease = null; });
     return promise;
   }
 
@@ -238,6 +292,7 @@ class MinecraftBody {
 
   async near(position, distance, task) {
     this.check(task);
+    if (!this.inTaskRegion(position)) throw new Error("目标超出任务区域");
     await this.bot.pathfinder.goto(new this.goals.GoalNear(position.x, position.y, position.z, distance));
     this.check(task);
     if (this.bot.entity.position.distanceTo(position) > distance + 0.5) throw new Error("寻路已返回，但位置未达到目标");
@@ -300,7 +355,7 @@ class MinecraftBody {
       task.progress.pickedStacks = 0;
       while (task.progress.pickedStacks < count) {
         this.check(task);
-        const entity = Object.values(bot.entities).filter((entity) => entity.name === "item" && entity.position.distanceTo(bot.entity.position) <= 8)
+        const entity = Object.values(bot.entities).filter((entity) => entity.name === "item" && this.inTaskRegion(entity.position) && entity.position.distanceTo(bot.entity.position) <= 8 && (!task.request.taskId || (task.request.material === entity.getDroppedItem?.()?.name && Math.hypot(entity.position.x - task.request.position.x, entity.position.y - task.request.position.y, entity.position.z - task.request.position.z) <= 0.75)))
           .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0];
         if (!entity) break;
         const before = counts(bot.inventory.items());
@@ -329,13 +384,13 @@ class MinecraftBody {
       const skipped = new Set();
       while (task.progress.dug < count) {
         this.check(task);
-        const positions = bot.findBlocks({ matching: ids, maxDistance: 24, count: 48 });
-        const position = positions.find((p) => !skipped.has(p.toString()) && this.safeBlock(bot.blockAt(p), minimumY));
+        const positions = task.request.position ? [bot.entity.position.offset(task.request.position.x - bot.entity.position.x, task.request.position.y - bot.entity.position.y, task.request.position.z - bot.entity.position.z)] : bot.findBlocks({ matching: ids, maxDistance: 24, count: 48 });
+        const position = positions.find((p) => !skipped.has(p.toString()) && this.inTaskRegion(p) && p.distanceTo(bot.entity.position) <= 24 && this.safeBlock(bot.blockAt(p), minimumY));
         if (!position) throw new Error("附近没有可安全采集的表面方块");
         skipped.add(position.toString());
         await this.near(position, 2, task);
         const block = bot.blockAt(position);
-        if (!block || !ids.includes(block.type) || !this.safeBlock(block, minimumY)) continue;
+        if (!block || !ids.includes(block.type) || (task.request.taskId && block.name !== "oak_log") || !this.inTaskRegion(block.position) || !this.safeBlock(block, minimumY)) continue;
         if (!bot.canDigBlock(block)) throw new Error("无法挖掘目标方块");
         if (block.harvestTools) {
           const tool = selectUsableTool(bot.inventory.items(), block.harvestTools);
@@ -364,8 +419,8 @@ class MinecraftBody {
       let selected = findRecipe();
       if (!selected) {
         const id = bot.registry.blocksByName.crafting_table?.id;
-        table = id === undefined ? null : bot.findBlock({ matching: id, maxDistance: 16 });
-        if (table) { await this.near(table.position, 3, task); selected = findRecipe(); }
+        table = id === undefined ? null : (this.taskLease && task.request.position ? bot.blockAt(bot.entity.position.offset(task.request.position.x - bot.entity.position.x, task.request.position.y - bot.entity.position.y, task.request.position.z - bot.entity.position.z)) : this.taskLease ? bot.findBlocks({ matching: id, maxDistance: 16, count: 64 }).filter(p => this.inTaskRegion(p)).map(p => bot.blockAt(p)).find(b => b?.name === "crafting_table") : bot.findBlock({ matching: id, maxDistance: 16 }));
+        if (table && table.name === "crafting_table" && this.inTaskRegion(table.position) && table.position.distanceTo(bot.entity.position) <= 16) { await this.near(table.position, 3, task); selected = findRecipe(); }
       }
       if (!selected) throw new Error("材料不足，或缺少附近的工作台");
       const before = counts(bot.inventory.items())[selected.name] || 0;
