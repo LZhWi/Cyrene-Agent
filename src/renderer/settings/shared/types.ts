@@ -188,6 +188,7 @@ export interface MemoryPanelPayload {
     createdAt: number;
     sourceAt?: number;
     sourceEndAt?: number;
+    isSummary?: boolean;
   }>;
   importedDocs: Array<{
     importId: string | null;

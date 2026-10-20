@@ -94,7 +94,7 @@ export async function loadMemoryPanelData(): Promise<{
   return {
     l0,
     l1,
-    l2: l2.sort((a, b) => b.createdAt - a.createdAt),
+    l2: l2.sort((a, b) => (b.sourceEndAt ?? b.sourceAt ?? b.createdAt) - (a.sourceEndAt ?? a.sourceAt ?? a.createdAt)),
     importedDocs,
     reflections: reflectionLogs
       .slice()

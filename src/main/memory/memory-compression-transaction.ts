@@ -10,6 +10,8 @@ export interface CompressionTransactionInput {
   content: string;
   triggerText: string;
   sourceConversationId: string;
+  sourceAt?: number;
+  sourceEndAt?: number;
   sources: CompressionSource[];
 }
 
@@ -18,6 +20,8 @@ export interface CompressionTransactionDeps {
     content: string;
     triggerText: string;
     sourceConversationId: string;
+    sourceAt?: number;
+    sourceEndAt?: number;
     isPinned: false;
     isSummary: true;
     subEntryIds: string[];
@@ -42,6 +46,8 @@ export async function commitMemoryCompression(
     content: input.content,
     triggerText: input.triggerText,
     sourceConversationId: input.sourceConversationId,
+    sourceAt: input.sourceAt,
+    sourceEndAt: input.sourceEndAt,
     isPinned: false,
     isSummary: true,
     subEntryIds,

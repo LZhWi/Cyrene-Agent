@@ -14,6 +14,7 @@ interface CompanionEntry {
   status?: unknown;
   sourceAt?: unknown;
   sourceEndAt?: unknown;
+  isSummary?: unknown;
   confidence?: unknown;
   importance?: unknown;
   pinned?: unknown;
@@ -109,6 +110,7 @@ export async function loadCompanionMemoryPanelData(
     createdAt: timestamp(entry.sourceAt),
     sourceAt: timestamp(entry.sourceAt),
     ...(timestamp(entry.sourceEndAt) ? { sourceEndAt: timestamp(entry.sourceEndAt) } : {}),
+    isSummary: entry.isSummary === true,
   })).sort((a, b) => b.createdAt - a.createdAt);
   return { l0, l1, l2, importedDocs, reflections: reflectionItems(state), lifecycleTrackingEnabled: state.lifecycle?.enabled === true };
 }

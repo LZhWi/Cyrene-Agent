@@ -46,6 +46,8 @@ export interface L2Memory {
   sourceQuote?: string
   sourceConversationId: string
   createdAt: number
+  sourceAt?: number
+  sourceEndAt?: number
   lastAccessedAt: number
   accessCount: number
   weight: number

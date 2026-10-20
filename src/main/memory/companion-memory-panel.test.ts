@@ -7,6 +7,16 @@ import {
 } from "./companion-memory-panel";
 
 describe("companion memory native panel adapter", () => {
+  it("preserves summary labels and source time bounds", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, data: { entries: [
+      { id: "summary", content: "同一旅行系列", sourceAt: 100, sourceEndAt: 300, isSummary: true },
+      { id: "ordinary", content: "独立事件", sourceAt: 200 },
+    ] } }));
+    const panel = await loadCompanionMemoryPanelData(invoke, []);
+    expect(panel.l2.find(entry => entry.id === "summary")).toMatchObject({ isSummary: true, sourceAt: 100, sourceEndAt: 300 });
+    expect(panel.l2.find(entry => entry.id === "ordinary")?.isSummary).not.toBe(true);
+  });
+
   it("reads lifecycle tracking from plugin state without changing it", async () => {
     for (const enabled of [false, true]) {
       const invoke = vi.fn(async () => ({ ok: true, data: { lifecycle: { enabled }, entries: [] } }));

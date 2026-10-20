@@ -161,7 +161,8 @@ async function refresh() {
       const article = document.createElement("article"), body = document.createElement("div");
       const verdict = { mergeable: "模型认为可无损合并", different: "模型认为不应合并", uncertain: "证据不足" }[review.verdict];
       const status = { pending: "待处理", dismissed: "已关闭", stale: "已失效并重新排队", applied: "已应用", undone: "已撤销" }[review.status];
-      const safety = `置信度 ${review.confidence === undefined ? "未提供" : review.confidence.toFixed(2)} · 完整覆盖 ${review.coverageConfirmed === true ? "已确认" : "未确认"}`;
+      const relationLabel = { same_event: "同一事件", same_series: "同一系列", unrelated: "不同事项", uncertain: "证据不足" }[review.relation] ?? "未确认";
+      const safety = `关系审查 ${relationLabel} · 置信度 ${review.confidence === undefined ? "未提供" : review.confidence.toFixed(2)} · 完整覆盖 ${review.coverageConfirmed === true ? "已确认" : "未确认"}`;
       body.textContent = `${verdict} · ${status}\n${safety}\n${review.reason}${review.summary ? `\n候选总结：${review.summary}` : ""}\n${review.entries.map((entry, index) => `${index + 1}. ${entry.content}（来源 ${new Date(entry.sourceAt).toLocaleString()}${entry.sourceEndAt !== undefined ? ` 至 ${new Date(entry.sourceEndAt).toLocaleString()}` : ""}）`).join("\n")}`;
       article.append(body);
       if (review.status === "pending") {

@@ -32,6 +32,12 @@ const input = {
 };
 
 describe("memory compression transaction", () => {
+  it("forwards original source time bounds to the summary", async () => {
+    const deps = createDeps([]);
+    await commitMemoryCompression({ ...input, sourceAt: 10, sourceEndAt: 30 }, deps);
+    expect(deps.createSummary).toHaveBeenCalledWith(expect.objectContaining({ sourceAt: 10, sourceEndAt: 30 }));
+  });
+
   it("syncs the summary before archiving sources and cleaning old vectors", async () => {
     const events: string[] = [];
     const deps = createDeps(events);

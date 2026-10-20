@@ -36,12 +36,13 @@ lifecycleToggle?.addEventListener("change", async () => {
 });
 
 function formatL2MemoryTimeMeta(item: NonNullable<typeof memoryState.panelCache>["l2"][number]): string {
-  if (typeof item.sourceAt !== "number") return `创建于：${formatDateTime(item.createdAt)}`;
+  const summaryLabel = item.isSummary ? "合并摘要 · " : "";
+  if (typeof item.sourceAt !== "number") return `${summaryLabel}创建于：${formatDateTime(item.createdAt)}`;
   const sourceStart = formatDateTime(item.sourceAt);
   const sourceEnd = typeof item.sourceEndAt === "number" && item.sourceEndAt !== item.sourceAt
     ? ` ～ ${formatDateTime(item.sourceEndAt)}`
     : "";
-  return `来源于：${sourceStart}${sourceEnd} · 写入于：${formatDateTime(item.createdAt)}`;
+  return `${summaryLabel}来源于：${sourceStart}${sourceEnd} · 写入于：${formatDateTime(item.createdAt)}`;
 }
 
 function renderL2List(query = ""): void {
