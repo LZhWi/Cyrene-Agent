@@ -125,6 +125,7 @@ function writeSettings(settings: Record<string, unknown>): void {
 
 const DAY = 24 * 60 * 60 * 1000;
 const NARRATIVE_OK = "这些印象沉淀下来后，我发现我们的默契就藏在这些琐碎里，值得我一直记着。";
+const SAME_EVENT = JSON.stringify({ relation: "same_event", reason: "同一件事的互补细节" });
 
 beforeEach(() => {
   mocks.dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-dream-"));
@@ -318,6 +319,27 @@ describe("runDreamCycle", () => {
     expect(mocks.capturedPrompts).toHaveLength(0);
   });
 
+  it.each([undefined, 10 * DAY])("合并摘要保留来源时间跨度，旧条目缺少来源时间时回退创建时间（终点 %s）", async (endOffset) => {
+    const now = Date.now();
+    mocks.l2Memories = [
+      makeL2({ id: "ag1", status: "aging", ragId: "rag_ag1", sourceAt: now - 50 * DAY, sourceEndAt: endOffset === undefined ? undefined : now - endOffset }),
+      makeL2({ id: "ag2", status: "aging", ragId: "rag_ag2", sourceAt: now - 20 * DAY }),
+      makeL2({ id: "ag3", status: "aging", ragId: "rag_ag3", createdAt: now - 60 * DAY }),
+    ];
+    mocks.ragEntries = ["ag1", "ag2", "ag3"].map((id) => ({ id: `rag_${id}`, embedding: [1, 0, 0] }));
+    mocks.llmResponses = [SAME_EVENT, "三条旧印象的合并总结。"];
+
+    const result = await runDreamCycle();
+
+    expect(result.mergedGroups).toBe(1);
+    expect(mocks.l2Memories.find((m) => m.id === "sum_1")).toMatchObject({
+      isSummary: true,
+      subEntryIds: ["ag1", "ag2", "ag3"],
+      sourceAt: now - 60 * DAY,
+      sourceEndAt: now - (endOffset ?? 20 * DAY),
+    });
+  });
+
   it("完整三段：降级 → 沉淀叙事 → 合并 aging 组", async () => {
     const now = Date.now();
     // 3 条 active（activeCap=1 → 降 2 条）+ 3 条同向量的 aging（成 1 组）
@@ -334,7 +356,7 @@ describe("runDreamCycle", () => {
       { id: "rag_ag2", embedding: [0.99, 0.05, 0] },
       { id: "rag_ag3", embedding: [0.98, 0.1, 0] },
     ];
-    mocks.llmResponses = [NARRATIVE_OK, "三条相近印象的合并总结。"];
+    mocks.llmResponses = [NARRATIVE_OK, SAME_EVENT, "三条相近印象的合并总结。"];
 
     const result = await runDreamCycle({ params: { activeCap: 1 } });
 
@@ -381,7 +403,7 @@ describe("runDreamCycle", () => {
       { id: "rag_ag2", embedding: [0.99, 0.05, 0] },
       { id: "rag_ag3", embedding: [0.98, 0.1, 0] },
     ];
-    mocks.llmResponses = [""];
+    mocks.llmResponses = [SAME_EVENT, ""];
     const result = await runDreamCycle();
     expect(result.status).toBe("completed");
     expect(result.mergedGroups).toBe(0);
@@ -405,6 +427,74 @@ describe("runDreamCycle", () => {
     expect(result.status).toBe("completed");
     expect(result.mergedGroups).toBe(0); // 只剩 ag1 一条，凑不成组
     expect(mocks.capturedPrompts).toHaveLength(0);
+  });
+
+  it.each([
+    JSON.stringify({ relation: "unrelated", reason: "全息装置和针线礼物是不同的事" }),
+    JSON.stringify({ relation: "uncertain", reason: "无法确认属于同一系列" }),
+    JSON.stringify({ relation: "same_event", reason: "" }),
+    JSON.stringify({ relation: "similar_topic", reason: "都提到为 AI 制作物件" }),
+    "可以合并",
+    "{}",
+  ])("关系判断不通过或格式无效时原样保留候选：%s", async (decision) => {
+    mocks.l2Memories = [
+      makeL2({ id: "ag1", status: "aging", ragId: "rag_ag1", content: "用户会随身携带全息装置" }),
+      makeL2({ id: "ag2", status: "aging", ragId: "rag_ag2", content: "用户把全息装置比作窗子" }),
+      makeL2({ id: "ag3", status: "aging", ragId: "rag_ag3", content: "用户会针线活，要给小摆件织丝带" }),
+    ];
+    mocks.ragEntries = ["ag1", "ag2", "ag3"].map((id) => ({ id: `rag_${id}`, embedding: [1, 0, 0] }));
+    const before = structuredClone(mocks.l2Memories);
+    mocks.llmResponses = [decision, "不得使用这条合并摘要"];
+
+    const result = await runDreamCycle();
+
+    expect(result.mergedGroups).toBe(0);
+    expect(mocks.capturedPrompts).toHaveLength(1);
+    expect(mocks.l2Memories).toEqual(before);
+    expect(mocks.mergeBatches).toEqual([]);
+    expect(mocks.deletedVectors).toEqual([]);
+    expect(mocks.addedSummaries).toEqual([]);
+  });
+
+  it.each(["same_event", "same_series"])("模型确认 %s 后才请求摘要并提交合并", async (relation) => {
+    mocks.l2Memories = ["A", "B", "C"].map((place) => makeL2({
+      id: place, status: "aging", ragId: `rag_${place}`, content: `用户旅游去过${place}`,
+      sourceAt: Date.now() - 30 * DAY,
+    }));
+    mocks.ragEntries = ["A", "B", "C"].map((id) => ({ id: `rag_${id}`, embedding: [1, 0, 0] }));
+    mocks.llmResponses = [JSON.stringify({ relation, reason: "同一用户旅行经历系列" }), "用户旅游去过 A、B、C。"];
+
+    const result = await runDreamCycle();
+
+    expect(result.mergedEntries).toBe(3);
+    expect(mocks.capturedPrompts).toHaveLength(2);
+    const judgePrompt = mocks.capturedPrompts[0].find((m) => m.role === "user")!.content;
+    expect(judgePrompt).toContain("同一件事");
+    expect(judgePrompt).toContain("同一系列");
+    expect(judgePrompt).toContain("sourceAt");
+    expect(judgePrompt).toContain("用户旅游去过A");
+    expect(mocks.capturedPrompts[1].find((m) => m.role === "user")!.content).toContain("合并成一条");
+  });
+
+  it.each(["error", "abort"])("关系判断%s时不提交合并", async (mode) => {
+    mocks.l2Memories = ["ag1", "ag2", "ag3"].map((id) => makeL2({ id, status: "aging", ragId: `rag_${id}` }));
+    mocks.ragEntries = ["ag1", "ag2", "ag3"].map((id) => ({ id: `rag_${id}`, embedding: [1, 0, 0] }));
+    const before = structuredClone(mocks.l2Memories);
+    const controller = new AbortController();
+    mocks.llmResponses = [SAME_EVENT];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      if (mode === "error") throw new Error("判定请求失败");
+      controller.abort();
+      return { ok: true, json: async () => ({}) };
+    }));
+
+    const result = await runDreamCycle({ signal: controller.signal });
+
+    expect(result.mergedGroups).toBe(0);
+    if (mode === "abort") expect(result.status).toBe("aborted");
+    expect(mocks.capturedPrompts).toHaveLength(1);
+    expect(mocks.l2Memories).toEqual(before);
+    expect(mocks.deletedVectors).toEqual([]);
   });
 });
 

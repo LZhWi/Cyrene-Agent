@@ -1,7 +1,7 @@
 // memory-dream.sim.test.ts — 用真实 memory.json + rag 向量库做梦境管线只读模拟
 //
 // 原则：真实数据只读——读进内存后全部变更落在拷贝上，绝不回写用户文件。
-// LLM 用确定性 mock（沉淀=模板叙事；合并=拼接去重），跑的是真实聚类与真实评分。
+// LLM 用确定性 mock（沉淀=模板叙事；关系审查=不确定、不合并），跑的是真实聚类与真实评分。
 // 真实数据不存在时（CI / 其他机器）自动跳过。
 import * as fs from "fs";
 import * as os from "os";
@@ -54,6 +54,10 @@ vi.mock("../orchestrator/vendors", () => ({
     parseResponse: () => {
       const last = mocks.capturedPrompts[mocks.capturedPrompts.length - 1];
       const userMsg = last.find((m) => m.role === "user")?.content ?? "";
+      if (userMsg.includes("现在只判断关系")) {
+        // 模拟一律拒绝，避免把向量接近当作真实语义判断通过。
+        return { text: JSON.stringify({ relation: "uncertain", reason: "模拟器不验证事件关系" }) };
+      }
       // 只取「印象条目：」之后的 bullet，避免把 prompt 指令行也算进去
       const bulletBlock = userMsg.split("印象条目：")[1] ?? userMsg;
       const bullets = bulletBlock.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2).split("（当时的原话")[0]);
@@ -193,8 +197,11 @@ describe.skipIf(!DATA_EXISTS)("真实数据梦境模拟（只读）", () => {
     expect(result.demotedToAging).toBe(demotedCount);
     expect(result.narrativeWritten).toBe(true);
     // 只读模拟：fetch 已被 stub 拦截（无真实网络请求）；
-    // 调用次数 = 沉淀 1 次 + 每组合并 1 次，与预算一致
-    expect(mocks.fetchCalls).toBe(1 + result.mergedGroups);
+    // 模拟器拒绝所有候选：只有沉淀和关系审查，不发起摘要调用。
+    const reviews = mocks.capturedPrompts.filter((messages) => messages.some((m) => m.content.includes("现在只判断关系")));
+    expect(mocks.fetchCalls).toBe(1 + reviews.length);
+    expect(result.mergedGroups).toBe(0);
+    expect(mocks.addedSummaries).toHaveLength(0);
 
     // 不变量 1：降级集必然与纯函数 planner 的规划一致
     const scored = originalL2
