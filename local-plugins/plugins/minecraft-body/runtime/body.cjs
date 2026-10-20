@@ -293,7 +293,14 @@ class MinecraftBody {
   async near(position, distance, task) {
     this.check(task);
     if (!this.inTaskRegion(position)) throw new Error("目标超出任务区域");
-    await this.bot.pathfinder.goto(new this.goals.GoalNear(position.x, position.y, position.z, distance));
+    // GoalNear tests integer path nodes, while the bot stands near the cell's
+    // horizontal center. A boundary node can therefore pass GoalNear yet fail
+    // our actual Euclidean reach check (e.g. 3 becomes sqrt(3.5² + 0.5²)).
+    // Leave margin for this quantization for ordinary interaction distances;
+    // preserve sub-block pickup/retreat goals, which already require the target
+    // cell. The final actual-position check below remains authoritative.
+    const navigationDistance = distance >= 1 ? Math.max(0, distance - 0.75) : distance;
+    await this.bot.pathfinder.goto(new this.goals.GoalNear(position.x, position.y, position.z, navigationDistance));
     this.check(task);
     if (this.bot.entity.position.distanceTo(position) > distance + 0.5) throw new Error("寻路已返回，但位置未达到目标");
   }

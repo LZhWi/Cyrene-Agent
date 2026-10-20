@@ -31,7 +31,12 @@ export function validateConnection(value: unknown): Connection {
 type Message = { type: string; id?: string; data?: any };
 export class BodyManager implements TaskBody {
   private taskOwner?: string;
-  private rpcPending = new Map<string, {resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
+  // Invalidates observations sent before a newer action or connection transition.
+  private actionRevision = 0;
+  private knownActionId?: string;
+  private observationSequence = 0;
+  private appliedObservation = 0;
+  private rpcPending = new Map<string, {observation?: {revision:number;sequence:number};resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
   private child?: ChildProcess;
   private starting = false;
   private stopping?: Promise<void>;
@@ -58,10 +63,31 @@ export class BodyManager implements TaskBody {
     if (this.child !== child || this.closed || !message || typeof message.type !== "string") return;
     if (message.type === "task-reply" && message.id) {
       const pending=this.rpcPending.get(message.id); if(!pending) return; clearTimeout(pending.timer); this.rpcPending.delete(message.id);
-      if(message.data?.error) pending.reject(new Error(message.data.error)); else pending.resolve(message.data?.value);
+      if(message.data?.error) pending.reject(new Error(message.data.error));
+      else {
+        const snapshot=message.data?.value;
+        if(pending.observation) {
+          const {revision,sequence}=pending.observation;
+          if(revision!==this.actionRevision || sequence<this.appliedObservation) {
+            pending.reject(new Error("身体观测已过期；不能覆盖较新的动作状态")); return;
+          }
+          if(!snapshot || typeof snapshot.connected!=="boolean") {pending.reject(new Error("身体观测无效"));return;}
+          // Apply in the IPC receive callback, not a later Promise continuation:
+          // that continuation could otherwise overwrite a subsequent state event.
+          if(snapshot.activeAction?.id && snapshot.activeAction.id!==this.knownActionId) {
+            this.actionRevision++;this.knownActionId=snapshot.activeAction.id;
+          }
+          this.state=snapshot;
+          this.appliedObservation=sequence;
+        }
+        pending.resolve(snapshot);
+      }
       return;
     }
     if (message.type === "state") {
+      const activeId=message.data?.activeAction?.id;
+      if(activeId && activeId!==this.knownActionId) {this.actionRevision++;this.knownActionId=activeId;}
+      if(message.data?.connected!==this.state.connected) this.actionRevision++;
       this.state = message.data;
       if (this.state.connected) this.login = undefined;
     }
@@ -78,6 +104,7 @@ export class BodyManager implements TaskBody {
       else this.results.push(result);
       if (this.results.length > 50) this.results.shift();
     } else if (message.type === "ended") {
+      this.actionRevision++;
       this.state = { ...this.state, connected: false };
       this.notice(message.data);
     } else this.notice(message.data);
@@ -85,6 +112,8 @@ export class BodyManager implements TaskBody {
 
   private lost(child: ChildProcess, reason: string) {
     if (this.child !== child) return;
+    this.actionRevision++;
+    this.knownActionId=undefined;
     this.child = undefined;
     this.taskOwner=undefined;
     for(const pending of this.rpcPending.values()) {clearTimeout(pending.timer);pending.reject(new Error(reason));} this.rpcPending.clear();
@@ -99,6 +128,7 @@ export class BodyManager implements TaskBody {
 
   private failed(child: ChildProcess, reason: string) {
     if (this.child !== child) return;
+    this.actionRevision++;
     this.state = { ...this.state, connected: false };
     this.notice(reason);
     // A failed spawn has no process; otherwise hold the slot until its exit.
@@ -153,6 +183,8 @@ export class BodyManager implements TaskBody {
     validateAction(request);
     if (this.state.activeAction || this.pending.size) throw new Error("已有动作运行，请先停止");
     const child = this.child;
+    this.actionRevision++;
+    this.knownActionId=id;
     const result = { id, action: request.action, status: "submitted" };
     this.results.push(result);
     if (this.results.length > 50) this.results.shift();
@@ -173,7 +205,7 @@ export class BodyManager implements TaskBody {
     const id=randomUUID(), child=this.child;
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{this.rpcPending.delete(id);reject(new Error("身体任务查询超时；不重试"));},5000);
-      this.rpcPending.set(id,{resolve,reject,timer});
+      this.rpcPending.set(id,{resolve,reject,timer,...(op==="observe"?{observation:{revision:this.actionRevision,sequence:++this.observationSequence}}:{})});
       child.send({type:"task-control",id,op,taskId,region},error=>{if(error){clearTimeout(timer);this.rpcPending.delete(id);reject(error);}});
     });
   }

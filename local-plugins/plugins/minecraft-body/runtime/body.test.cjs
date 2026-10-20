@@ -333,3 +333,42 @@ test("observation filters loaded log/table targets and decodes only grounded dro
   assert.deepEqual(observed.logs,[{name:"oak_log",position:{x:2,y:64,z:0}}]);
   assert.deepEqual(observed.drops,[{name:"oak_log",count:1,position:{x:2,y:64,z:0}}]);
 });
+
+test("near leaves integer-goal margin for real bot-center interaction reach", async (t) => {
+  let realGoals;
+  try { realGoals = require("mineflayer-pathfinder").goals; } catch { t.skip("Optional pathfinder runtime dependency not installed"); return; }
+  const { body, bot } = setup(); body.goals = realGoals;
+  const table = new Position(-1,65,-1);
+  const boundary = {x:2,y:65,z:-1};
+  assert.equal(new realGoals.GoalNear(table.x,table.y,table.z,3).isEnd(boundary),true);
+  assert.ok(new Position(2.5,65,-0.5).distanceTo(table)>3.5);
+  const task = {request:action("geometry", "craft", {material:"木板",count:1}),finished:false};
+  body.active=task;
+  bot.entity.position=new Position(2.5,65,-0.5);
+  bot.pathfinder.goto=async goal => {
+    assert.equal(goal.isEnd(boundary),false,"must not accept the observed false-reach boundary cell");
+    assert.equal(goal.isEnd({x:1,y:65,z:-1}),true);
+    bot.entity.position=new Position(1.5,65,-0.5);
+  };
+  await body.near(table,3,task);
+  assert.ok(bot.entity.position.distanceTo(table)<=3.5);
+  // A library that returns without moving still fails the unchanged postcheck.
+  bot.entity.position=new Position(2.5,65,-0.5); bot.pathfinder.goto=async()=>{};
+  await assert.rejects(body.near(table,3,task),/位置未达到目标/);
+  body.active=null;
+});
+
+test("near preserves sub-block pickup and retreat target-cell goals", async (t) => {
+  let realGoals;
+  try { realGoals = require("mineflayer-pathfinder").goals; } catch { t.skip("Optional pathfinder runtime dependency not installed"); return; }
+  const {body,bot}=setup(); body.goals=realGoals;
+  const target=new Position(0.5,64,0.5);
+  const task={request:action("close-geometry","pickup",{count:1}),finished:false}; body.active=task;
+  bot.pathfinder.goto=async goal=>{
+    assert.equal(goal.rangeSq,0.25);
+    assert.equal(goal.isEnd({x:0,y:64,z:0}),true);
+    assert.equal(goal.isEnd({x:1,y:64,z:0}),false);
+    bot.entity.position=target.clone();
+  };
+  await body.near(target,0.5,task); body.active=null;
+});

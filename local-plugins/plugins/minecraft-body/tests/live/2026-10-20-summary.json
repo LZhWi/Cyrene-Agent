@@ -1,0 +1,182 @@
+{
+  "server": "official Mojang Java 1.21.11",
+  "serverSha1": "64bb6d763bed0a9f1d632ec347938594144943ed",
+  "bind": "127.0.0.1:25575",
+  "world": "isolated-test-world",
+  "java": "OpenJDK21.0.12.1",
+  "fixture": "new local superflat world; grass platform y64; empty inventory at0.5,65,0.5; four placed oak logs; no table; permission region -8..8 x/z64..72y",
+  "results": [
+    {
+      "name": "collect_permission_denied",
+      "pass": true,
+      "state": "blocked",
+      "actions": 0,
+      "startedAt": "2026-10-20T11:23:27.570Z",
+      "finishedAt": "2026-10-20T11:23:27.721Z",
+      "inventory": {},
+      "heldItem": null,
+      "reason": "missing_workbench:needs_materials:collection_not_authorized:oak_log",
+      "effectsUncertain": false
+    },
+    {
+      "name": "placement_permission_denied",
+      "pass": true,
+      "state": "blocked",
+      "actions": 0,
+      "startedAt": "2026-10-20T11:23:29.675Z",
+      "finishedAt": "2026-10-20T11:23:29.796Z",
+      "inventory": {},
+      "heldItem": null,
+      "reason": "missing_workbench:placement_not_authorized",
+      "effectsUncertain": false
+    },
+    {
+      "name": "wooden_pickaxe_full_cycle_1",
+      "pass": true,
+      "state": "completed",
+      "actions": 14,
+      "startedAt": "2026-10-20T11:23:31.783Z",
+      "finishedAt": "2026-10-20T11:23:49.640Z",
+      "inventory": {
+        "stick": 2,
+        "oak_planks": 3,
+        "wooden_pickaxe": 1
+      },
+      "heldItem": "wooden_pickaxe",
+      "reason": "observed_inventory_goal_met",
+      "effectsUncertain": false
+    },
+    {
+      "name": "wooden_pickaxe_full_cycle_2",
+      "pass": true,
+      "state": "completed",
+      "actions": 14,
+      "startedAt": "2026-10-20T11:23:51.601Z",
+      "finishedAt": "2026-10-20T11:24:10.067Z",
+      "inventory": {
+        "stick": 2,
+        "oak_planks": 3,
+        "wooden_pickaxe": 1
+      },
+      "heldItem": "wooden_pickaxe",
+      "reason": "observed_inventory_goal_met",
+      "effectsUncertain": false
+    },
+    {
+      "name": "wooden_pickaxe_full_cycle_3",
+      "pass": true,
+      "state": "completed",
+      "actions": 14,
+      "startedAt": "2026-10-20T11:24:12.058Z",
+      "finishedAt": "2026-10-20T11:24:30.588Z",
+      "inventory": {
+        "stick": 2,
+        "oak_planks": 3,
+        "wooden_pickaxe": 1
+      },
+      "heldItem": "wooden_pickaxe",
+      "reason": "observed_inventory_goal_met",
+      "effectsUncertain": false
+    },
+    {
+      "name": "cancel_during_action",
+      "pass": true,
+      "state": "blocked",
+      "actions": 1,
+      "startedAt": "2026-10-20T11:24:32.572Z",
+      "finishedAt": "2026-10-20T11:24:33.029Z",
+      "inventory": {},
+      "heldItem": null,
+      "reason": "动作效果不确定；停止自动执行，需核对现场并确认",
+      "effectsUncertain": true
+    },
+    {
+      "name": "outside_region_rejected",
+      "pass": true,
+      "state": null,
+      "actions": null,
+      "startedAt": null,
+      "finishedAt": null,
+      "inventory": null,
+      "heldItem": null,
+      "reason": null,
+      "effectsUncertain": null
+    }
+  ],
+  "preservedHarnessValidation": {
+    "exitCode": 0,
+    "serverStopped": true,
+    "results": [
+      {
+        "name": "collect_permission_denied",
+        "state": "blocked",
+        "actions": 0,
+        "startedAt": "2026-10-20T11:25:32.803Z",
+        "finishedAt": "2026-10-20T11:25:32.974Z",
+        "heldItem": null,
+        "woodenPickaxes": 0,
+        "pass": true
+      },
+      {
+        "name": "placement_permission_denied",
+        "state": "blocked",
+        "actions": 0,
+        "startedAt": "2026-10-20T11:25:34.959Z",
+        "finishedAt": "2026-10-20T11:25:35.064Z",
+        "heldItem": null,
+        "woodenPickaxes": 0,
+        "pass": true
+      },
+      {
+        "name": "wooden_pickaxe_full_cycle_1",
+        "state": "completed",
+        "actions": 14,
+        "startedAt": "2026-10-20T11:25:37.064Z",
+        "finishedAt": "2026-10-20T11:25:58.282Z",
+        "heldItem": "wooden_pickaxe",
+        "woodenPickaxes": 1,
+        "pass": true
+      },
+      {
+        "name": "wooden_pickaxe_full_cycle_2",
+        "state": "completed",
+        "actions": 14,
+        "startedAt": "2026-10-20T11:26:00.269Z",
+        "finishedAt": "2026-10-20T11:26:18.719Z",
+        "heldItem": "wooden_pickaxe",
+        "woodenPickaxes": 1,
+        "pass": true
+      },
+      {
+        "name": "wooden_pickaxe_full_cycle_3",
+        "state": "completed",
+        "actions": 12,
+        "startedAt": "2026-10-20T11:26:20.701Z",
+        "finishedAt": "2026-10-20T11:26:38.102Z",
+        "heldItem": "wooden_pickaxe",
+        "woodenPickaxes": 1,
+        "pass": true
+      },
+      {
+        "name": "cancel_during_action",
+        "state": "blocked",
+        "actions": 1,
+        "startedAt": "2026-10-20T11:26:40.093Z",
+        "finishedAt": "2026-10-20T11:26:40.719Z",
+        "heldItem": null,
+        "woodenPickaxes": 0,
+        "pass": true
+      },
+      {
+        "name": "outside_region_rejected",
+        "state": null,
+        "actions": null,
+        "startedAt": null,
+        "finishedAt": null,
+        "heldItem": null,
+        "woodenPickaxes": 0,
+        "pass": true
+      }
+    ]
+  }
+}
