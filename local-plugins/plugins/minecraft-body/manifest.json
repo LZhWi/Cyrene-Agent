@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "minecraft-body",
   "name": "Cyrene MC 身体",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "独立 MC 身体与有界木镐目标控制器（默认关闭、手动连接）",
   "author": "Cyrene local integration",
   "entry": "index.cjs",

@@ -13,7 +13,7 @@ body{font:14px system-ui;color:var(--text-primary,#333);background:transparent;m
 <div><label for="version">协议版本（留空自动识别）</label><input id="version" placeholder="例如 1.21.4"></div>
 </div>
 <label><input id="survival" type="checkbox" style="width:auto"> 自动生存（连接时生效）：空闲时饥饿进食，低血量撤回安全点。默认关闭。</label>
-<button id="connect">连接</button><button id="disconnect">断开</button>
+<button id="connect" disabled>连接</button><button id="disconnect" disabled>断开</button>
 <div class="grid">
 <div><label for="action">动作</label><select id="action">
 <optgroup label="陪伴与移动"><option value="come">过来</option><option value="follow">跟随</option><option value="goto">走到指定位置</option><option value="set_home">当前位置设为家</option><option value="home">回家</option><option value="look">看向主人</option><option value="retreat">撤回安全点</option><option value="escape">一格浅坑垫脚脱困</option></optgroup>
@@ -28,8 +28,9 @@ body{font:14px system-ui;color:var(--text-primary,#333);background:transparent;m
 <div id="coordinates" class="grid" hidden><div><label for="x">目标 X</label><input id="x" type="number" value="0"></div><div><label for="y">目标 Y</label><input id="y" type="number" value="64"></div><div><label for="z">目标 Z</label><input id="z" type="number" value="0"></div></div>
 <label id="door-field" hidden><input id="door-open" type="checkbox" checked style="width:auto"> 打开木门（取消勾选为关闭）</label>
 <p id="action-help"></p>
-<button id="execute">执行动作</button><button id="cancel">停止动作</button>
-<p>任务控制器 V1 预览：通过 start_goal 工具启动。先核对世界实际变化，等待动作停止，再解除不确定状态。</p><button id="task-cancel">停止高层任务</button><button id="task-ack">已核对现场，确认不确定效果</button><pre id="task-state" aria-label="任务状态"></pre>
-<p id="notice" role="status"></p><p id="summary"></p><p id="result" aria-live="polite"></p><details><summary>详细状态、背包与动作证据</summary><pre id="state" aria-label="身体状态和动作结果"></pre></details>
+<button id="execute" disabled>执行动作</button><button id="cancel" disabled>停止动作</button>
+<p>任务控制器 V1 预览：通过 start_goal 工具启动。先核对世界实际变化，等待动作停止，再解除不确定状态。</p><button id="task-cancel" disabled>停止高层任务</button><button id="task-ack" disabled>已核对现场，确认不确定效果</button><pre id="task-state" aria-label="任务状态"></pre>
+<button id="refresh" disabled>刷新状态（只读）</button><p>连接表单仅用于下一次手动连接；重开面板会恢复默认值，不代表后台连接已改变。</p>
+<p id="notice" role="status"></p><p id="summary">等待主程序通信就绪…</p><p id="result" aria-live="polite"></p><details><summary>详细状态、背包与动作证据</summary><pre id="state" aria-label="身体状态和动作结果"></pre></details>
 <script src="/.cyrene/panel-bridge.js"></script><script src="settings.js"></script>
 </body></html>
