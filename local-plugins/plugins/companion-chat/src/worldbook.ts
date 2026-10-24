@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { PluginStorage } from "@playa0v0/cyrene-plugin-sdk";
 
 interface Entry { id: string; title: string; keywords: string[]; content: string; priority: number; permanent: boolean; intrinsicValue: number; linkTriggers: string[] }
@@ -63,6 +64,7 @@ function validState(raw: unknown, ids: Set<string>): raw is State {
 
 export function createWorldbook(storage: PluginStorage, root = rootPath()) {
   const entries = FILES.flatMap(name => parseWorldbook(read(root, name), name));
+  const catalogHash = createHash("sha256").update(JSON.stringify(entries)).digest("hex");
   const dynamic = entries.filter(e => !e.permanent), ids = new Set(dynamic.map(e => e.id));
   const fresh = (): State => ({ version: 2, revision: 0, turn: 0, entries: Object.fromEntries(dynamic.map(e => [e.id, { activation: 0, userSilence: 0, modelSilence: 0, recentUserHits: [] }])) });
   const stored = storage.get<State>("worldbook-state");
@@ -71,9 +73,10 @@ export function createWorldbook(storage: PluginStorage, root = rootPath()) {
   const pending = new Map<string, Pending>();
   const accepted = new Set<string>();
 
-  const preview = (runId: string | undefined, userText: string, modelText = "") => {
+  const preview = (runId: string | undefined, userText: string, modelText = "", independent = false) => {
     if (runId) accepted.delete(runId);
-    const next = clone(state), userHits = new Set<string>(), turn = state.turn + 1;
+    const base = independent ? fresh() : state;
+    const next = clone(base), userHits = new Set<string>(), turn = base.turn + 1;
     for (const entry of dynamic) {
       const s = next.entries[entry.id], old = s.activation;
       const userHit = entry.keywords.some(k => userText.includes(k)), modelHit = entry.keywords.some(k => modelText.includes(k));
@@ -103,9 +106,39 @@ export function createWorldbook(storage: PluginStorage, root = rootPath()) {
   };
   return {
     preview,
+    previewReadonly: (query: string) => preview(undefined, query, "", true),
+    pendingSnapshot(runId: string) {
+      const value = pending.get(runId);
+      return value ? structuredClone({ ...value, catalogHash }) : undefined;
+    },
+    restorePending(runId: string, raw: unknown, wasAccepted: boolean): boolean {
+      const value = raw as Pending & { catalogHash: string };
+      if (!value || !Number.isSafeInteger(value.baseRevision) || value.baseRevision < 0 || typeof value.catalogHash !== "string"
+        || !validState(value.next, ids) || value.next.revision !== value.baseRevision
+        || Object.keys(value.next.entries).length !== ids.size) throw new Error("SQLITE_WORLDBOOK_RECEIPT_CORRUPT");
+      if (value.catalogHash !== catalogHash || value.baseRevision !== state.revision) return false;
+      if (value.next.turn !== state.turn + 1) throw new Error("SQLITE_WORLDBOOK_RECEIPT_CORRUPT");
+      pending.set(runId, structuredClone({ baseRevision: value.baseRevision, next: value.next }));
+      if (wasAccepted) accepted.add(runId); else accepted.delete(runId);
+      return true;
+    },
     accept(runId: string) { if (!pending.has(runId)) return false; accepted.add(runId); return true; },
-    commit(runId: string) { const item = pending.get(runId); pending.delete(runId); const wasAccepted = accepted.delete(runId); if (!item || !wasAccepted || item.baseRevision !== state.revision) return false; state = { ...item.next, revision: state.revision + 1 }; storage.set("worldbook-state", state); return true; },
+    commit(runId: string) {
+      if ((storage as PluginStorage & { isolationAggregate?: boolean }).isolationAggregate !== true) {
+        const item = pending.get(runId); pending.delete(runId); const wasAccepted = accepted.delete(runId); if (!item || !wasAccepted || item.baseRevision !== state.revision) return false; state = { ...item.next, revision: state.revision + 1 }; storage.set("worldbook-state", state); return true;
+      }
+      const item = pending.get(runId);
+      if (!item || !accepted.has(runId) || item.baseRevision !== state.revision) {
+        pending.delete(runId); accepted.delete(runId); return false;
+      }
+      const candidate = { ...item.next, revision: state.revision + 1 };
+      storage.set("worldbook-state", candidate);
+      state = candidate;
+      pending.delete(runId); accepted.delete(runId);
+      return true;
+    },
     discard(runId: string) { pending.delete(runId); accepted.delete(runId); },
     view: () => ({ entries: entries.length, revision: state.revision, pending: pending.size }),
   };
 }
+

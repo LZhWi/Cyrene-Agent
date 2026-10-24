@@ -12,6 +12,7 @@ export interface PluginAssistantDeliverySink {
     pluginId: string;
     text: string;
     allowIgnoreFeedback: boolean;
+    contextRunId?: string;
   }): Promise<PluginAssistantDeliveryResult> | PluginAssistantDeliveryResult;
 }
 
@@ -31,6 +32,11 @@ export function createPluginAssistantDeliveryService(options: {
     },
     async postProactiveMessage(text, deliveryOptions) {
       assertActive();
+      const contextRunId = (deliveryOptions as { contextRunId?: unknown } | undefined)?.contextRunId;
+      if (contextRunId !== undefined && (options.pluginId !== "companion-chat"
+        || typeof contextRunId !== "string" || !contextRunId || contextRunId.length > 200)) {
+        throw pluginHostError("E_INVALID_ARGUMENT", "主动消息上下文凭据无效");
+      }
       if (typeof text !== "string" || text.trim().length === 0 || text.length > MAX_MESSAGE_CHARS) {
         throw pluginHostError("E_INVALID_ARGUMENT", `助手消息必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
       }
@@ -43,6 +49,7 @@ export function createPluginAssistantDeliveryService(options: {
         pluginId: options.pluginId,
         text,
         allowIgnoreFeedback: deliveryOptions?.allowIgnoreFeedback === true,
+        ...(typeof contextRunId === "string" ? { contextRunId } : {}),
       });
       assertActive();
       return result;

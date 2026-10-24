@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../orchestrator/vendors/types";
+import { waitForProducer } from "../application/wait-for-producer";
 import {
   canCommitProactiveMessage,
   canStartProactiveGeneration,
@@ -46,10 +47,13 @@ export interface ProactiveChatService {
   normalConversationEnded(now?: number): void;
   invalidate(): void;
   isGenerating(): boolean;
+  shutdown(signal: AbortSignal): Promise<void>;
 }
 
 export function createProactiveChatService(deps: ProactiveChatServiceDeps): ProactiveChatService {
   let generating = false;
+  let closing = false;
+  let pending: Promise<void> | undefined;
 
   const persistMutation = (mutate: (state: ProactiveState) => void): void => {
     const state = deps.loadState();
@@ -59,6 +63,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
 
   return {
     async evaluateCandidate(candidate): Promise<void> {
+      if (closing) return;
       const initialState = deps.loadState();
       const rawInitialSnapshot = deps.getSnapshot();
       const initialSnapshot = { ...rawInitialSnapshot, generationBusy: rawInitialSnapshot.generationBusy || generating };
@@ -73,10 +78,14 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       }
 
       generating = true;
+      let finish!: () => void;
+      pending = new Promise<void>((resolve) => { finish = resolve; });
       const generationEpoch = initialState.proactiveEpoch;
       try {
         const messages = await deps.buildMessages(candidate, initialState);
+        if (closing) return;
         const result = await deps.runModel(messages);
+        if (closing) return;
         const stateAfterModel = deps.loadState();
         if (stateAfterModel.proactiveEpoch !== generationEpoch) {
           deps.log?.("generation_discarded", { scene: candidate.sceneId, reason: "stale_epoch" });
@@ -112,6 +121,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         }
 
         const commitState = deps.loadState();
+        if (closing) return;
         const commitSnapshot = deps.getSnapshot();
         const commitDecision = canCommitProactiveMessage(
           commitSnapshot,
@@ -148,7 +158,14 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         deps.log?.("message_committed", { scene: candidate.sceneId, source });
       } finally {
         generating = false;
+        pending = undefined;
+        finish();
       }
+    },
+
+    shutdown(signal): Promise<void> {
+      closing = true;
+      return waitForProducer("proactive generation", pending ? [pending] : [], signal);
     },
 
     invalidateForUserMessage(): void {

@@ -70,6 +70,7 @@ function resolveMcpEffectKind(
  * 返回注册的工具 ID 列表。
  */
 export async function connectMcpServer(config: McpServerConfig): Promise<string[]> {
+  if (mcpStopping) throw new Error("APPLICATION_STOPPING");
   console.log(LOG_PREFIX, "连接 MCP server:", config.name, "(" + config.id + ")");
 
   let transport: Transport;
@@ -100,14 +101,19 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     { capabilities: {} },
   );
 
+  const pending = { client, transport };
+  connectingMcpClients.add(pending);
+  try {
+
   try {
     await client.connect(transport);
+    if (mcpStopping) throw new Error("APPLICATION_STOPPING");
     console.log(LOG_PREFIX, "已连接到", config.name);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(LOG_PREFIX, "连接失败 [" + config.name + "]:", msg);
     // 连接失败时清理 transport
-    try { await transport.close(); } catch (_) { /* ignore */ }
+    await closeMcpClient(pending);
     throw err;
   }
 
@@ -125,6 +131,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
 
   try {
     const result = await client.listTools();
+    if (mcpStopping) throw new Error("APPLICATION_STOPPING");
     mcpTools = result.tools as Array<{
       name: string;
       description?: string;
@@ -139,7 +146,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(LOG_PREFIX, "listTools 失败 [" + config.name + "]:", msg);
-    await client.close();
+    await closeMcpClient(pending);
     throw err;
   }
 
@@ -223,6 +230,9 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
 
   console.log(LOG_PREFIX, "MCP server 就绪:", config.name, "(" + registeredIds.length + " 个工具)");
   return registeredIds;
+  } finally {
+    connectingMcpClients.delete(pending);
+  }
 }
 
 /**
@@ -242,18 +252,9 @@ export async function disconnectMcpServer(serverId: string): Promise<boolean> {
     console.log(LOG_PREFIX, "已移除工具:", toolId);
   }
 
-  try {
-    await state.client.close();
-    console.log(LOG_PREFIX, "已断开:", serverId);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(LOG_PREFIX, "client.close 失败 [" + serverId + "]:", msg);
-    // 即使 client.close 失败，也尝试关闭 transport
-    try { await state.transport.close(); } catch (_) { /* ignore */ }
-  }
-
   state.connected = false;
   mcpServerStates.delete(serverId);
+  await closeMcpClient(state);
   return true;
 }
 
@@ -278,6 +279,50 @@ export function getMcpServerStates(): Array<{
 
 // 内部状态存储
 const mcpServerStates = new Map<string, McpServerState>();
+type McpConnection = Pick<McpServerState, "client" | "transport">;
+const connectingMcpClients = new Set<McpConnection>();
+const closingMcpClients = new WeakMap<Client, Promise<void>>();
+const closingMcpTasks = new Set<Promise<void>>();
+let mcpStopping = false;
+
+function closeMcpClient(connection: McpConnection): Promise<void> {
+  const existing = closingMcpClients.get(connection.client);
+  if (existing) return existing;
+  const closing = Promise.resolve().then(async () => {
+    try {
+      await connection.client.close();
+    } catch (error) {
+      console.error(LOG_PREFIX, "client.close failed; closing transport", error);
+      await connection.transport.close();
+    }
+  });
+  closingMcpClients.set(connection.client, closing);
+  closingMcpTasks.add(closing);
+  void closing.then(() => closingMcpTasks.delete(closing), () => closingMcpTasks.delete(closing));
+  return closing;
+}
+
+export function quiesceMcpConnections(): void {
+  mcpStopping = true;
+  // Background restore is drained before stopExternalProviders. Interrupt pending
+  // handshakes now so it does not wait for a close scheduled in a later phase.
+  for (const pending of connectingMcpClients) {
+    void closeMcpClient(pending).catch((error) => {
+      console.error(LOG_PREFIX, "pending connection shutdown failed", error);
+    });
+  }
+}
+
+export async function shutdownMcpConnections(): Promise<void> {
+  quiesceMcpConnections();
+  const results = await Promise.allSettled([
+    ...closingMcpTasks,
+    ...[...mcpServerStates.keys()].map(disconnectMcpServer),
+    ...[...connectingMcpClients].map(closeMcpClient),
+  ]);
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "MCP shutdown failed");
+}
 
 
 

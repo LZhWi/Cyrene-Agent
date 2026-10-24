@@ -8,11 +8,16 @@ export function strictStorage(ctx: PluginContext): PluginStorage {
   const root = ctx.storage.rootDir();
   const realRoot = resolvePluginStorageRoot(root);
   return {
+    ...((ctx.storage as any).isolationAggregate === true ? { isolationAggregate: true } : {}),
+    ...((ctx.storage as any).isolationQueue ? { isolationQueue: (ctx.storage as any).isolationQueue } : {}),
+    ...((ctx.storage as any).isolationTransaction ? { isolationTransaction: (ctx.storage as any).isolationTransaction } : {}),
+    ...((ctx.storage as any).isolationSources ? { isolationSources: (ctx.storage as any).isolationSources } : {}),
     rootDir: () => root,
     get<T>(key: string): T | undefined {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(key)) throw new Error("存储键无效");
       const file = path.join(root, `${key}.json`);
       assertPluginStorageFile(realRoot, file);
+      if ((ctx.storage as any).isolationAggregate === true) return ctx.storage.get<T>(key);
       if (existsSync(file)) {
         try { return JSON.parse(readFileSync(file, "utf8")) as T; }
         catch { throw new Error("插件存储损坏；已停止加载，不会覆盖原文件"); }
@@ -20,7 +25,10 @@ export function strictStorage(ctx: PluginContext): PluginStorage {
       return ctx.storage.get<T>(key);
     },
     set<T>(key: string, value: T): void {
-      if (ctx.signal.aborted) throw new Error("插件已停止，拒绝迟到写入");
+      const draining = (ctx.storage as PluginStorage & { isolationAggregate?: boolean; isolationTransaction?: { canDrain?(): boolean } });
+      if (ctx.signal.aborted && !(draining.isolationAggregate === true && draining.isolationTransaction?.canDrain?.() === true)) {
+        throw new Error("插件已停止，拒绝迟到写入");
+      }
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(key)) throw new Error("存储键无效");
       for (const suffix of [".json", ".json.tmp"]) {
         const file = path.join(root, key + suffix);

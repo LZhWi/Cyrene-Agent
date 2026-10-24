@@ -349,6 +349,10 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
     dispose(): void {
       cancelPetWindowResourceRelease();
       petWindowMoveController.dispose();
+      // 退出后不再保留渲染器：下一阶段会注销它们仍在使用的 IPC。
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.destroy();
+      }
     },
   };
 }

@@ -12,7 +12,7 @@ await writeFile(path.join(run, "entry.ts"), `export {PluginManager} from ${JSON.
 await build({ entryPoints: [path.join(run, "entry.ts")], outfile: path.join(run, "host-api.cjs"), bundle: true, platform: "node", format: "cjs", target: "node24", external: ["electron"], logLevel: "silent" });
 const navigation = process.argv.includes("--navigation"), edition = process.argv.includes("--upstream") ? "upstream" : "local", localIpc = process.argv.includes("--local-ipc");
 if (navigation && edition === "upstream") {
-  const upstreamRoot = localIpc ? project : path.join(root, ".test-runtime/hud-upstream-9fcff7a");
+  const upstreamRoot = localIpc ? project : process.env.CYRENE_HUD_UPSTREAM_SOURCE || path.join(root, ".test-runtime/hud-upstream-9fcff7a");
   const endpoints = [
     ["src/main/chats/chats-ipc.ts", "CHATS_LIST", "chats:list", "handle"],
     ["src/main/chats/chats-ipc.ts", "CHATS_CREATE", "chats:create", "handle"],

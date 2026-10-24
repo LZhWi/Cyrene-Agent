@@ -4,6 +4,7 @@
 // 到 src/shared/ 需要 ../../../shared/，到 settings/ 下其他模块用 ../
 
 import type { ApiTransport } from "../../../shared/api-endpoint";
+import type { QqListenAuthRequirement } from "../../../shared/qq-listen";
 import type { ReasoningPreference } from "../../../shared/reasoning";
 import type { ChatAppearanceSettings } from "../../../shared/chat-appearance";
 import type { UiTheme } from "../../../shared/ui-theme";
@@ -166,6 +167,7 @@ export interface LocationApi {
 }
 
 export interface MemoryPanelPayload {
+  semanticReviews?: Array<{ id: string; layer: string; target: string; content: string; reason: string; evidenceQuotes: string[]; createdAt: number }>;
   lifecycleTrackingEnabled?: boolean;
   l0: {
     preferredName: string;
@@ -211,6 +213,7 @@ export interface ObsidianVaultConfig {
 }
 
 export interface MemoryPanelApi {
+  resolveSemanticReview: (id: string, expectedContent: string, action: "keep" | "edit" | "delete", content?: string) => Promise<unknown>;
   getData: () => Promise<MemoryPanelPayload>;
   setLifecycleTracking: (enabled: boolean) => Promise<{ enabled: boolean }>;
   getQueryRouter: () => Promise<{ enabled: boolean; provider: string; baseUrl: string; model: string; explicitTransport: "auto" | "openai" | "anthropic"; reasoning: "auto" | "off" | "low"; hasKey: boolean }>;
@@ -326,6 +329,7 @@ export interface SettingsApi {
   channelsSaveConfig: (patch: unknown) => Promise<any>;
   channelsRestart: () => Promise<{ ok: boolean }>;
   channelsQqTestConnection: () => Promise<{ ok: boolean; error?: string; detail?: Record<string, unknown> }>;
+  channelsQqResolveAuthRequirement: (payload: { listenMode?: string; customHost?: string }) => Promise<QqListenAuthRequirement>;
   channelsQqBotTestConnection: () => Promise<{ ok: boolean; error?: string; detail?: Record<string, unknown> }>;
   channelsLogGet: (limit?: number) => Promise<unknown[]>;
   channelsLogClear: () => Promise<{ ok: boolean }>;

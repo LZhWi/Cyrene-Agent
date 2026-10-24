@@ -60,16 +60,6 @@ function setFeishuFeedback(kind: "info" | "ok" | "err", msg: string): void {
   else channelsFeishuFeedbackEl.classList.add("channels-feedback--info");
 }
 
-/** 与主进程 onebot-reverse-ws 的 isLoopbackHost 保持一致的回环判断（渲染层本地副本） */
-function isLoopbackHostText(host: string): boolean {
-  const normalized = host.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
-  return normalized === ""
-    || normalized === "127.0.0.1"
-    || normalized === "localhost"
-    || normalized === "::1"
-    || normalized === "::ffff:127.0.0.1";
-}
-
 function setQqFeedback(kind: "info" | "ok" | "err", msg: string): void {
   if (!channelsQqFeedbackEl) return;
   channelsQqFeedbackEl.textContent = msg;
@@ -260,6 +250,7 @@ export async function loadChannelsPanel(): Promise<void> {
     return;
   }
   channelsState.initialized = true;
+  let hadQqToken = false;
   try {
     const cfg = await window.settings.channelsGetConfig();
     if (channelsWechatEnabledEl) channelsWechatEnabledEl.checked = !!cfg.wechat.enabled;
@@ -290,7 +281,7 @@ export async function loadChannelsPanel(): Promise<void> {
       ? "已保存（输入新值会覆盖）"
       : "留空仅允许本机 127.0.0.1 监听；WSL/跨网卡请先生成";
     // 已保存的 token 不回显；保存时若输入为空且没有已存值，非回环监听需要先补生成
-    let hadQqToken = !!cfg.qq?.hasAccessToken;
+    hadQqToken = !!cfg.qq?.hasAccessToken;
 
     // QQ 官方机器人字段填充（secret 加密存盘，UI 不回填明文）
     if (channelsQqBotEnabledEl) channelsQqBotEnabledEl.checked = !!cfg.qqbot?.enabled;
@@ -541,8 +532,19 @@ export async function loadChannelsPanel(): Promise<void> {
     // 非回环监听必须鉴权（主进程会硬校验）：输入为空且无已存 token 时，
     // 先生成并让用户复制到 NapCat，本次不落盘（token 保存后不再回显，用户就拿不到了）
     const listenMode = channelsQqListenModeEl?.value ?? "auto";
-    const needsToken = listenMode === "wsl"
-      || (listenMode === "custom" && !isLoopbackHostText(channelsQqCustomHostEl?.value ?? ""));
+    const customHost = channelsQqCustomHostEl?.value ?? "";
+    let needsToken: boolean;
+    try {
+      const requirement = await window.settings.channelsQqResolveAuthRequirement({ listenMode, customHost });
+      if (!requirement.ok) {
+        setQqFeedback("err", requirement.error ?? "无法解析 QQ 监听地址");
+        return;
+      }
+      needsToken = requirement.requiresAccessToken;
+    } catch (error) {
+      setQqFeedback("err", error instanceof Error ? error.message : String(error));
+      return;
+    }
     if (channelsQqTokenEl && needsToken && !channelsQqTokenEl.value && !hadQqToken) {
       const bytes = crypto.getRandomValues(new Uint8Array(32));
       channelsQqTokenEl.value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -555,7 +557,7 @@ export async function loadChannelsPanel(): Promise<void> {
     const qq: Record<string, unknown> = {
       enabled: channelsQqEnabledEl?.checked ?? false,
       listenMode,
-      customHost: channelsQqCustomHostEl?.value.trim() || undefined,
+      customHost: customHost.trim() || undefined,
       port: Number(channelsQqPortEl?.value) || 6200,
       allowedPrivateUserIds: parseIdList(channelsQqPrivateAllowlistEl?.value ?? ""),
       allowedGroupIds: parseIdList(channelsQqGroupAllowlistEl?.value ?? ""),

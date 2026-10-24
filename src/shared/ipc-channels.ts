@@ -285,6 +285,7 @@ export const IPC = {
   LOCATION_CLEAR: "location:clear",
 
   // memory panel
+  MEMORY_SEMANTIC_REVIEW_RESOLVE: "memory-panel:semantic-review-resolve",
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",
   MEMORY_LIFECYCLE_TRACKING_SET: "memory:lifecycle-tracking-set",
   MEMORY_QUERY_ROUTER_GET: "memory:query-router-get",
@@ -462,6 +463,7 @@ export const IPC = {
   CHANNELS_FEISHU_TEST_CONNECTION: "channels:feishu:test-connection",
   CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE: "channels:feishu:test-webhook-reachable",
   CHANNELS_QQ_TEST_CONNECTION: "channels:qq:test-connection",
+  CHANNELS_QQ_RESOLVE_AUTH_REQUIREMENT: "channels:qq:resolve-auth-requirement",
   // QQ 官方机器人（QQ 开放平台）专属
   CHANNELS_QQBOT_TEST_CONNECTION: "channels:qqbot:test-connection",
   // 消息日志

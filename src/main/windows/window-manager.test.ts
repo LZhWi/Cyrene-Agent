@@ -50,6 +50,7 @@ function createFakeWindow() {
 }
 
 import { createWindowManager } from "./window-manager";
+import { BrowserWindow } from "electron";
 
 describe("pet window resource release", () => {
   beforeEach(() => {
@@ -63,6 +64,22 @@ describe("pet window resource release", () => {
     });
   });
   afterEach(() => vi.useRealTimers());
+
+  it("destroys all live windows before returning from shutdown disposal", () => {
+    const manager = createWindowManager({
+      getCurrentAppIconPath: () => "icon", isDev: false,
+      loadPetWindowSettingsSlice: () => ({ petAlwaysOnTop: false }), persistPetWindowPosition: vi.fn(),
+    });
+    const pet = manager.createPetWindow();
+    const auxiliary = createFakeWindow();
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([pet, auxiliary] as never);
+    manager.dispose();
+    expect(pet.isDestroyed()).toBe(true);
+    expect(auxiliary.isDestroyed()).toBe(true);
+    manager.dispose();
+    expect(pet.destroy).toHaveBeenCalledOnce();
+    expect(auxiliary.destroy).toHaveBeenCalledOnce();
+  });
 
   it("releases a hidden window after 30 seconds and restores topmost on recreation", () => {
     const manager = createWindowManager({

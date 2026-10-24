@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { waitForProducer } from "../application/wait-for-producer";
 
 // ── 任务与决策类型 ──────────────────────────────────────────────
 
@@ -239,7 +240,7 @@ export interface ReactionQueue {
   /** 启动周期扫描器（启动即补扫一轮，重启后逾期任务尽快续上） */
   start(): void;
   /** 停止扫描器 */
-  stop(): void;
+  stop(signal?: AbortSignal): Promise<void>;
 }
 
 /**
@@ -295,6 +296,9 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
   let tasks: ReactionTask[] | null = null;
   let resolvedPath: string | null = null;
   let draining = false;
+  let paused = false;
+  let shutdownSignal: AbortSignal | undefined;
+  let pending: Promise<boolean> | undefined;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   function filePath(): string {
@@ -374,6 +378,9 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
       outcome = { type: "retry", reason: String(error) };
     }
 
+    // A timed-out shutdown must not start new effects after dependencies close.
+    // The already persisted task is retried by the next process.
+    if (shutdownSignal?.aborted) return;
     switch (outcome.type) {
       case "decided": {
         // 先落盘决策再执行副作用：崩在两者之间，重启后从"执行"续起，不重问模型
@@ -428,8 +435,15 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
   }
 
   /** 排空一轮到期任务；防重入：模型调用可能超过扫描周期，上一轮没排空时本轮直接让位 */
-  async function drainOnce(): Promise<boolean> {
-    if (draining) return false;
+  function drainOnce(): Promise<boolean> {
+    if (paused || draining) return Promise.resolve(false);
+    const work = drainAccepted();
+    pending = work;
+    void work.then(() => { if (pending === work) pending = undefined; }, () => { if (pending === work) pending = undefined; });
+    return work;
+  }
+
+  async function drainAccepted(): Promise<boolean> {
     draining = true;
     try {
       ensureLoaded();
@@ -438,6 +452,7 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
         .sort((a, b) => a.dueAt - b.dueAt);
       // 扫描时刻的到期快照逐条执行；执行期间新入队的任务（延迟都在未来）留给下一轮
       for (const task of due) {
+        if (paused) break;
         await execute(task);
       }
       return true;
@@ -489,7 +504,9 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
     drainOnce,
 
     start() {
+      if (shutdownSignal) return;
       if (timer !== null) return;
+      paused = false;
       const runDrain = () => {
         void drainOnce().catch((error: unknown) => log("reaction_drain_failed", String(error)));
       };
@@ -498,11 +515,15 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
       runDrain();
     },
 
-    stop() {
+    async stop(signal?: AbortSignal) {
+      paused = true;
+      if (signal) shutdownSignal = signal;
       if (timer !== null) {
         clearInterval(timer);
         timer = null;
       }
+      if (signal) await waitForProducer("moments reaction", pending ? [pending] : [], signal);
+      else await pending;
     },
   };
 }

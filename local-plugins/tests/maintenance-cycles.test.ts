@@ -58,7 +58,7 @@ describe("durable maintenance identity clock",()=>{
   });
   it("retains failed cycle phase across restart without repeating completed stages",async()=>{
     const f=fixture();await f.clock.start();f.setCompressionFail(true);f.add(20);await f.emit("host:turn:finished",f.event(20));
-    expect(f.clock.view().jobs[0].phases).toEqual(["compression"]);f.clock.stop();f.setCompressionFail(false);const restarted=f.create();await restarted.start();
+    expect(f.clock.view().jobs[0].phases).toEqual(["compression"]);f.clock.stop();f.setCompressionFail(false);const restarted=f.create();await restarted.start();await restarted.retry();
     expect(f.calls).toEqual(["review","compression","reflection","compression"]);expect(restarted.view().jobs).toEqual([]);restarted.stop();
   });
   it("does not clear counts on read failure and retries the persisted event",async()=>{

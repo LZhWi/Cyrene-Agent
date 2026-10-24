@@ -6,6 +6,7 @@ const { PluginManager, createPluginWindowNavigationService } = require("./host-a
 const edition = process.env.CYRENE_HUD_EDITION, modes = ["chat", "work", "code", "learn"];
 const localIpc = process.env.CYRENE_HUD_LOCAL_IPC === "1", splitHost = edition === "local" || localIpc;
 const nativePointer = process.env.CYRENE_HUD_NATIVE_POINTER === "1";
+const contractOnly = process.env.CYRENE_HUD_CONTRACT_ONLY === "1";
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(test, timeout = 3000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await test()) return; await sleep(50); } throw Error("Condition timed out"); }
 for (const name of ["userData", "sessionData", "logs"]) { fs.mkdirSync(path.join(__dirname, name), { recursive: true }); app.setPath(name, path.join(__dirname, name)); }
@@ -105,6 +106,7 @@ app.whenReady().then(async () => {
   } });
   await manager.start();
   const installed = await manager.installZip(path.join(process.env.CYRENE_HUD_ARTIFACTS, `cyrene-hud-${edition}.zip`)); assert.equal(installed.ok, true, installed.error);
+  fs.writeFileSync(path.join(__dirname, "plugins/cyrene-hud/collector.cjs"), 'module.exports = { createCollector: () => ({ snapshot: async () => ({}), dispose() {} }) };');
   assert.equal(manager.isRunning("cyrene-hud"), false);
   assert.equal((await manager.setEnabled("cyrene-hud", true)).ok, true);
   hud = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith("/hud.html"));
@@ -146,6 +148,7 @@ app.whenReady().then(async () => {
   await hud.webContents.executeJavaScript("document.querySelector('#avatarAction').click()");
   await until(async () => await hud.webContents.executeJavaScript("document.querySelector('#status').textContent === '无法打开'"));
   checks.push("Settings target uses no conversation; deleted sessions show an error without creating replacements");
+  if (!contractOnly) {
   await save({ avatarTarget: "chat", avatarSession: "existing", avatarSessionId: "chat", position: "bottom-right", scale: 1.2, clickThrough: true });
   const b = hud.getBounds();
   fixture = new BrowserWindow({ x: b.x - 15, y: b.y - 15, width: b.width + 30, height: b.height + 30, show: false, webPreferences: { sandbox: true } });
@@ -172,6 +175,7 @@ app.whenReady().then(async () => {
   assert.notEqual((await pointer({ x: b.x + Math.round(b.width / 2), y: b.y + Math.round(b.height / 2) })).hit, hud.getNativeWindowHandle().readBigUInt64LE().toString()); pointerVerified = true;
   fs.writeFileSync(path.join(__dirname, "hud-avatar.png"), (await hud.webContents.capturePage()).toPNG());
   checks.push(`${nativePointer ? "Actual Windows pointer and click" : "Injected renderer mouse events"} make the avatar interactive at 120% scale; Win32 hit tests confirm avatar targeting and passthrough elsewhere; click opens the configured session`);
+  } else await save({ avatarTarget: "chat", avatarSession: "existing", avatarSessionId: "chat" });
   await manager.setEnabled("cyrene-hud", false); assert.equal([...handlers.keys()].filter(channel => channel.startsWith("plugin:cyrene-hud:")).length, 0);
   await manager.setEnabled("cyrene-hud", true);
   assert.equal(manager.invokePluginIpc("cyrene-hud", "state", []).config.avatarSessionId, "chat");
@@ -189,6 +193,6 @@ app.whenReady().then(async () => {
   if (savedCursor) { try { await pointer(savedCursor, "move"); } catch (error) { errors.push(String(error)); } }
   for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.destroy();
   clearTimeout(deadline);
-  fs.writeFileSync(path.join(__dirname, "result.json"), JSON.stringify({ ok: errors.length === 0, edition, hostFlavor: splitHost ? "local" : "upstream", checks, errors, opened, created, modelServicesUsed: false, realUserDataUsed: false, injectedMouseAndNativeHitTestsVerified: !nativePointer && pointerVerified, actualNativePointerHoverVerified: nativePointer && pointerVerified, globalMouseMovesSent, globalMouseClicksSent, localFullAppVerified: false, upstreamFullAppVerified: false, upstreamSourceCommit: edition === "upstream" && !localIpc ? "9fcff7a3b5106af6a6c60e35a94cfe95630463af" : null }, null, 2));
+  fs.writeFileSync(path.join(__dirname, "result.json"), JSON.stringify({ ok: errors.length === 0, edition, hostFlavor: splitHost ? "local" : "upstream", checks, errors, opened, created, modelServicesUsed: false, realUserDataUsed: false, injectedMouseAndNativeHitTestsVerified: !nativePointer && pointerVerified, actualNativePointerHoverVerified: nativePointer && pointerVerified, globalMouseMovesSent, globalMouseClicksSent, localFullAppVerified: false, upstreamFullAppVerified: false, upstreamSourceCommit: edition === "upstream" && !localIpc ? process.env.CYRENE_HUD_UPSTREAM_COMMIT || "9fcff7a3b5106af6a6c60e35a94cfe95630463af" : null, contractOnly }, null, 2));
   app.exit(errors.length ? 1 : 0);
 });

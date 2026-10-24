@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { isBackgroundIndexClosing, trackBackgroundIndex } from "../application/background-index-work";
 import * as path from "path";
 import type { DocumentIndexProgress } from "../../shared/document-index";
 
@@ -49,8 +50,10 @@ export function createDocumentIndexQueue({ runner }: { runner: DocumentIndexRunn
 
   function enqueue(input: EnqueueDocumentIndexJobInput): DocumentIndexJobHandle {
     const id = randomUUID();
+    if (isBackgroundIndexClosing()) return { jobId: id, promise: Promise.resolve({ kind: "error", name: path.basename(input.filePath), reason: "APPLICATION_STOPPING" }) };
     let resolve!: (result: DocumentIndexJobResult) => void;
     const promise = new Promise<DocumentIndexJobResult>((done) => { resolve = done; });
+    void trackBackgroundIndex("document:" + input.filePath, () => promise);
     const fileName = path.basename(input.filePath);
     const cancellationListeners = new Set<() => void>();
     const job: QueueJob = {

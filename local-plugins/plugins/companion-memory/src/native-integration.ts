@@ -9,6 +9,8 @@ import { createHash } from "node:crypto";
 import type { Turn } from "../../companion-chat/src/chat";
 import type { QueryRouteDecision } from "./facets";
 import type { ExtractionPromptMessage } from "./memory-extraction";
+import { createSqliteNativeQueue, type SqliteQueueCapability } from "./sqlite-native-queue";
+import { createDurablePromptReceipts, type IsolationTransaction } from "./durable-prompt-receipts";
 
 const SETTINGS_KEY = "native-integration-settings";
 const QUEUE_KEY = "native-integration-queue";
@@ -44,6 +46,7 @@ interface NativeTask {
   receivedAt: string;
   timezone?: string;
   mode?: "chat";
+  memorySource?: NonNullable<Turn["hostSourceVersion"]>;
 }
 
 interface NativeQueueState {
@@ -54,8 +57,9 @@ interface NativeQueueState {
 }
 
 interface NativeMemory {
-  ingest(turn: Turn): unknown;
-  maintain(generate: (messages: ExtractionPromptMessage[]) => Promise<string>, signal: AbortSignal, validateSources?: (turns: Turn[], signal: AbortSignal) => Promise<string[]>): Promise<unknown>;
+  ingest(turn: Turn, signal?: AbortSignal): unknown;
+  view?(): { turns: Turn[]; processed: string[] };
+  maintain(generate: (messages: ExtractionPromptMessage[]) => Promise<string>, signal: AbortSignal, validateSources?: (turns: Turn[], signal: AbortSignal) => Promise<string[]>, ingestEntities?: (texts: string[]) => void, isolatedBatch?: { before: Turn[]; pending: Turn[] }): Promise<unknown>;
   previewArchivedRecall?(raw: { query: string }): { reason: string; candidates: Array<{ id: string; content: string; sourceAt: number; quote: string; evidence: string; lexicalScore: number }> };
   restoreArchivedFromPrompt?(candidate: { id: string; content: string; sourceAt: number }): { lifecycleChangeId: string };
   undoColdActivation?(id: string): void;
@@ -197,6 +201,18 @@ export function createNativeIntegration(
   const routeReceipts = new Map<string, Promise<QueryRouteDecision>>();
   let operationController = new AbortController();
   let restartRequested = false;
+  const sqliteCapability = (ctx.storage as typeof ctx.storage & { isolationQueue?: SqliteQueueCapability }).isolationQueue;
+  const isolationTransaction = (ctx.storage as typeof ctx.storage & { isolationTransaction?: IsolationTransaction }).isolationTransaction;
+  if (sqliteCapability && !isolationTransaction) throw new Error("SQLITE_PROMPT_TRANSACTION_REQUIRED");
+  const durableReceipts = sqliteCapability && isolationTransaction ? createDurablePromptReceipts(ctx.storage, isolationTransaction,
+    (conversationId, runId) => sqliteCapability.call("life.promptSource", conversationId, runId)) : undefined;
+  const sourceIsCurrent = async (source: NonNullable<Turn["hostSourceVersion"]>) => {
+    if (!sqliteCapability) throw new Error("缺少持久化来源版本校验");
+    const current = await sqliteCapability.call("life.memorySource", source.conversationId, source.userTurnId);
+    return Boolean(current && typeof source.userEntryId === "string" && source.userEntryId
+      && typeof source.assistantEntryId === "string" && source.assistantEntryId
+      && current.userEntryId === source.userEntryId && current.assistantEntryId === source.assistantEntryId);
+  };
 
   const queryHash = (query: string) => createHash("sha256").update(query.normalize("NFC").trim(), "utf8").digest("hex");
   const saveCold = () => ctx.storage.set(COLD_RECALL_KEY, coldRecords.slice(-MAX_COLD_RECORDS));
@@ -238,6 +254,12 @@ export function createNativeIntegration(
   }
 
   async function readFrozenTurn(task: NativeTask, signal: AbortSignal): Promise<Turn> {
+    const checkVersion = async () => {
+      if (!task.memorySource) { if (sqliteCapability) throw new Error("SQLITE_FROZEN_SOURCE_REQUIRED"); return; }
+      if (task.memorySource.conversationId !== task.conversationId || task.memorySource.userTurnId !== task.inputMessageId
+        || !await sourceIsCurrent(task.memorySource)) throw new Error("SQLITE_NATIVE_SOURCE_STALE");
+    };
+    await checkVersion();
     const conversations = ctx.deps.conversations;
     if (!conversations) throw new Error("宿主未提供会话读取能力");
     const messages: PluginConversationMessage[] = [];
@@ -270,6 +292,8 @@ export function createNativeIntegration(
     }
     const userAt = parseTime(input.at);
     const assistantAt = parseTime(output.at);
+    const memoryContext = await ctx.deps.companionContext?.memoryContext?.({ conversationId: task.conversationId, inputMessageId: input.id, kinds: ["call", "minecraft"], signal });
+    await checkVersion();
     return {
       id: `host:${task.eventId}`,
       sessionId: task.conversationId,
@@ -281,7 +305,8 @@ export function createNativeIntegration(
       inputMessageId: input.id,
       finalMessageId: output.id,
       origin: "host",
-      memoryContext: await ctx.deps.companionContext?.memoryContext?.({ conversationId: task.conversationId, inputMessageId: input.id, kinds: ["call", "minecraft"], signal }),
+      memoryContext,
+      ...(task.memorySource ? { hostSourceVersion: task.memorySource } : {}),
     };
   }
 
@@ -300,6 +325,7 @@ export function createNativeIntegration(
   async function validateHostSources(turns: Turn[], signal: AbortSignal): Promise<string[]> {
     const valid: string[] = [];
     for (const turn of turns) {
+      if (turn.hostSourceVersion && !await sourceIsCurrent(turn.hostSourceVersion)) continue;
       if (turn.origin !== "host" || !turn.inputMessageId || !turn.finalMessageId) {
         valid.push(turn.id);
         continue;
@@ -311,6 +337,7 @@ export function createNativeIntegration(
         finalMessageId: turn.finalMessageId,
         receivedAt: new Date(turn.assistantAt).toISOString(),
         mode: "chat",
+        memorySource: turn.hostSourceVersion,
       }, signal);
       if (current.user === turn.user && current.assistant === turn.assistant
         && current.userAt === turn.userAt && current.assistantAt === turn.assistantAt
@@ -358,7 +385,7 @@ export function createNativeIntegration(
         }
         const turn = await readFrozenTurn(task, signal);
         if (signal.aborted || !settings.captureEnabled) return;
-        memory.ingest(turn);
+        await memory.ingest(turn, signal);
         const completed = [...queue.completed.filter((id) => id !== task.eventId), task.eventId].slice(-MAX_COMPLETED);
         saveQueue({ version: 1, pending: queue.pending.slice(1), completed });
         // 连续性抽取是成功回合落盘后的旁路能力；失败不回滚已摄取记忆，也不让同一轮重复入队。
@@ -394,6 +421,21 @@ export function createNativeIntegration(
   }
 
   function onTurnFinished(event: PluginTurnFinishedEvent) {
+    isolationTransaction?.assertHealthy();
+    if (durableReceipts) {
+      if (event.source !== "desktop") return;
+      if (event.runId) routeReceipts.delete(event.runId);
+      return durableReceipts.finish(event, (receipt, cold) => {
+        if (receipt.includedMemoryIds.length) retrieval.commitPromptReceipt?.(receipt);
+        if (cold?.candidates.length && event.finalMessageId) {
+          coldRecords = [...coldRecords.filter(row => row.messageId !== event.finalMessageId), {
+            conversationId: event.conversationId, inputMessageId: event.inputMessageId,
+            messageId: event.finalMessageId, queryHash: cold.queryHash, candidates: cold.candidates,
+          }].slice(-MAX_COLD_RECORDS);
+          saveCold();
+        }
+      }).then(() => captureFinished(event));
+    }
     if (event.runId) {
       routeReceipts.delete(event.runId);
       const receipt = promptReceipts.get(event.runId);
@@ -413,10 +455,15 @@ export function createNativeIntegration(
         saveCold();
       }
     }
+    return captureFinished(event);
+  }
+
+  function captureFinished(event: PluginTurnFinishedEvent) {
     // 只接收宿主在轮次开始时明确冻结为 companion 的桌面 Chat。
     // 旧宿主不携带 chatBackend 时宁可跳过，避免把原生 Chat 混入插件私有记忆。
     if (!settings.captureEnabled || ctx.signal.aborted || event.mode !== "chat" || event.source !== "desktop"
       || event.chatBackend !== "companion" || event.status !== "success" || !event.finalMessageId) return;
+    if (sqliteQueue) return sqliteQueue.capture({ ...event, receivedAt: event.timestamp });
     if (queue.completed.includes(event.eventId) || queue.pending.some((task) => task.eventId === event.eventId)) return;
     if (queue.pending.length >= MAX_PENDING) {
       ctx.log("[companion-memory] 原生接入队列已满，拒绝接收新轮次");
@@ -435,8 +482,24 @@ export function createNativeIntegration(
     void startDrain();
   }
 
+  const sqliteQueue = sqliteCapability ? createSqliteNativeQueue({
+    capability: sqliteCapability,
+    storage: ctx.storage,
+    memory: { view: () => { if (!memory.view) throw new Error("SQLITE_MEMORY_VIEW_REQUIRED"); return memory.view(); }, ingest: (turn, signal) => memory.ingest(turn, signal) },
+    settings: () => settings,
+    signal: () => AbortSignal.any([ctx.signal, operationController.signal]),
+    read: readFrozenTurn,
+    legacyTaskIsChat,
+    maintain: (before, pending, signal) => memory.maintain(messages => generateWithHost(messages, signal), signal, validateHostSources, undefined, { before, pending }),
+    social: social ? (turn, signal) => social.extract(turn, signal) : undefined,
+  }) : undefined;
   const off = ctx.events.on<PluginTurnFinishedEvent>("host:turn:finished", onTurnFinished);
   const offPromptAccepted = ctx.events.on<PluginPromptAcceptedEvent>("host:prompt:accepted", (event) => {
+    isolationTransaction?.assertHealthy();
+    if (durableReceipts) {
+      if (event.providerId === `plugin:${ctx.id}:memory-context`) durableReceipts.accept(event.runId, event.complete);
+      return;
+    }
     if (event.providerId === `plugin:${ctx.id}:memory-context`
       && event.complete
       && promptReceipts.has(event.runId)) acceptedPromptReceipts.add(event.runId);
@@ -449,6 +512,7 @@ export function createNativeIntegration(
     // Scheduler 始终排除；Moments 另设默认关闭的明确授权，且不推进工作集。
     sources: ["conversation", "moments-post"],
     async provide(input) {
+      isolationTransaction?.assertHealthy();
       const conversation = input.source === "conversation";
       const companion = conversation
         && (input as typeof input & { chatBackend?: "native" | "companion" }).chatBackend === "companion";
@@ -462,6 +526,8 @@ export function createNativeIntegration(
         || input.signal.aborted
         || ctx.signal.aborted) return "";
       try {
+        const durableSource = durableReceipts && memoryEnabled && companion && input.runId && input.conversationId
+          ? await durableReceipts.source(input.conversationId, input.runId) : undefined;
         // 渠道与 Moments 调用不推进 DMAE/生命周期，也不注入梦境常驻上下文。
         const desktopConversation = conversation && !input.channel;
         const socialAtoms = socialEnabled && input.conversationId
@@ -527,11 +593,18 @@ export function createNativeIntegration(
         ].filter(Boolean).join("\n\n");
         if (!result || input.signal.aborted || ctx.signal.aborted) return "";
         if (memoryEnabled && desktopConversation && typeof runId === "string" && runId && (receipt.includedMemoryIds.length > 0 || coldBlock)) {
-          if (promptReceipts.size >= MAX_PROMPT_RECEIPTS) promptReceipts.delete(promptReceipts.keys().next().value!);
-          promptReceipts.set(runId, {
+          const savedReceipt = {
             includedMemoryIds: [...new Set(receipt.includedMemoryIds)],
             recalledMemoryIds: [...new Set(receipt.recalledMemoryIds)],
-          });
+          };
+          if (durableReceipts) {
+            if (!durableSource) throw new Error("SQLITE_PROMPT_SOURCE_REQUIRED");
+            await durableReceipts.prepare(durableSource, savedReceipt, pendingCold.get(runId) as any);
+            pendingCold.delete(runId);
+          } else {
+            if (promptReceipts.size >= MAX_PROMPT_RECEIPTS) promptReceipts.delete(promptReceipts.keys().next().value!);
+            promptReceipts.set(runId, savedReceipt);
+          }
         }
         return result;
       } catch (error) {
@@ -547,6 +620,7 @@ export function createNativeIntegration(
     sources: ["conversation"],
     target: "tool",
     async provide(input) {
+      isolationTransaction?.assertHealthy();
       const companion = (input as typeof input & { chatBackend?: "native" | "companion" }).chatBackend === "companion";
       if (!companion || input.channel !== undefined || !settings.promptInjectionEnabled
         || !history || input.signal.aborted || ctx.signal.aborted) return "";
@@ -566,6 +640,7 @@ export function createNativeIntegration(
     modes: ["chat"] satisfies PluginPromptMode[],
     sources: ["conversation"],
     async provide(input) {
+      isolationTransaction?.assertHealthy();
       const companion = (input as typeof input & { chatBackend?: "native" | "companion" }).chatBackend === "companion";
       const contextualEnabled = settings.promptInjectionEnabled || (settings.socialContextEnabled && Boolean(social));
       if (!companion || input.channel !== undefined || !contextualEnabled
@@ -579,6 +654,7 @@ export function createNativeIntegration(
     modes: ["chat"] satisfies PluginPromptMode[],
     sources: ["conversation"],
     async provide(input) {
+      isolationTransaction?.assertHealthy();
       const companion = (input as typeof input & { chatBackend?: "native" | "companion" }).chatBackend === "companion";
       const contextualEnabled = settings.promptInjectionEnabled || (settings.socialContextEnabled && Boolean(social));
       if (!companion || input.channel !== undefined || !contextualEnabled || !ctx.deps.companionContext
@@ -598,19 +674,23 @@ export function createNativeIntegration(
     },
   });
 
-  if (settings.captureEnabled && queue.pending.length > 0) void startDrain();
+  if (sqliteQueue) void sqliteQueue.retry().catch(error => { if (!(error instanceof Error && error.message === "SQLITE_NATIVE_CANCELLED")) ctx.log(`[companion-memory] SQLite 接入恢复失败：${String(error)}`); });
+  else if (settings.captureEnabled && queue.pending.length > 0) void startDrain();
 
   return {
     view() {
+      isolationTransaction?.assertHealthy();
       return structuredClone({
         settings,
         pending: queue.pending.length,
         completed: queue.completed.length,
         lastError: queue.lastError,
         processing: Boolean(running),
+        ...(sqliteQueue?.view() ?? {}),
       });
     },
     configure(value: unknown) {
+      isolationTransaction?.assertHealthy();
       const next = validateSettings(value);
       ctx.storage.set(SETTINGS_KEY, next);
       if ((settings.captureEnabled && !next.captureEnabled)
@@ -620,11 +700,24 @@ export function createNativeIntegration(
         operationController = new AbortController();
       }
       settings = next;
-      if (settings.captureEnabled && queue.pending.length > 0) void startDrain();
+      if (sqliteQueue && settings.captureEnabled) void sqliteQueue.retry().catch(error => { if (!(error instanceof Error && error.message === "SQLITE_NATIVE_CANCELLED")) ctx.log(`[companion-memory] SQLite 接入恢复失败：${String(error)}`); });
+      else if (!sqliteQueue && settings.captureEnabled && queue.pending.length > 0) void startDrain();
       return this.view();
     },
+    maintain(signal: AbortSignal, includePrivate = false) {
+      isolationTransaction?.assertHealthy();
+      if (!settings.captureEnabled && !includePrivate) throw new Error("请先启用原生聊天读取");
+      if (!sqliteQueue) throw new Error("SQLite 手动提取入口不可用");
+      return sqliteQueue.maintain(signal, includePrivate);
+    },
+    ingestPrivate(turn: Turn) {
+      isolationTransaction?.assertHealthy();
+      return sqliteQueue ? sqliteQueue.capturePrivate(turn) : memory.ingest(turn);
+    },
     retry() {
+      isolationTransaction?.assertHealthy();
       if (!settings.captureEnabled) throw new Error("请先启用原生聊天读取");
+      if (sqliteQueue) { void sqliteQueue.retry(true).catch(error => ctx.log(`[companion-memory] SQLite 重试失败：${String(error)}`)); return this.view(); }
       if (running) throw new Error("原生聊天接入正在处理，请稍后重试");
       if (queue.lastError?.kind === "extract" && !settings.autoExtractEnabled && queue.pending.length === 0) {
         throw new Error("请先启用自动提取");
@@ -633,7 +726,7 @@ export function createNativeIntegration(
       void startDrain();
       return this.view();
     },
-    async whenIdle() { while (running) await running; },
+    async whenIdle() { isolationTransaction?.assertHealthy(); while (running) await running; await sqliteQueue?.whenIdle(); },
     coldRecallForConversation(conversationId: unknown) {
       if (typeof conversationId !== "string" || !conversationId) throw new Error("会话 ID 无效");
       return coldRecords.filter((row) => row.conversationId === conversationId).map((row) => structuredClone(row));
@@ -668,12 +761,15 @@ export function createNativeIntegration(
       saveCold();
       return structuredClone(record);
     },
+    refreshQueueStatus() { return sqliteQueue?.refreshStatus() ?? Promise.resolve(); },
     invalidateColdRecall(conversationId: string, allMessages: boolean, messageIds: string[]) {
+      durableReceipts?.invalidate(conversationId, allMessages, messageIds);
       const ids = new Set(messageIds);
       const next = coldRecords.filter((row) => row.conversationId !== conversationId
         || (!allMessages && !ids.has(row.messageId) && !ids.has(row.inputMessageId)));
       if (next.length !== coldRecords.length) { coldRecords = next; saveCold(); }
     },
-    stop() { operationController.abort(); promptReceipts.clear(); pendingCold.clear(); acceptedPromptReceipts.clear(); offPromptAccepted(); off(); },
+    cancelActiveWork() { operationController.abort(); },
+    async stop() { operationController.abort(); offPromptAccepted(); off(); try { while (running) await running; await sqliteQueue?.whenIdle(); } finally { sqliteQueue?.dispose(); } promptReceipts.clear(); pendingCold.clear(); acceptedPromptReceipts.clear(); },
   };
 }

@@ -34,6 +34,25 @@ function isRateLimitError(err: unknown): boolean {
 // 每次 enqueue 把任务挂在 tail 后面，tail 更新到这个任务。
 // 这样多个 enqueue 调用会自然串行，不需要锁。
 let tail: Promise<unknown> = Promise.resolve();
+let closing = false;
+let shutdownSignal: AbortSignal | undefined;
+const pendingLabels = new Map<Promise<unknown>, string>();
+
+export async function drainLLMQueue(signal: AbortSignal): Promise<void> {
+  closing = true;
+  shutdownSignal = signal;
+  let onAbort!: () => void;
+  const expired = new Promise<void>((resolve) => {
+    onAbort = () => {
+      if (pendingLabels.size) console.warn("[Shutdown] unfinished LLM jobs", [...pendingLabels.values()]);
+      resolve();
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try { await Promise.race([tail, expired]); }
+  finally { signal.removeEventListener("abort", onAbort); }
+}
 
 /**
  * 入队一个后台 LLM 任务。FIFO 串行执行；限流时自动退避 5s 重试 1 次。
@@ -47,7 +66,9 @@ export function enqueueLLMTask<T>(
   task: () => Promise<T>,
   options: { log?: boolean; retryRateLimit?: boolean } = {},
 ): Promise<T> {
+  if (closing) return Promise.reject(new Error("APPLICATION_STOPPING"));
   const next = tail.then(async (): Promise<T> => {
+    if (shutdownSignal?.aborted) throw new Error("APPLICATION_STOPPING");
     return runWithRetry(
       label,
       task,
@@ -59,6 +80,8 @@ export function enqueueLLMTask<T>(
   tail = next.catch(() => {
     // 吞错误，不让链断；调用方仍然能从 next 拿到 reject
   });
+  pendingLabels.set(next, label);
+  void next.then(() => pendingLabels.delete(next), () => pendingLabels.delete(next));
   return next;
 }
 
@@ -84,6 +107,7 @@ async function runWithRetry<T>(
     // 限流：退避 5s 重试 1 次
     if (logEnabled) console.warn(LOG_PREFIX, "限流，" + (RETRY_DELAY_MS / 1000) + "s 后重试 1 次:", label);
     await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+    if (shutdownSignal?.aborted) throw new Error("APPLICATION_STOPPING");
     try {
       const result = await task();
       if (logEnabled) console.log(LOG_PREFIX, "重试成功:", label, "总耗时=" + (Date.now() - startedAt) + "ms");

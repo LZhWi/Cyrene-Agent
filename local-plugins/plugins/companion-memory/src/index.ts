@@ -3,7 +3,9 @@ import { CHAT_ID, MEMORY_ID, createPeer } from "../../shared/protocol";
 import { resolveToolTopK } from "../../shared/tool-top-k";
 import { createWindow, registerUi } from "../../shared/runtime";
 import { createRecoverableMemoryStorage } from "./recoverable-storage";
-import { createMemory, PROFILE_REFLECTION_MIN_CONFIDENCE } from "./memory";
+import { createMemory, extractionContentHash, PROFILE_REFLECTION_MIN_CONFIDENCE } from "./memory";
+import type { Turn } from "../../companion-chat/src/chat";
+import { resumeIsolatedExtraction } from "./extraction-maintenance";
 import type { ExtractionPromptMessage } from "./memory-extraction";
 import { createRetrieval, rankLocalMemoryCandidates } from "./retrieval";
 import { createLegacyImportPlan, defaultLegacyMemoryPath, previewLegacyMemoryFile } from "./legacy-import";
@@ -35,8 +37,11 @@ import { createSocialContext } from "./social-context";
 import { createMemoryAudit } from "./audit";
 import { createHistoryRetrieval } from "./history-retrieval";
 import { createHostHistorySource } from "./host-history-source";
+import { registerMinecraftMemoryPeer } from "./minecraft-peer";
 import { findPossibleConflictCandidate, hasCorrectionIntent, impactScope, isExplicitGoalCompletion, scoreMemoryConflict } from "./conflict";
 import { createRecentInjections } from "./recent-injections";
+import { createDurableProactiveReceipts } from "./durable-proactive-receipts";
+import { createDurablePromptReceipts } from "./durable-prompt-receipts";
 import { createEntityGraph } from "./entity-graph";
 import { createQueryRouter } from "./query-router";
 import { createRelationshipLog } from "./relationship-context";
@@ -44,7 +49,7 @@ import { createRelationshipLog } from "./relationship-context";
 import { createSourceInvalidationQueue, findInvalidHostSources, type SourceInvalidation } from "./source-reconciliation";
 
 let openWindow: (() => Promise<void>) | undefined;
-let stop: (() => void) | undefined;
+let stop: (() => Promise<void>) | undefined;
 const plugin: CyrenePlugin = {
   async register(ctx) {
     if (ctx.id !== MEMORY_ID) throw new Error("插件 ID 不匹配");
@@ -99,12 +104,17 @@ const plugin: CyrenePlugin = {
     const semantic = createSemanticIndexer(ctx, memory, embeddings, vectors);
     const dream = createDream(storage);
     const inbox = createMaintenanceInbox(storage);
-    const recentInjections = createRecentInjections();
-    const processNewConflicts = async (previousIds: Set<string>, signal: AbortSignal) => {
+    const isolationTransaction = (ctx.storage as any).isolationTransaction;
+    const recentInjections = createRecentInjections(Date.now, isolationTransaction ? { storage, assertHealthy: () => isolationTransaction.assertHealthy() } : undefined);
+    let proactiveDeliveredAt: number | undefined;
+    const processNewConflicts = async (previousIds: Set<string>, signal: AbortSignal, complete?: () => void, validate?: () => Promise<void>, commitGuard?: { memorySources: Array<NonNullable<Turn["hostSourceVersion"]>> }) => {
       await semantic.whenIdle();
       if (signal.aborted) throw new Error("提取已取消");
+      await validate?.();
+      if (signal.aborted) throw new Error("提取已取消");
+      const run = () => {
       const snapshot = memory.view(), freshEntries = snapshot.entries.filter((entry) => !previousIds.has(entry.id) && entry.status === "active");
-      if (!freshEntries.length) return 0;
+      if (!freshEntries.length) { complete?.(); return 0; }
       const records = vectors.records(snapshot.entries.map((entry) => entry.id)), byVector = new Map(records.map((record) => [record.id, record.embedding]));
       const cosine = (left: number[], right: number[]) => {
         if (!left.length || left.length !== right.length) return -1;
@@ -167,14 +177,51 @@ const plugin: CyrenePlugin = {
           changed += 1;
         }
       }
+      complete?.();
       return changed;
+      };
+      if (!complete) return run();
+      const transaction = (ctx.storage as any).isolationTransaction;
+      if (!transaction?.run) throw new Error("SQLITE_POST_EXTRACTION_TRANSACTION_REQUIRED");
+      // All mutations above are synchronous after semantic work and source checks.
+      // Either conflicts, inbox and completion receipt commit together, or restart retries.
+      return transaction.run(run, commitGuard) as number;
     };
-    const maintainMemory = async (_runGenerate: Parameters<typeof memory.maintain>[0], signal: AbortSignal, validateSources?: Parameters<typeof memory.maintain>[2]) => {
+    const acquireMaintenance = createMaintenanceOrder();
+    const maintainMemory = async (_runGenerate: Parameters<typeof memory.maintain>[0], signal: AbortSignal, validateSources?: Parameters<typeof memory.maintain>[2], isolatedBatch?: Parameters<typeof memory.maintain>[4]) => {
+      const release = await acquireMaintenance(signal);
+      try {
+      if (isolatedBatch) {
+        const memorySources = [...isolatedBatch.before, ...isolatedBatch.pending].map(turn => {
+          if (!turn.hostSourceVersion) throw new Error("SQLITE_EXTRACTION_SOURCE_GUARD_REQUIRED");
+          return turn.hostSourceVersion;
+        });
+        const validate = async () => {
+          if (!validateSources) throw new Error("SQLITE_EXTRACTION_SOURCE_GUARD_REQUIRED");
+          const valid = new Set(await validateSources([...isolatedBatch.before, ...isolatedBatch.pending], signal));
+          if ([...isolatedBatch.before, ...isolatedBatch.pending].some(turn => !valid.has(turn.id))) throw new Error("SQLITE_BATCH_SOURCE_STALE");
+        };
+        return await resumeIsolatedExtraction({
+          batch: isolatedBatch, signal,
+          receipt: () => memory.extractionReceipt(isolatedBatch),
+          processed: () => memory.view().processed,
+          extract: () => memory.maintain(prompt => generate(prompt, signal, true), signal, validateSources, undefined, isolatedBatch),
+          validate,
+          refresh: async receipt => {
+            const previous = new Map(receipt.previousContents);
+            vectors.reconcile(memory.view().entries.filter(entry => !previous.has(entry.id)
+              || previous.get(entry.id) === extractionContentHash(entry.content)).map(entry => entry.id));
+            semantic.memoryChanged();
+          },
+          finish: receipt => processNewConflicts(new Set(receipt.previousContents.map(row => row[0])), signal,
+            () => memory.completeExtractionReceipt(isolatedBatch), validate, { memorySources }),
+        });
+      }
       const previousContents = new Map(memory.view().entries.map(entry => [entry.id, entry.content]));
       const previousIds = new Set(previousContents.keys());
       let result: Awaited<ReturnType<typeof memory.maintain>>;
       try {
-        result = await memory.maintain((prompt) => generate(prompt, signal, true), signal, validateSources);
+        result = await memory.maintain((prompt) => generate(prompt, signal, true), signal, validateSources, undefined, isolatedBatch);
       } finally {
         // 即使后续批次失败，已提交的正文更新也不能继续使用旧向量。
         vectors.reconcile(memory.view().entries.filter(entry => !previousContents.has(entry.id)
@@ -183,6 +230,7 @@ const plugin: CyrenePlugin = {
       }
       const conflicts = await processNewConflicts(previousIds, signal);
       return { ...result, conflicts };
+      } finally { release(); }
     };
     const autoMaintenance = createAutoMaintenance(storage, ctx.events, () => inbox.addAutomatically(memory.view().entries, vectors.relatedPairs(memory.recallableEntryIds()).pairs));
     const maintenanceEvents = { on: () => () => {}, emit: ctx.events.emit.bind(ctx.events) };
@@ -204,7 +252,7 @@ const plugin: CyrenePlugin = {
       const result = memory.autoApplyResolverReview({ id, revision: memory.view().revision });
       if (result.memoryChanged) semantic.memoryChanged();
       return result;
-    });
+    }, acquireMaintenance);
     const compressionCandidates = (kind: "regular" | "dream" = "regular") => {
       const snapshot = memory.view();
       const reviewedGroups = new Set(snapshot.compressionReviews.filter((review) => review.status !== "stale").map((review) => review.entries.map((entry) => entry.id).sort().join("\u0000")));
@@ -254,7 +302,6 @@ const plugin: CyrenePlugin = {
       if (result.memoryChanged) semantic.memoryChanged();
       return retryStaleCompression(result, true);
     };
-    const acquireMaintenance = createMaintenanceOrder();
     const autoCompression = createAutoCompression(storage, maintenanceEvents, () => compressionCandidates("regular"), reviewCompressionCandidate, Date.now,
       applyCompressionReview, undefined, acquireMaintenance);
     const autoReflection = createAutoReflection(storage, maintenanceEvents, async (autoSignal) => {
@@ -277,10 +324,17 @@ const plugin: CyrenePlugin = {
       finally { reviewController = undefined; }
     }, Date.now, acquireMaintenance);
     const maintenanceCycles = createMaintenanceCycles(storage, ctx.events, createHostHistorySource(ctx.deps.conversations, false).snapshot, ctx.signal, {
-      review: autoReview.runDue, compression: autoCompression.runDue, reflection: autoReflection.runDue,
+      ...Object.fromEntries(Object.entries({review:autoReview.runDue,compression:autoCompression.runDue,reflection:autoReflection.runDue}).map(([phase,run])=>[phase,async(event: PluginTurnFinishedEvent)=>{
+        const startedAt=Date.now();ctx.log(`[joint-maintenance] ${phase} started ${startedAt}`);
+        try{return await run(event);}finally{ctx.log(`[joint-maintenance] ${phase} ended ${Date.now()} elapsed=${Date.now()-startedAt}`);}
+      }])) as Record<"review"|"compression"|"reflection",(event:PluginTurnFinishedEvent)=>Promise<boolean>>,
     }, message => ctx.log(`[companion-memory] ${message}`));
     void maintenanceCycles.start();
-    const autoLifecycle = createAutoLifecycle(storage, ctx.events, () => {
+    const lifecycleEvents = { ...maintenanceEvents, on: (name: string, handler: (event: any) => any) => ctx.events.on(name, async event => {
+      const release = await acquireMaintenance(ctx.signal);
+      try { return await handler(event); } finally { release(); }
+    }) };
+    const autoLifecycle = createAutoLifecycle(storage, lifecycleEvents, () => {
       const entries = memory.view().entries;
       return {
         agingCandidates: lifecycle.preview(entries, { days: 30, target: "aging" }).candidates.length,
@@ -347,7 +401,7 @@ const plugin: CyrenePlugin = {
         }
       }
       return { ...cycleCapacity, compressionReviewed, compressionApplied };
-    });
+    }, acquireMaintenance);
     const retrieval = createRetrieval(storage, (query, expansions, semanticIds, rerankedIds, selectedIds, maxChars, includeExpired, purpose, plan, semanticScores) => memory.searchWithBudget(query, expansions, semanticIds, rerankedIds, selectedIds, maxChars, includeExpired, purpose, plan, semanticScores),
       generate, async (query, signal, includeExpired, plan) => {
         if (!ctx.deps.memoryRetrieval || vectors.view().entries === 0) return [];
@@ -373,7 +427,7 @@ const plugin: CyrenePlugin = {
       (query, expansions, semanticIds, rerankedIds, plan, semanticScores) => memory.injectionCandidateIds(query, expansions, semanticIds, rerankedIds, plan, semanticScores),
       (baseIds) => dmae.preview(baseIds, memory.view().entries, new Set(memory.dmaeExcludedEntryIds())).selectedIds,
       (includedIds, recalledIds) => {
-        recentInjections.record(recalledIds);
+        recentInjections.record(recalledIds, proactiveDeliveredAt);
         const entries = memory.view().entries;
         dmae.commit(recalledIds, includedIds, entries);
         const recall = lifecycle.record(recalledIds, entries);
@@ -447,8 +501,23 @@ const plugin: CyrenePlugin = {
       return ids.slice(0, topK);
     };
     const proactiveReceipts = new Map<string, { includedMemoryIds: string[]; recalledMemoryIds: string[] }>();
+    const readProactiveSource = (ctx.storage as any).isolationSources?.readProactiveSource;
+    const readProactiveLifecycle = (ctx.storage as any).isolationSources?.readProactiveLifecycle;
+    const durableProactiveReceipts = isolationTransaction && readProactiveSource
+      ? createDurableProactiveReceipts(storage, isolationTransaction, runId => readProactiveSource(runId), (receipt, deliveredAt) => {
+        proactiveDeliveredAt = deliveredAt;
+        try { retrieval.commitPromptReceipt(receipt); } finally { proactiveDeliveredAt = undefined; }
+      }, readProactiveLifecycle ? runId => readProactiveLifecycle(runId) : undefined) : undefined;
+    const isolationSources = (ctx.storage as any).isolationSources;
+    if (isolationTransaction && isolationSources?.readPromptSource && isolationSources?.readPromptLifecycle) {
+      await createDurablePromptReceipts(storage, isolationTransaction,
+        (conversationId, runId) => isolationSources.readPromptSource(conversationId, runId),
+        (conversationId, runId) => isolationSources.readPromptLifecycle(conversationId, runId)).cleanup();
+    }
+    await durableProactiveReceipts?.recover();
     const peer = createPeer(ctx, CHAT_ID, async (method, data, signal) => {
       if (ctx.signal.aborted) throw new Error("插件已停止");
+      (ctx.storage as any).isolationTransaction?.assertHealthy();
       switch (method) {
         case "search": return retrieval.search(data, signal);
         case "search-for-chat": return retrieval.searchForChat(data, signal);
@@ -457,17 +526,25 @@ const plugin: CyrenePlugin = {
           const value = data as { runId?: unknown; query?: unknown };
           if (typeof value?.runId !== "string" || !value.runId) throw new Error("主动消息轮次无效");
           const receipt = await retrieval.previewForProactive(value.query, signal);
-          proactiveReceipts.set(value.runId, receipt);
+          if (durableProactiveReceipts) {
+            if (signal.aborted || ctx.signal.aborted) throw new Error("请求已取消");
+            durableProactiveReceipts.prepare(value.runId, receipt);
+          }
+          else proactiveReceipts.set(value.runId, receipt);
           return receipt.text;
         }
+        case "accept-proactive-receipt": return durableProactiveReceipts ? durableProactiveReceipts.accept(data as string) : proactiveReceipts.has(data as string);
         case "commit-proactive-receipt": {
           const runId = data as string;
+          if (durableProactiveReceipts) return durableProactiveReceipts.commit(runId);
           const receipt = proactiveReceipts.get(runId);
           proactiveReceipts.delete(runId);
           if (receipt) retrieval.commitPromptReceipt(receipt);
           return Boolean(receipt);
         }
-        case "discard-proactive-receipt": proactiveReceipts.delete(data as string); return true;
+        case "discard-proactive-receipt":
+          if (durableProactiveReceipts) return durableProactiveReceipts.discard(data as string);
+          proactiveReceipts.delete(data as string); return true;
         case "entity-for-proactive": return typeof data === "string" ? entityGraph.search(data) : "";
         case "profile-for-proactive": return [memory.profileContext(), dream.context()].filter(Boolean).join("\n\n");
         case "search-for-tool": {
@@ -487,17 +564,27 @@ const plugin: CyrenePlugin = {
           return history.searchImagesForTool(value?.query, signal, value?.imageId);
         }
         case "search-history-for-auto": return history.searchForAuto(data, signal);
-        case "ingest": return memory.ingest(data);
+        case "ingest": return native.ingestPrivate(data as Turn);
         case "view": return memory.view();
         case "maintain": {
+          if ((ctx.storage as any).isolationQueue) {
+            const state = memory.view(), pending = state.turns.filter(turn => !state.processed.includes(turn.id));
+            if (pending.some(turn => !turn.hostSourceVersion)) throw new Error("SQLITE_FROZEN_SOURCE_REQUIRED");
+            return native.maintain(signal, pending.some(turn => turn.origin === "companion-chat"));
+          }
           return maintainMemory((prompt) => generate(prompt, signal), signal);
         }
         default: throw new Error("未知请求");
       }
     });
+    const minecraftPeer = registerMinecraftMemoryPeer(ctx, memory, vectors, peer, () => invalidations.pending().length > 0);
     const native = createNativeIntegration(ctx, {
-      ingest: (turn) => memory.ingest(turn),
-      maintain: (generate, signal, validateSources) => maintainMemory(generate, signal, validateSources),
+      ingest: async (turn, signal = ctx.signal) => {
+        const release = await acquireMaintenance(signal);
+        try { return memory.ingest(turn); } finally { release(); }
+      },
+      view: () => memory.view(),
+      maintain: (generate, signal, validateSources, _ingestEntities, isolatedBatch) => maintainMemory(generate, signal, validateSources, isolatedBatch),
       previewArchivedRecall: (raw) => memory.previewArchivedRecall(raw),
       restoreArchivedFromPrompt: (candidate) => {
         const result = memory.restoreArchivedFromPrompt(candidate);
@@ -516,6 +603,7 @@ const plugin: CyrenePlugin = {
       chatBackend?: "native" | "companion";
       chatSocialContextEnabled?: boolean;
     }>("host:chat-preferences:changed", (preferences) => {
+      if (ctx.signal.aborted) return;
       const current = native.view().settings;
       const enabled = preferences.chatBackend === "companion"
         && preferences.chatSocialContextEnabled === true;
@@ -531,7 +619,7 @@ const plugin: CyrenePlugin = {
     const offHistoryTurnFinished = ctx.events.on<PluginTurnFinishedEvent>("host:turn:finished", (event) => {
       if (event.source !== "desktop" || event.mode !== "chat" || event.chatBackend !== "companion" || event.status !== "success"
         || !event.finalMessageId || !ctx.deps.conversations || ctx.signal.aborted) return;
-      void (async () => {
+      return (async () => {
         const messages = [];
         let cursor: string | undefined;
         do {
@@ -552,7 +640,10 @@ const plugin: CyrenePlugin = {
           id: message.id, sessionId: event.conversationId, role: message.role,
           text: message.text, at: Date.parse(message.at),
         })), ctx.signal);
-      })().catch((error) => ctx.log(`[companion-memory] 历史消息索引初始化失败: ${String(error)}`));
+      })().catch((error) => {
+        ctx.log(`[companion-memory] 历史消息索引初始化失败: ${String(error)}`);
+        if ((ctx.storage as any).isolationQueue) throw error;
+      });
     });
     const applyInvalidation = (event: SourceInvalidation) => {
       social.invalidate(event.conversationId, event.allMessages, event.invalidatedMessageIds);
@@ -572,18 +663,32 @@ const plugin: CyrenePlugin = {
     const offConversationChanged = ctx.events.on<PluginConversationChangedEvent>("host:conversation:changed", (event) => {
       invalidations.enqueue(event);
       invalidations.drain(applyInvalidation);
+      return native.refreshQueueStatus();
     });
     const window = createWindow(ctx, __dirname, "独立记忆档案");
     openWindow = window.open;
-    stop = () => { offChatPreferences(); offHistoryTurnFinished(); offConversationChanged(); reviewController?.abort(); maintenanceCycles.stop(); autoDream.stop(); autoLifecycle.stop(); autoReflection.stop(); autoCompression.stop(); autoReview.stop(); autoMaintenance.stop(); semantic.stop(); recentInjections.clear(); history.clearCache(); nativeHistory.clear(); native.stop(); peer.stop(); window.close(); openWindow = undefined; };
+    const offQuiescing = ctx.events.on("host:plugins:quiescing", async () => {
+      native.cancelActiveWork(); reviewController?.abort();
+      autoLifecycle.stop(); autoMaintenance.stop();
+      await Promise.allSettled([maintenanceCycles.stop(), autoDream.stop(), autoReflection.stop(), autoCompression.stop(), autoReview.stop()]);
+    });
+    let stopping: Promise<void> | undefined;
+    stop = () => stopping ??= (async () => {
+      offQuiescing(); offChatPreferences(); offHistoryTurnFinished(); offConversationChanged(); reviewController?.abort();
+      autoLifecycle.stop(); autoMaintenance.stop();
+      const work = [maintenanceCycles.stop(), autoDream.stop(), autoReflection.stop(), autoCompression.stop(), autoReview.stop(), semantic.stop(), native.stop()];
+      await Promise.allSettled(work);
+      await Promise.all([peer.stop(), minecraftPeer.stop()]);
+      recentInjections.clear(); history.clearCache(); nativeHistory.clear(); window.close(); openWindow = undefined;
+    })();
     ctx.onDispose(stop);
     registerUi(ctx, async (action, data) => {
-      if (action === "state") return { ...memory.view(), relationshipLog: relationship.view(), entityGraph: entityGraph.view(), queryRouter: await queryRouter.view(), queryExpansion: retrieval.view(), reranker: reranker.view(), dmae: dmae.view(), lifecycle: lifecycle.view(), autoLifecycle: autoLifecycle.view(), dream: dream.view(), autoDream: autoDream.view(), maintenanceInbox: inbox.view(memory.view().entries), autoMaintenance: autoMaintenance.view(), autoReview: autoReview.view(), autoCompression: autoCompression.view(), autoReflection: autoReflection.view(), embedding: await embeddings.view(), vectorIndex: vectors.view(), semanticIndex: semantic.view(), social: social.view(), native: native.view(), defaultLegacyMemoryPath: defaultLegacyMemoryPath(), defaultLegacyVectorPath: defaultLegacyVectorPath() };
+      if (action === "state") return { ...memory.view(), relationshipLog: relationship.view(), entityGraph: entityGraph.view(), queryRouter: await queryRouter.view(), queryExpansion: retrieval.view(), reranker: reranker.view(), dmae: dmae.view(), lifecycle: lifecycle.view(), autoLifecycle: autoLifecycle.view(), dream: dream.view(), autoDream: autoDream.view(), maintenanceInbox: inbox.view(memory.view().entries), maintenanceCycles: maintenanceCycles.view(), autoMaintenance: autoMaintenance.view(), autoReview: autoReview.view(), autoCompression: autoCompression.view(), autoReflection: autoReflection.view(), embedding: await embeddings.view(), vectorIndex: vectors.view(), semanticIndex: semantic.view(), social: social.view(), native: native.view(), defaultLegacyMemoryPath: defaultLegacyMemoryPath(), defaultLegacyVectorPath: defaultLegacyVectorPath() };
       if (action === "get-query-router") return queryRouter.view();
       if (action === "save-query-router") return queryRouter.save(data);
       if (action === "test-query-router") return queryRouter.test(ctx.signal);
       if (action === "save-native-integration") return native.configure(data);
-      if (action === "retry-native-integration") return native.retry();
+      if (action === "retry-native-integration") { const result = native.retry(); void maintenanceCycles.retry().catch(error => ctx.log(`[companion-memory] 维护重试失败：${String(error)}`)); return result; }
       if (action === "list-native-conversations") return nativeHistory.list(ctx.signal);
       if (action === "preview-native-history") return nativeHistory.preview(data, ctx.signal);
       if (action === "apply-native-history-unique") return nativeHistory.applyUnique(data, ctx.signal);
@@ -696,6 +801,19 @@ const plugin: CyrenePlugin = {
       if (action === "edit-profile") return memory.editProfile(data);
       if (action === "resolve-profile-change") return memory.resolveProfileChange(data);
       if (action === "lock-profile") return memory.lockProfile(data);
+      if (action === "resolve-semantic-review") {
+        const release = await acquireMaintenance(ctx.signal);
+        try {
+          const result = memory.resolveSemanticReview(data);
+          if (result.layer === "L2" && result.action !== "keep") {
+            vectors.removeGenerated(result.target);
+            dmae.remove(result.target);
+            if (result.action === "delete") lifecycle.remove(result.target);
+            semantic.memoryChanged();
+          }
+          return result;
+        } finally { release(); }
+      }
       if (action === "edit-entry") {
         const result = memory.editEntry(data);
         if (result.contentChanged) dmae.remove(result.entryId);
@@ -742,6 +860,6 @@ const plugin: CyrenePlugin = {
     });
   },
   async open() { await openWindow?.(); },
-  unregister() { stop?.(); stop = undefined; },
+  async unregister() { const cleanup = stop; stop = undefined; await cleanup?.(); },
 };
 export = plugin;

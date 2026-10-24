@@ -10,7 +10,7 @@ export interface IpcScope {
   handle(channel: string, listener: (...args: any[]) => unknown): void;
   removeHandler(channel: string): void;
   on(channel: string, listener: (...args: any[]) => void): void;
-  dispose(): void;
+  dispose(shutdownReplies?: Readonly<Record<string, unknown>>): void;
 }
 
 export interface IpcScopeMainLike {
@@ -62,13 +62,19 @@ export function createIpcScope(main: IpcScopeMainLike = ipcMain as IpcScopeMainL
       main.on(channel, listener);
     },
 
-    dispose() {
+    dispose(shutdownReplies = {}) {
       if (disposed) return;
       disposed = true;
       // 逆序移除：后注册的先注销，保持与注册路径一致的对称性。
       for (const registration of registrations.reverse()) {
         try {
-          if (registration.kind === "handle") main.removeHandler(registration.channel);
+          if (registration.kind === "handle") {
+            main.removeHandler(registration.channel);
+            if (Object.prototype.hasOwnProperty.call(shutdownReplies, registration.channel)) {
+              const reply = shutdownReplies[registration.channel];
+              main.handle(registration.channel, () => reply);
+            }
+          }
           else main.removeListener(registration.channel, registration.listener);
         } catch (error) {
           console.error(`[IpcScope] dispose failed for ${registration.kind} ${registration.channel}:`, error);

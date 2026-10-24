@@ -1,7 +1,20 @@
 import * as http from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { OneBotReverseWsServer, isLoopbackHost, resolveOneBotListenHost } from "./onebot-reverse-ws";
+
+// 模拟 #218 的受限环境：networkInterfaces() 底层 uv_interface_addresses 抛
+// ERR_SYSTEM_ERROR。整个文件都在「网卡枚举不可用」的前提下运行——任何
+// loopback/custom 路径误触真实枚举，测试都会当场失败。
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    networkInterfaces: () => {
+      throw new Error("ERR_SYSTEM_ERROR: 模拟受限环境，uv_interface_addresses 不可用");
+    },
+  };
+});
 
 describe("OneBotReverseWsServer", () => {
   it("resolves loopback and WSL interface modes", () => {
@@ -10,6 +23,18 @@ describe("OneBotReverseWsServer", () => {
       "vEthernet (WSL)": [{ address: "172.20.0.1", netmask: "255.255.240.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: false, cidr: "172.20.0.1/20" }],
     })).toEqual({ host: "172.20.0.1", resolvedMode: "wsl" });
     expect(resolveOneBotListenHost("auto", undefined, {})).toEqual({ host: "127.0.0.1", resolvedMode: "loopback" });
+  });
+
+  it("resolves loopback/custom hosts without NIC enumeration (#218)", () => {
+    // 不注入第三参数，走真实枚举路径；node:os 已 mock 为抛错，若 loopback/custom
+    // 仍依赖网卡枚举（修复前的默认参数会在进函数前就求值），这里会直接抛错。
+    expect(resolveOneBotListenHost("loopback")).toEqual({ host: "127.0.0.1", resolvedMode: "loopback" });
+    expect(resolveOneBotListenHost("custom", "0.0.0.0")).toEqual({ host: "0.0.0.0", resolvedMode: "custom" });
+  });
+
+  it("fails explicitly for wsl/auto when NIC enumeration throws (no silent fallback)", () => {
+    expect(() => resolveOneBotListenHost("wsl")).toThrow("ERR_SYSTEM_ERROR");
+    expect(() => resolveOneBotListenHost("auto")).toThrow("ERR_SYSTEM_ERROR");
   });
 
   it("classifies loopback hosts", () => {

@@ -752,6 +752,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
   let lastObservedAt: number | undefined;
   let currentPlanning: { controller: AbortController; id: string; kind: PlanningKind } | undefined;
   let currentDiary: Promise<PlanningResult> | undefined;
+  const pendingPlans = new Set<Promise<PlanningResult>>();
   let diaryController: AbortController | undefined;
   const conversationOffers = new Map<string, ConversationLifeOffer>();
   let diaryIndex: { revision: number; index: ReturnType<typeof createLifeDiaryIndex> } | undefined;
@@ -782,8 +783,11 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     lastObservedAt = at;
   }
 
+  const canDrainDelivery = () => (storage as any).isolationAggregate === true
+    && (storage as any).isolationTransaction?.canDrain?.() === true;
+
   function save(next: LifeState): void {
-    if (stopped) throw new Error("生活系统已停止，拒绝写入");
+    if (stopped && !canDrainDelivery()) throw new Error("生活系统已停止，拒绝写入");
     const current = storage.get<unknown>(STATE_KEY);
     if (current === undefined ? persisted : !persisted || validateState(current).revision !== state.revision) {
       throw new Error("生活状态已由其他实例更新，请重新加载");
@@ -859,7 +863,14 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     return outcome;
   }
 
-  async function plan(kind: PlanningKind): Promise<PlanningResult> {
+  function plan(kind: PlanningKind): Promise<PlanningResult> {
+    const work = planAccepted(kind);
+    pendingPlans.add(work);
+    void work.then(() => pendingPlans.delete(work), () => pendingPlans.delete(work));
+    return work;
+  }
+
+  async function planAccepted(kind: PlanningKind): Promise<PlanningResult> {
     if (kind !== "daily" && kind !== "refine") throw new Error("生活规划类型无效");
     if (currentDiary) await currentDiary;
     if (stopped || options?.stopSignal?.aborted || !state.settings.enabled) return result(kind, "skipped", "生活系统已关闭或停止");
@@ -952,6 +963,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     if (state.planning.diaryAttempts?.some((attempt) => attempt.date >= date))
       return result("refine", "skipped", "这一天的日记已经尝试生成");
     const dayMessages = options.dayMessages ? await options.dayMessages(startAt, endAt) : [];
+    if (stopped || options.stopSignal?.aborted) return result("refine", "cancelled", "日记生成已取消");
     advance();
     if (state.planning.diaryAttempts?.some((attempt) => attempt.date >= date))
       return result("refine", "skipped", "这一天的日记已经尝试生成");
@@ -1055,7 +1067,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     if (phase && !attempts.some((attempt) => attempt.phase === phase)) await plan("daily");
   }
 
-  function stop(): void {
+  async function stop(): Promise<void> {
     stopped = true;
     conversationOffers.clear();
     currentPlanning?.controller.abort();
@@ -1063,6 +1075,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     if (timer) clearInterval(timer);
     timer = undefined;
     options?.stopSignal?.removeEventListener("abort", stop);
+    await Promise.allSettled([...pendingPlans, ...(currentDiary ? [currentDiary] : [])]);
   }
   if (options?.stopSignal?.aborted) stopped = true;
   else options?.stopSignal?.addEventListener("abort", stop, { once: true });
@@ -1101,7 +1114,7 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
       return true;
     },
     completeShare(source: LifeShareSource, receipt: LifeShareReceipt): void {
-      if (stopped) return;
+      if (stopped && !canDrainDelivery()) return;
       const sharing = completeLifeShare(state.sharing, source, receipt);
       if (sharing !== state.sharing) save({ ...state, sharing });
     },
@@ -1184,6 +1197,23 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
         ? { ...item, status: "revoked", revision: state.revision + 1, modelDetail: undefined } : item) }));
       return view();
     },
+    conversationOffer(runId: string): unknown { return structuredClone(conversationOffers.get(runId)); },
+    restoreConversationOffer(runId: string, raw: unknown): boolean {
+      const offer = raw as ConversationLifeOffer;
+      if (!offer || !validTimestamp(offer.requestedAt) || !Number.isSafeInteger(offer.planToken) || offer.planToken < 0
+        || typeof offer.goalToken !== "string" || !Number.isInteger(offer.timezoneOffsetMinutes)
+        || offer.timezoneOffsetMinutes < -840 || offer.timezoneOffsetMinutes > 840
+        || JSON.stringify(offer.windows) !== JSON.stringify(planningWindows("refine", offer.requestedAt, offer.timezoneOffsetMinutes, true))) {
+        throw new Error("SQLITE_LIFE_OFFER_CORRUPT");
+      }
+      const at = now();
+      if (stopped || !state.settings.enabled || !state.planning.enabled || at < offer.requestedAt
+        || planningDate(at, offer.timezoneOffsetMinutes) !== planningDate(offer.requestedAt, offer.timezoneOffsetMinutes)
+        || new Date(at).getTimezoneOffset() !== offer.timezoneOffsetMinutes
+        || lifePlanToken(state.planning) !== offer.planToken
+        || JSON.stringify(state.journal.goals.map(goal => [goal.id, goal.revision])) !== offer.goalToken) return false;
+      conversationOffers.set(runId, structuredClone(offer)); return true;
+    },
     applyConversationUpdate(runId: string, raw: string, messageId: string | null = null): boolean {
       const offer = conversationOffers.get(runId);
       conversationOffers.delete(runId);
@@ -1246,10 +1276,16 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
             goalRef: plan.goalRefs?.[index] ?? null })) } } : {}),
         ...(applied ? { intentions: { before: modelIntentionSnapshot(base.journal),
           after: modelIntentionSnapshot({ ...base.journal, goals: applied.goals }) } } : {}) };
-      save({ ...base, journal: applied ? { ...base.journal, goals: applied.goals } : base.journal,
-        planning: { ...base.planning, lastConversationUpdateAt: at,
-          conversationPlans: plan ? [...base.planning.conversationPlans, plan] : base.planning.conversationPlans,
-          conversationChanges: [...(base.planning.conversationChanges ?? []).slice(-9_999), change] } });
+      try {
+        save({ ...base, journal: applied ? { ...base.journal, goals: applied.goals } : base.journal,
+          planning: { ...base.planning, lastConversationUpdateAt: at,
+            conversationPlans: plan ? [...base.planning.conversationPlans, plan] : base.planning.conversationPlans,
+            conversationChanges: [...(base.planning.conversationChanges ?? []).slice(-9_999), change] } });
+      } catch (error) {
+        // Validation rejections above remain permanent; a failed save can retry the same offer.
+        if ((storage as PluginStorage & { isolationAggregate?: boolean }).isolationAggregate === true) conversationOffers.set(runId, offer);
+        throw error;
+      }
       observeRuntime(at);
       return true;
     },
@@ -1296,3 +1332,4 @@ export function createLifeContext(storage: PluginStorage, now: () => number = Da
     },
   };
 }
+

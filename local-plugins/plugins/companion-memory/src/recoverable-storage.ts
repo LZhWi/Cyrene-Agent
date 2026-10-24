@@ -76,10 +76,19 @@ export function createRecoverableMemoryStorage(ctx: PluginContext): PluginStorag
     return { primary: path.join(root, `${key}.json`), backup: path.join(root, `${key}.last-good.json`), temporary: path.join(root, `${key}.json.tmp`) };
   }
   return {
+    ...((ctx.storage as any).isolationAggregate === true ? { isolationAggregate: true } : {}),
+    ...((ctx.storage as any).isolationQueue ? { isolationQueue: (ctx.storage as any).isolationQueue } : {}),
+    ...((ctx.storage as any).isolationTransaction ? { isolationTransaction: (ctx.storage as any).isolationTransaction } : {}),
+    ...((ctx.storage as any).isolationSources ? { isolationSources: (ctx.storage as any).isolationSources } : {}),
     rootDir: fallback.rootDir,
     get<T>(key: string): T | undefined {
       if (!Object.hasOwn(validators, key)) return fallback.get<T>(key);
       if (ctx.signal.aborted) throw new Error("插件已停止，拒绝恢复或写入");
+      if ((ctx.storage as any).isolationAggregate === true) {
+        const value = fallback.get<T>(key);
+        if (value !== undefined) validate(key, value);
+        return value;
+      }
       const { primary, backup, temporary } = files(key);
       const current = read(key, primary), lastGood = read(key, backup);
       if (current) {
@@ -104,6 +113,7 @@ export function createRecoverableMemoryStorage(ctx: PluginContext): PluginStorag
       if (ctx.signal.aborted) throw new Error("插件已停止，拒绝迟到写入");
       const json = JSON.stringify(value, null, 2);
       validate(key, JSON.parse(json));
+      if ((ctx.storage as any).isolationAggregate === true) return fallback.set(key, value);
       const { primary, backup, temporary } = files(key);
       check(temporary);
       const current = read(key, primary), lastGood = read(key, backup);

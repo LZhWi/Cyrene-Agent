@@ -39,6 +39,7 @@ for (const edition of ["local", "upstream"]) {
   if (!validateManifestData(editionManifest).ok) throw Error("Invalid edition manifest");
   for (const file of files) {
     let data = await readFile(path.join(source, file));
+    if (file === "README.md" && edition === "upstream") data = await readFile(path.join(source, "README.upstream.md"));
     if (file === "manifest.json") data = Buffer.from(JSON.stringify(editionManifest, null, 2) + "\n");
     if (file === "edition.cjs") data = Buffer.from(`"use strict";\nmodule.exports = "${edition}";\n`);
     if (file === "preload.cjs") {

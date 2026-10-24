@@ -22,6 +22,53 @@ describe("chats store", () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-chats-store-"));
   });
 
+  it("does not truncate a proactive message arriving after the retry snapshot", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({ mode: "chat", initialMessages: [
+      { id: "u", role: "user", content: "question", at: 1 },
+      { id: "a", role: "model", content: "answer", at: 2 },
+    ] });
+    const expectedTailIds = session.messages.map((message) => message.id);
+    store.appendMessage(session.id, { id: "p", role: "model", content: "proactive", at: 3 });
+    const file = path.join(store.getRootDir(), "sessions", `${session.id}.json`);
+    const before = fs.readFileSync(file, "utf8");
+
+    expect(store.replaceMessagesTail(session.id, 0, [session.messages[0]], expectedTailIds)).toBeNull();
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(store.getSession(session.id)?.messages.map((message) => message.id)).toEqual(["u", "a", "p"]);
+  });
+
+  it("allows retry truncation only while the expected last turn is still current", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({ mode: "chat", initialMessages: [
+      { id: "older", role: "model", content: "older", at: 1 },
+      { id: "u", role: "user", content: "question", at: 2 },
+      { id: "a", role: "model", content: "answer", at: 3 },
+    ] });
+    const edited = { ...session.messages[1], content: "edited question" };
+    const saved = store.replaceMessagesTail(session.id, 1, [edited], ["u", "a"]);
+    expect(saved?.messages.map((message) => message.id)).toEqual(["older", "u"]);
+    expect(saved?.messages[1].content).toBe("edited question");
+    // A second renderer holding the old turn cannot repeat the truncation.
+    expect(store.replaceMessagesTail(session.id, 1, [edited], ["u", "a"])).toBeNull();
+  });
+
+  it("preserves proactive messages during checkpoint and TTS cache updates", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({ mode: "chat", initialMessages: [
+      { id: "a", role: "model", content: "checkpoint", at: 1 },
+    ] });
+    store.appendMessage(session.id, { id: "p", role: "model", content: "proactive", at: 2 });
+    store.upsertMessage(session.id, { ...session.messages[0], content: "finished" });
+    store.setMessageTtsCacheKey(session.id, "a", `minimax-${"a".repeat(64)}`, "v1");
+    expect(store.getSession(session.id)?.messages.map((message) => message.id)).toEqual(["a", "p"]);
+    expect(store.getSession(session.id)?.messages[0].content).toBe("finished");
+    expect(store.getSession(session.id)?.messages[0].ttsCacheKey).toBe(`minimax-${"a".repeat(64)}`);
+  });
+
   it("blocks corrupt session reads and writes across restart until explicit recovery", async () => {
     let store = await import("./chats-store");
     store.initialize();

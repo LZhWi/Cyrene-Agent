@@ -1,4 +1,5 @@
 import * as chatsStore from "../chats/chats-store";
+import { isBackgroundIndexClosing, trackBackgroundIndex } from "../application/background-index-work";
 import { validateCaptionImagePath } from "./image-caption";
 import { loadVisionConfig } from "../settings/model-settings";
 import { captionImageWithRetryAndFallback } from "../orchestrator/vision-captioner";
@@ -91,12 +92,13 @@ async function drain(): Promise<void> {
 }
 
 export function scheduleVisualHistoryCaption(sessionId: string, messageId: string): void {
+  if (isBackgroundIndexClosing()) return;
   if (!sessionId || !messageId) return;
   const key = `${sessionId}\0${messageId}`;
   if (pending.has(key)) return;
   pending.add(key);
   queue.push({ sessionId, messageId });
-  void drain();
+  void trackBackgroundIndex("visual-history", drain);
 }
 
 export function backfillVisualHistoryCaptions(): void {

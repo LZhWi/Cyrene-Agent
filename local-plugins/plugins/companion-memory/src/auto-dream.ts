@@ -54,6 +54,7 @@ export function createAutoDream(
   now: () => number = Date.now,
   apply?: (review: unknown) => { applied: boolean; reviewId?: string },
   runTail?: (signal: AbortSignal) => Promise<DreamCycleTailResult | undefined>,
+  acquire?: (signal: AbortSignal) => Promise<() => void>,
 ) {
   let enabled = storage.get<boolean>(SETTINGS_KEY) ?? false;
   if (typeof enabled !== "boolean") throw new Error("后台梦境设置损坏");
@@ -71,14 +72,24 @@ export function createAutoDream(
     const delay = Math.max(0, Math.max(idleDue, intervalDue) - now());
     timer = setTimeout(run, Math.min(delay, 2_147_483_647));
   };
-  const run = async () => {
+  const pending = new Set<Promise<void>>();
+  const run = (): Promise<void> => {
+    const work = runAccepted();
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  };
+  const runAccepted = async () => {
     timer = undefined;
     if (stopped || !enabled || running || state.lastActivityAt === undefined) return;
     const at = now();
     if (at - state.lastActivityAt < IDLE_MS || (state.lastCompletedAt !== undefined && at - state.lastCompletedAt < MIN_INTERVAL_MS)) { schedule(); return; }
     save({ ...state, lastAttemptAt: at });
     running = true; controller = new AbortController();
+    let release: (() => void) | undefined;
     try {
+      release = await acquire?.(controller.signal);
+      if (stopped || controller.signal.aborted) return;
       phase = "capacity";
       const entryIds = listCandidateIds();
       if (entryIds.length > 20) throw new Error("梦境周期叙事候选超过 20 条");
@@ -109,6 +120,7 @@ export function createAutoDream(
         save({ ...state, lastErrorAt: now(), lastFailedStage });
       }
     } finally {
+      release?.();
       running = false; controller = undefined; phase = "idle";
     }
   };
@@ -138,6 +150,6 @@ export function createAutoDream(
       storage.set(APPLY_SETTINGS_KEY, value); applyEnabled = value;
       return this.view();
     },
-    stop() { if (stopped) return; stopped = true; cancelTimer(); controller?.abort(); off(); },
+    async stop() { if (!stopped) { stopped = true; cancelTimer(); controller?.abort(); off(); } await Promise.allSettled([...pending]); },
   };
 }

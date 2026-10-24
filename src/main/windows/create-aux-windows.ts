@@ -76,6 +76,9 @@ function createReactWindowShell(kind: ReactWindowKind): BrowserWindow {
   if (kind === "chat") setReactChatWindow(window);
   else setReactWorkspaceWindow(window);
 
+  // 两种窗口共用 HTML，保留各自用途的系统标题。
+  window.on("page-title-updated", (event) => event.preventDefault());
+
   // 聊天窗口内出现外链（如插件收录仓库）时转交系统浏览器打开，不再派生新窗口
   attachExternalLinkHandler(window);
 

@@ -1,0 +1,53 @@
+import { app, shell } from "electron";
+import path from "node:path";
+import type * as core from "./chats-store-core";
+import { getConversationDatabase } from "../storage/conversation-database-client";
+export type { EnqueuePendingResult, RemovePendingResult, PendingWithdrawalError, BeginPendingWithdrawalResult, CommitPendingWithdrawalResult, PendingWithdrawalRecord, PendingChatMessageInput, ClaimPendingResult, CompleteDispatchResult, EditPendingResult, MarkPendingAdjustResult, CommitPendingAdjustResult, ResetPendingAdjustResult } from "./chats-store-core";
+import { CHAT_SCHEMA_VERSION } from "../../shared/chat-types";
+import type { ChatSessionRecord, ChatSession, ChatMessage } from "../../shared/chat-types";
+function invoke<K extends keyof typeof core>(method: K, args: Parameters<(typeof core)[K]>): Promise<Awaited<ReturnType<(typeof core)[K]>>> { return getConversationDatabase(app.getPath('userData')).call('chats.' + method, ...args); }
+export const initialize = (...args: Parameters<typeof core.initialize>): Promise<Awaited<ReturnType<typeof core.initialize>>> => invoke('initialize', args);
+export function getRootDir(): string { return path.join(app.getPath('userData'), 'cyrene-chats'); }
+export const listSessions = (...args: Parameters<typeof core.listSessions>): Promise<Awaited<ReturnType<typeof core.listSessions>>> => invoke('listSessions', args);
+export const getSession = (...args: Parameters<typeof core.getSession>): Promise<Awaited<ReturnType<typeof core.getSession>>> => invoke('getSession', args);
+export const getSessionRecord = (...args: Parameters<typeof core.getSessionRecord>): Promise<Awaited<ReturnType<typeof core.getSessionRecord>>> => invoke('getSessionRecord', args);
+export const getSummaryMemoryProgress = (...args: Parameters<typeof core.getSummaryMemoryProgress>): Promise<Awaited<ReturnType<typeof core.getSummaryMemoryProgress>>> => invoke('getSummaryMemoryProgress', args);
+export const appendSummaryMemoryTurn = (...args: Parameters<typeof core.appendSummaryMemoryTurn>): Promise<Awaited<ReturnType<typeof core.appendSummaryMemoryTurn>>> => invoke('appendSummaryMemoryTurn', args);
+export const markSummaryMemoryProcessed = (...args: Parameters<typeof core.markSummaryMemoryProcessed>): Promise<Awaited<ReturnType<typeof core.markSummaryMemoryProcessed>>> => invoke('markSummaryMemoryProcessed', args);
+export const writeMigratedSession = (...args: Parameters<typeof core.writeMigratedSession>): Promise<Awaited<ReturnType<typeof core.writeMigratedSession>>> => invoke('writeMigratedSession', args);
+export { composeSession } from "./chats-store-view";
+export const getSessionPage = (...args: Parameters<typeof core.getSessionPage>): Promise<Awaited<ReturnType<typeof core.getSessionPage>>> => invoke('getSessionPage', args);
+export const createSession = (...args: Parameters<typeof core.createSession>): Promise<Awaited<ReturnType<typeof core.createSession>>> => invoke('createSession', args);
+export const getSessionByPurpose = (...args: Parameters<typeof core.getSessionByPurpose>): Promise<Awaited<ReturnType<typeof core.getSessionByPurpose>>> => invoke('getSessionByPurpose', args);
+export const getOrCreateSessionByPurpose = (...args: Parameters<typeof core.getOrCreateSessionByPurpose>): Promise<Awaited<ReturnType<typeof core.getOrCreateSessionByPurpose>>> => invoke('getOrCreateSessionByPurpose', args);
+export const renameSession = (...args: Parameters<typeof core.renameSession>): Promise<Awaited<ReturnType<typeof core.renameSession>>> => invoke('renameSession', args);
+export const setGeneratedTitle = (...args: Parameters<typeof core.setGeneratedTitle>): Promise<Awaited<ReturnType<typeof core.setGeneratedTitle>>> => invoke('setGeneratedTitle', args);
+export const getSessionView = (...args: Parameters<typeof core.getSessionView>): Promise<Awaited<ReturnType<typeof core.getSessionView>>> => invoke('getSessionView', args);
+export const setSessionPinned = (...args: Parameters<typeof core.setSessionPinned>): Promise<Awaited<ReturnType<typeof core.setSessionPinned>>> => invoke('setSessionPinned', args);
+export const syncSessionStats = (...args: Parameters<typeof core.syncSessionStats>): Promise<Awaited<ReturnType<typeof core.syncSessionStats>>> => invoke('syncSessionStats', args);
+export const setSessionModelProfile = (...args: Parameters<typeof core.setSessionModelProfile>): Promise<Awaited<ReturnType<typeof core.setSessionModelProfile>>> => invoke('setSessionModelProfile', args);
+export const setSessionModel = (...args: Parameters<typeof core.setSessionModel>): Promise<Awaited<ReturnType<typeof core.setSessionModel>>> => invoke('setSessionModel', args);
+export { enqueueSessionModelMutation } from "./session-model-mutation-queue";
+export const setSessionContextUsage = (...args: Parameters<typeof core.setSessionContextUsage>): Promise<Awaited<ReturnType<typeof core.setSessionContextUsage>>> => invoke('setSessionContextUsage', args);
+export const beginPendingWithdrawal = (...args: Parameters<typeof core.beginPendingWithdrawal>): Promise<Awaited<ReturnType<typeof core.beginPendingWithdrawal>>> => invoke('beginPendingWithdrawal', args);
+export const commitPendingWithdrawal = (...args: Parameters<typeof core.commitPendingWithdrawal>): Promise<Awaited<ReturnType<typeof core.commitPendingWithdrawal>>> => invoke('commitPendingWithdrawal', args);
+export const listPendingWithdrawals = (...args: Parameters<typeof core.listPendingWithdrawals>): Promise<Awaited<ReturnType<typeof core.listPendingWithdrawals>>> => invoke('listPendingWithdrawals', args);
+export const enqueuePendingMessage = (...args: Parameters<typeof core.enqueuePendingMessage>): Promise<Awaited<ReturnType<typeof core.enqueuePendingMessage>>> => invoke('enqueuePendingMessage', args);
+export const getPendingMessages = (...args: Parameters<typeof core.getPendingMessages>): Promise<Awaited<ReturnType<typeof core.getPendingMessages>>> => invoke('getPendingMessages', args);
+export const removePendingMessage = (...args: Parameters<typeof core.removePendingMessage>): Promise<Awaited<ReturnType<typeof core.removePendingMessage>>> => invoke('removePendingMessage', args);
+export const getPendingDispatch = (...args: Parameters<typeof core.getPendingDispatch>): Promise<Awaited<ReturnType<typeof core.getPendingDispatch>>> => invoke('getPendingDispatch', args);
+export const claimPendingMessage = (...args: Parameters<typeof core.claimPendingMessage>): Promise<Awaited<ReturnType<typeof core.claimPendingMessage>>> => invoke('claimPendingMessage', args);
+export const completePendingDispatch = (...args: Parameters<typeof core.completePendingDispatch>): Promise<Awaited<ReturnType<typeof core.completePendingDispatch>>> => invoke('completePendingDispatch', args);
+export const editPendingMessage = (...args: Parameters<typeof core.editPendingMessage>): Promise<Awaited<ReturnType<typeof core.editPendingMessage>>> => invoke('editPendingMessage', args);
+export const markPendingAdjust = (...args: Parameters<typeof core.markPendingAdjust>): Promise<Awaited<ReturnType<typeof core.markPendingAdjust>>> => invoke('markPendingAdjust', args);
+export const commitPendingAdjust = (...args: Parameters<typeof core.commitPendingAdjust>): Promise<Awaited<ReturnType<typeof core.commitPendingAdjust>>> => invoke('commitPendingAdjust', args);
+export const resetPendingAdjustByRun = (...args: Parameters<typeof core.resetPendingAdjustByRun>): Promise<Awaited<ReturnType<typeof core.resetPendingAdjustByRun>>> => invoke('resetPendingAdjustByRun', args);
+export const clearStalePendingAdjustMarks = (...args: Parameters<typeof core.clearStalePendingAdjustMarks>): Promise<Awaited<ReturnType<typeof core.clearStalePendingAdjustMarks>>> => invoke('clearStalePendingAdjustMarks', args);
+export const deleteSession = (...args: Parameters<typeof core.deleteSession>): Promise<Awaited<ReturnType<typeof core.deleteSession>>> => invoke('deleteSession', args);
+export const getLatestSessionId = (...args: Parameters<typeof core.getLatestSessionId>): Promise<Awaited<ReturnType<typeof core.getLatestSessionId>>> => invoke('getLatestSessionId', args);
+export const migrateLegacyMessages = (...args: Parameters<typeof core.migrateLegacyMessages>): Promise<Awaited<ReturnType<typeof core.migrateLegacyMessages>>> => invoke('migrateLegacyMessages', args);
+export async function openStorageFolder(): Promise<void> { await shell.openPath(app.getPath('userData')); }
+export const setWorkspaceBinding = (...args: Parameters<typeof core.setWorkspaceBinding>): Promise<Awaited<ReturnType<typeof core.setWorkspaceBinding>>> => invoke('setWorkspaceBinding', args);
+export const getWorkspaceBinding = (...args: Parameters<typeof core.getWorkspaceBinding>): Promise<Awaited<ReturnType<typeof core.getWorkspaceBinding>>> => invoke('getWorkspaceBinding', args);
+export const clearWorkspaceBinding = (...args: Parameters<typeof core.clearWorkspaceBinding>): Promise<Awaited<ReturnType<typeof core.clearWorkspaceBinding>>> => invoke('clearWorkspaceBinding', args);
+export function reconcilePendingDispatch(id: string): Promise<boolean> { return getConversationDatabase(app.getPath('userData')).call('chats.reconcilePendingDispatch', id); }

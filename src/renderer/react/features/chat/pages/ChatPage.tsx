@@ -979,7 +979,8 @@ export function ChatPage() {
             content: nextContent,
             at: Date.now(),
           };
-      const truncatedSession = await store.replaceTail(sessionId, userIndex, [nextUserMessage]);
+      const truncatedSession = await store.replaceTail(sessionId, userIndex, [nextUserMessage],
+        session.messages.slice(userIndex).map((message) => message.id));
       if (!truncatedSession) return false;
 
       activeEarlyTtsRef.current?.queue.cancel();

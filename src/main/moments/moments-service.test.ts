@@ -1087,6 +1087,32 @@ describe("moments service 角色开关与模型调用预算", () => {
 });
 
 describe("moments service 主动发帖调度", () => {
+  it("退出等待自动发帖结束，且不再接受新轮次", async () => {
+    const h = createHarness({ cyreneMomentsPostingEnabled: true });
+    let release!: (value: MomentsModelOutput) => void;
+    h.runModel.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    h.service.scheduleTurn(makeTurnInput());
+    await vi.waitFor(() => expect(h.runModel).toHaveBeenCalledOnce());
+    let done = false;
+    const stop = h.service.stopReactionScanner(new AbortController().signal).then(() => { done = true; });
+    h.service.scheduleTurn(makeTurnInput({ runId: "late" }));
+    await Promise.resolve(); expect(done).toBe(false);
+    release({ kind: "text", text: '{"shouldPost":true,"text":"测试发帖"}' });
+    await stop; expect(h.fake.state.cyrenePosts).toHaveLength(1);
+    expect(h.enqueueTask).toHaveBeenCalledOnce();
+  });
+
+  it("超过退出期限后不提交迟到发帖", async () => {
+    const h = createHarness({ cyreneMomentsPostingEnabled: true });
+    let release!: (value: MomentsModelOutput) => void;
+    h.runModel.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    h.service.scheduleTurn(makeTurnInput());
+    await vi.waitFor(() => expect(h.runModel).toHaveBeenCalledOnce());
+    const controller = new AbortController();
+    const stop = h.service.stopReactionScanner(controller.signal); controller.abort(); await stop;
+    release({ kind: "text", text: '{"shouldPost":true,"text":"迟到发帖"}' });
+    await flush(); expect(h.fake.state.cyrenePosts).toHaveLength(0);
+  });
   it("主动发帖开关关闭时不调度，但 ring buffer 仍记录历史轮次", async () => {
     const h = createHarness({
       cyreneMomentsPostingEnabled: false,

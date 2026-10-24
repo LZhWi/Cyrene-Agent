@@ -21,6 +21,21 @@ import { backfillVisualHistoryCaptions, retryVisualHistoryAfterScreenObservation
 const attachment = (extra: Record<string, unknown> = {}) => ({
   kind: "image", name: "scene.png", filePath: "C:/scene.png", mime: "image/png", status: "done", ...extra,
 });
+
+it("shutdown waits for an in-flight visual caption before reporting drained", async () => {
+  vi.resetModules();
+  const {scheduleVisualHistoryCaption}=await import("./visual-history-caption");
+  state.sessions.clear();
+  state.sessions.set("shutdown", {id:"shutdown",mode:"chat",messages:[{id:"m",role:"user",attachments:[attachment()]}]});
+  let release!: (text:string)=>void;
+  state.caption.mockReset().mockImplementationOnce(()=>new Promise<string>(r=>{release=r;}));
+  scheduleVisualHistoryCaption("shutdown","m");
+  const {drainBackgroundIndexes}=await import("../application/background-index-work");
+  let done=false;const drained=drainBackgroundIndexes(new AbortController().signal).then(()=>{done=true;});
+  await Promise.resolve();expect(done).toBe(false);
+  release('{"summary":"窗边摆着一只蓝色小花瓶","detail":"窗边有蓝色花瓶"}');
+  await drained;expect(state.setCaption).toHaveBeenCalledWith("shutdown","m","C:/scene.png",expect.anything());
+});
 async function settle() {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
 }

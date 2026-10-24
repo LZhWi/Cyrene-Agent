@@ -97,6 +97,7 @@ export function createScreenMonitor(deps: ScreenMonitorDeps) {
   let settings = stored === undefined ? { version: 1 as const, enabled: false } : validateSettings(stored);
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let current: AbortController | undefined;
+  let currentDone: Promise<void> | undefined;
   let latest: LatestObservation | undefined;
   let lastIntent: string | null = null;
   let intervalMs = SCREEN_PERIODIC_INTERVAL_MS;
@@ -125,6 +126,8 @@ export function createScreenMonitor(deps: ScreenMonitorDeps) {
     console.log("[ScreenMonitor] 开始周期观察");
     const controller = new AbortController();
     current = controller;
+    let finish!: () => void;
+    currentDone = new Promise<void>(resolve => { finish = resolve; });
     const signal = AbortSignal.any([deps.stopSignal, controller.signal]);
     try {
       const observation = await deps.observe({ previousSummary: latest?.text ?? "", signal });
@@ -165,6 +168,8 @@ export function createScreenMonitor(deps: ScreenMonitorDeps) {
     } finally {
       current = undefined;
       schedule();
+      currentDone = undefined;
+      finish();
     }
   }
 
@@ -213,8 +218,8 @@ export function createScreenMonitor(deps: ScreenMonitorDeps) {
     },
     /** 只供测试和显式刷新；自动运行仍从完整间隔后开始，避免启用即截屏。 */
     evaluate: tick,
-    stop() {
-      if (stopped) return;
+    async stop() {
+      if (stopped) { await currentDone; return; }
       stopped = true;
       current?.abort();
       clearScheduled();
@@ -222,6 +227,7 @@ export function createScreenMonitor(deps: ScreenMonitorDeps) {
       lastIntent = null;
       deps.markPeriodicUnavailable?.();
       console.log("[ScreenMonitor] 停止周期观察");
+      await currentDone;
     },
   };
 }

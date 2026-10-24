@@ -173,6 +173,22 @@ describe("review panel visibility", () => {
 });
 
 describe("function-calling round presentation", () => {
+  for (const agentRounds of [[], [{ id: "empty", status: "running" as const, startedAt: 1 }]]) {
+    it(`does not show organizing after an empty run ends (${agentRounds.length} rounds)`, () => {
+      (globalThis as typeof globalThis & { React: typeof React }).React = React;
+      const props = { agentRounds, processMessages: [], reasoningBlocks: [], tools: [], interrupted: true, processing: false };
+      expect(renderToStaticMarkup(React.createElement(RunActivityDetail, props))).toBe("");
+      expect(renderToStaticMarkup(React.createElement(RunActivityDetail, { ...props, interrupted: false, processing: true }))).toContain("正在整理");
+    });
+  }
+  it("keeps existing process evidence visible after cancellation", () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(RunActivityDetail, {
+      processMessages: [{ id: "process", content: "已读到的证据" }], reasoningBlocks: [], tools: [], interrupted: true, processing: false,
+    }));
+    expect(html).toContain("已读到的证据");
+    expect(html).not.toContain("正在整理");
+  });
   it("renders one collapsible activity group per model round with reasoning inside", () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const html = renderToStaticMarkup(React.createElement(RunActivityDetail, {

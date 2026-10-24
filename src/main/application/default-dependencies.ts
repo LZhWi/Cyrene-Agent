@@ -100,7 +100,10 @@ import { TtsSessionService } from "../tts/tts-session-service";
 import { registerTtsIpc } from "../tts/tts-ipc";
 import { loadUserProfile } from "../settings-store";
 import { getAppIconPath } from "../app-icon";
-import { registerAgUiIpc } from "../agui-bridge";
+import { registerAgUiIpc, quiesceAgUiBridge, shutdownAgUiBridge } from "../agui-bridge";
+import { drainLLMQueue } from "../llm-queue";
+import { drainBackgroundIndexes } from "./background-index-work";
+import { quiesceMcpConnections, shutdownMcpConnections } from "../orchestrator/mcp-adapter";
 import { updateLocaleContext } from "../locale-context";
 import { registerCallIpc } from "../call/call-manager";
 import { initSkills, skillRegistry } from "../skills";
@@ -267,6 +270,20 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
   const readiness = createStartupReadiness();
   const activation = createWindowActivationBroker();
   const shutdown = createShutdownCoordinator({ readiness, timeoutMs: SHUTDOWN_TIMEOUT_MS });
+  shutdown.register({ id: "background-work", phase: "drainBackgroundWork", dispose: async (signal) => {
+    await drainLLMQueue(signal);
+    await drainBackgroundIndexes(signal);
+  } });
+  shutdown.register({ id: "request-admission", phase: "quiesce", dispose: () => {
+    quiesceAgUiBridge();
+    quiesceMcpConnections();
+  } });
+  // Drain before stopActiveWork disposes plugins used by terminal settlement.
+  shutdown.register({ id: "agui-runs", phase: "stopProducers", dispose: async (signal) => {
+    await shutdownAgUiBridge();
+    await pendingTurnLifecycle.drain(signal);
+  } });
+  shutdown.register({ id: "mcp-connections", phase: "stopExternalProviders", dispose: shutdownMcpConnections });
 
   // 注入应用图标路径 getter（窗口工厂统一读取，避免循环依赖）。
   // 必须在 shell 阶段之前注入：聊天窗口壳与托盘在 shell 阶段创建时就会读取，
@@ -642,7 +659,8 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           publishPluginAssistantFeedback: (event) => lifecyclePublisher.publishAssistantMessageFeedback(event),
           publishConversationChanged: (event) => lifecyclePublisher.publishConversationChanged(event),
         });
-        setTimeout(backfillVisualHistoryCaptions, 10_000);
+        const visualBackfillTimer = setTimeout(backfillVisualHistoryCaptions, 10_000);
+        shutdown.register({ id: "visual-backfill-timer", phase: "quiesce", dispose: () => clearTimeout(visualBackfillTimer) });
         registerCodeExecutorIpc(ipc, {
           getWindow: () => reactWorkspaceWindow,
           getSession: chatsStore.getSession,
@@ -799,7 +817,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         }
       },
       scheduleEmbeddingRefresh: async () => {
-        core.services.embedding.scheduleStartupRefreshes();
+        return core.services.embedding.scheduleStartupRefreshes();
       },
       initializeReranker: async () => {
         try {
@@ -825,7 +843,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
       startMomentsReactionScanner: async () => {
         // 启动即补扫一轮：重启前已逾期的反应任务尽快续上，不等第一个扫描周期
         momentsService.startReactionScanner();
-        return { dispose: () => momentsService.stopReactionScanner() };
+        return { dispose: (signal?: AbortSignal) => momentsService.stopReactionScanner(signal) };
       },
     }),
 

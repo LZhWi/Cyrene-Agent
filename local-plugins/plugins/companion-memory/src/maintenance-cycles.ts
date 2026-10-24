@@ -5,7 +5,7 @@ const KEY = "maintenance-cycle-state";
 type DesktopTurn = Extract<PluginTurnFinishedEvent, { source: "desktop" }>;
 type Phase = "review" | "compression" | "reflection";
 interface Row { key: string; assistantId: string; signature: string; active: boolean }
-interface Job { event: DesktopTurn; key: string; signature: string; phases: Phase[] }
+interface Job { event: DesktopTurn; key: string; signature: string; phases: Phase[]; retries?: Partial<Record<Phase, { attempts: number; nextAt: number }>> }
 interface State { version: 1; initialized: boolean; rows: Row[]; inbox: DesktopTurn[]; jobs: Job[]; lastError?: string }
 function validEvent(value: unknown): value is DesktopTurn {
   if (!value || typeof value !== "object") return false;
@@ -75,22 +75,28 @@ export function createMaintenanceCycles(storage: PluginStorage, events: PluginEv
       for (const phase of [...job.phases]) {
         current = await refresh();
         if (current.get(job.key)?.signature !== job.signature) { state.jobs = state.jobs.filter(item => item !== job); persist(); break; }
+        const previous = job.retries?.[phase];
+        if (previous && (previous.attempts >= 2 || previous.nextAt > Date.now())) continue;
+        job.retries ??= {};
+        job.retries[phase] = { attempts: (previous?.attempts ?? 0) + 1, nextAt: Date.now() + 60_000 };
+        persist();
         let completed = false;
         try { completed = await stages[phase](job.event); }
         catch (error) { log(String(error)); }
-        if (stopped || signal.aborted) return;
+        if (stopped || signal.aborted) { if (previous) job.retries[phase] = previous; else delete job.retries[phase]; persist(); return; }
         if (completed) {
+          delete job.retries[phase];
           job.phases = job.phases.filter(item => item !== phase);
           if (!job.phases.length) state.jobs = state.jobs.filter(item => item !== job);
           persist();
-        }
+        } else { job.retries[phase]!.nextAt = Date.now() + 60_000; persist(); }
       }
 
     }
-    state.lastError = undefined; persist();
+    state.lastError = state.jobs.some(job => job.phases.some(phase => (job.retries?.[phase]?.attempts ?? 0) >= 2)) ? "维护重试已暂停，请手动重试" : undefined; persist();
   }
   function retryLater() {
-    if (stopped || signal.aborted || timer || (!state.jobs.length && !state.inbox.length && !state.lastError)) return;
+    if (stopped || signal.aborted || timer || (!state.jobs.some(job => job.phases.some(phase => (job.retries?.[phase]?.attempts ?? 0) < 2)) && !state.inbox.length && state.lastError !== "维护来源读取或阶段执行失败")) return;
     timer = setTimeout(() => { timer = undefined; void kick(); },60_000); timer.unref?.();
   }
   function kick(): Promise<void> {
@@ -110,7 +116,7 @@ export function createMaintenanceCycles(storage: PluginStorage, events: PluginEv
     return kick();
   });
   const offChange = events.on("host:conversation:changed", () => kick());
-  const stop = () => { stopped = true; if (timer) clearTimeout(timer); offTurn(); offChange(); signal.removeEventListener("abort",stop); };
+  const stop = async () => { stopped = true; if (timer) clearTimeout(timer); offTurn(); offChange(); signal.removeEventListener("abort",stop); await running; };
   signal.addEventListener("abort",stop,{once:true});
-  return { start: kick, stop, view: () => structuredClone({...state,round:state.rows.filter(row=>row.active).length}) };
+  return { start: kick, retry: () => { for (const job of state.jobs) delete job.retries; state.lastError = undefined; persist(); return kick(); }, stop, view: () => structuredClone({...state,round:state.rows.filter(row=>row.active).length}) };
 }

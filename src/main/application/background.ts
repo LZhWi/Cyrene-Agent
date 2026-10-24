@@ -36,7 +36,7 @@ export interface BackgroundDependencies {
   scheduleUpdateCheck(signal: AbortSignal): Promise<{ dispose(): void } | void>;
   startProactiveTrigger(signal: AbortSignal): Promise<{ dispose(): void } | void>;
   /** 启动动态反应队列周期扫描器（含启动补扫，重启后逾期任务尽快续上） */
-  startMomentsReactionScanner(signal: AbortSignal): Promise<{ dispose(): void } | void>;
+  startMomentsReactionScanner(signal: AbortSignal): Promise<{ dispose(signal?: AbortSignal): void | Promise<void> } | void>;
 }
 
 export interface BackgroundHandle {
@@ -54,7 +54,8 @@ function disposeLateResult(result: unknown): void {
   const disposer = result as { dispose?: unknown } | null | undefined;
   if (disposer && typeof disposer.dispose === "function") {
     try {
-      (disposer as { dispose(): void }).dispose();
+      void Promise.resolve((disposer as { dispose(): void | Promise<void> }).dispose())
+        .catch(error => console.error("[Background] late dispose failed:", error));
     } catch (error) {
       console.error("[Background] late dispose failed:", error);
     }
@@ -130,7 +131,7 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle 
   let proactiveTriggerDisposer: OptionalDisposer;
   let updateCheckDisposer: OptionalDisposer;
   let embeddingRefreshDisposer: OptionalDisposer;
-  let momentsScannerDisposer: OptionalDisposer;
+  let momentsScannerDisposer: { dispose(signal?: AbortSignal): void | Promise<void> } | void;
 
   const isShuttingDown = (): boolean => {
     const phase = readiness.getPhase();
@@ -185,12 +186,12 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle 
   shutdown.register({
     id: "moments-reaction-scanner",
     phase: "stopProducers",
-    dispose: async () => { disposeOptional(momentsScannerDisposer); },
+    dispose: async (signal) => { await momentsScannerDisposer?.dispose(signal); },
   });
   shutdown.register({
     id: "scheduler",
     phase: "stopProducers",
-    dispose: async () => { scheduler.stop(); },
+    dispose: (signal) => scheduler.engine.shutdown(signal),
   });
   shutdown.register({
     id: "embedding-refresh",
@@ -239,19 +240,25 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle 
     });
     await runTracked("proactive-trigger", "proactive", async (signal) => {
       if (signal.aborted) throw new Error("aborted before proactive trigger start");
-      proactiveTriggerDisposer = await deps.startProactiveTrigger(signal);
+      const disposer = await deps.startProactiveTrigger(signal);
+      if (signal.aborted) return disposer;
+      proactiveTriggerDisposer = disposer;
     });
     // 动态反应队列扫描器：纯定时器启动，失败只降级不影响其余生产者
     await runTracked("moments-reaction-scanner", "moments", async (signal) => {
       if (signal.aborted) throw new Error("aborted before moments reaction scanner start");
-      momentsScannerDisposer = await deps.startMomentsReactionScanner(signal);
+      const disposer = await deps.startMomentsReactionScanner(signal);
+      if (signal.aborted) return disposer;
+      momentsScannerDisposer = disposer;
     });
   }
 
   async function groupB(): Promise<void> {
     await runTracked("memory-reconcile", "memory", (signal) => deps.reconcileMemory(signal));
     await runTracked("embedding-refresh", "embedding", async (signal) => {
-      embeddingRefreshDisposer = await deps.scheduleEmbeddingRefresh(signal);
+      const disposer = await deps.scheduleEmbeddingRefresh(signal);
+      if (signal.aborted) return disposer;
+      embeddingRefreshDisposer = disposer;
     });
     await runTracked("reranker-init", "reranker", (signal) => deps.initializeReranker(signal));
   }
@@ -262,7 +269,9 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle 
 
   async function groupD(): Promise<void> {
     await runTracked("update-check", "update-check", async (signal) => {
-      updateCheckDisposer = await deps.scheduleUpdateCheck(signal);
+      const disposer = await deps.scheduleUpdateCheck(signal);
+      if (signal.aborted) return disposer;
+      updateCheckDisposer = disposer;
     });
   }
 

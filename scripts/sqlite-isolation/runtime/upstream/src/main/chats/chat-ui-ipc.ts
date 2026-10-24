@@ -1,0 +1,345 @@
+import { app, BrowserWindow, clipboard, dialog } from "electron";
+import { stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
+import { getCapabilityOrOpenAI } from "../orchestrator/vendors";
+import { normalizeReasoningPreference } from "../../shared/reasoning";
+import {
+  listSavedModelProfiles,
+  getDefaultModelProfile,
+  loadModelSettings,
+  saveModelProfile,
+  saveModelSettings,
+  resolveModelSettingsProfile,
+  resolveSessionModelSettings,
+} from "../settings/model-settings";
+import { resolveSessionProfileBinding } from "../../shared/session-model";
+import { resolveVendorRuntimeSettings } from "../orchestrator/vendors/runtime-settings";
+import { resolveTransport } from "../orchestrator/vendors/transport-detector";
+import { getSession, getSessionRecord } from "./chats-store";
+import { describePendingAttachment } from "../rag/file-ingest";
+import { captionImageSafe, buildImageCaptionPrompt, validateCaptionImagePath } from "../chat/image-caption";
+import { resolveCaptionVisionConfig, resolveImageRoute } from "../orchestrator/image-router";
+import type { WindowManager } from "../windows/window-manager";
+import { reactChatSession, reactChatWindow } from "../windows/window-state";
+import {
+  activeChatTargetRegistry,
+  parseActiveTargetPayload,
+} from "../plugin-host/active-chat-target";
+import { activeConversationRegistry } from "./active-conversation-registry";
+import { flushSummaryMemory } from "../memory/summary-memory-scheduler";
+import { createGeneratedImageStore } from "./generated-image-store";
+
+export interface ChatUiIpcDependencies {
+  live2dWindowLifecycle: { getDiagnostics(): unknown };
+  get windowManager(): WindowManager | null;
+  /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
+  ipc?: IpcScope;
+}
+
+// 活动会话不再用模块变量记录：activeChatTargetRegistry 同时维护会话、模式、
+// 渲染目标标识与失效监听，供语音输入租约冻结提交目标使用。
+
+/** 兼容旧语义：当前活动会话 ID（无目标或欢迎页时为 null）。 */
+export function getActiveChatSessionId(): string | null {
+  return activeConversationRegistry.getMostRecent()?.sessionId ?? null;
+}
+
+activeChatTargetRegistry.onInvalidated((_reason, affected) => {
+  if (!affected) return;
+  activeConversationRegistry.clearWindow(affected.webContentsId);
+  void flushSummaryMemory(affected.sessionId).catch((error) => {
+    console.warn("[SummaryMemory] flush on chat window invalidation failed:", affected.sessionId, error);
+  });
+});
+
+export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
+  const { live2dWindowLifecycle } = deps;
+  const ipc = deps.ipc ?? createIpcScope();
+
+  ipc.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
+    window: live2dWindowLifecycle.getDiagnostics(),
+  }));
+
+  ipc.on(IPC.CHAT_MINIMIZE, (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
+
+  ipc.on(IPC.CHAT_CLOSE, (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
+  });
+
+  ipc.on(IPC.CHAT_TOGGLE_MAXIMIZE, (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!senderWindow) return;
+    if (senderWindow.isMaximized()) {
+      senderWindow.unmaximize();
+    } else {
+      senderWindow.maximize();
+    }
+  });
+
+  ipc.handle(IPC.CHAT_IS_MAXIMIZED, (event) => {
+    return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
+  });
+
+  ipc.handle(IPC.CHAT_GET_REASONING_STATE, async (_event, payload?: { sessionId?: unknown; modelProfileId?: unknown }) => {
+    const baseSettings = loadModelSettings();
+    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : undefined;
+    // 会话存在（v1/v2 都读）：统一走会话级解析（binding + effective model，Invariant C），
+    // 否则 UI 档位会按档案默认模型计算，与实际发送模型错档。
+    // 不能回退顶层镜像：顶层可能是空壳（provider 指向别家、三件套全空），
+    // 与 channel bot 不回复是同一病根。
+    const sessionRecord = sessionId ? (await getSessionRecord(sessionId)) : null;
+    if (sessionRecord) {
+      const settings = resolveSessionModelSettings(baseSettings, sessionRecord);
+      const cap = getCapabilityOrOpenAI(settings.provider);
+      return {
+        providerKey: settings.provider,
+        providerId: cap.id,
+        model: settings.model,
+        preference: settings.reasoning,
+        manualReasoning: settings.manualReasoning,
+        thinkingOverride: resolveVendorRuntimeSettings(settings).thinkingOverride,
+        // PRO 档（reasoning.mode="pro"）仅 Responses 协议存在，UI 据此决定是否显示
+        transport: resolveTransport({
+          baseUrl: settings.baseUrl,
+          explicitTransport: settings.explicitTransport,
+          provider: settings.provider,
+        }),
+        modelProfileId: resolveSessionProfileBinding(baseSettings, sessionRecord).resolvedProfileId ?? null,
+      };
+    }
+    // 欢迎页（无会话）：渲染端待定档案 > 默认档案（现状保留）。
+    const profiles = listSavedModelProfiles(baseSettings);
+    const requestedId = typeof payload?.modelProfileId === "string" && payload.modelProfileId ? payload.modelProfileId : undefined;
+    const profile = profiles.find((item) => item.id === requestedId) ?? getDefaultModelProfile(baseSettings);
+    const settings = profile ? resolveModelSettingsProfile(baseSettings, profile.id) : baseSettings;
+    const cap = getCapabilityOrOpenAI(settings.provider);
+    return {
+      providerKey: settings.provider,
+      providerId: cap.id,
+      model: settings.model,
+      preference: settings.reasoning,
+      manualReasoning: settings.manualReasoning,
+      thinkingOverride: resolveVendorRuntimeSettings(settings).thinkingOverride,
+      transport: resolveTransport({
+        baseUrl: settings.baseUrl,
+        explicitTransport: settings.explicitTransport,
+        provider: settings.provider,
+      }),
+      modelProfileId: profile?.id ?? null,
+    };
+  });
+
+  ipc.handle(IPC.CHAT_SET_REASONING, async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object") return;
+    const p = payload as { sessionId?: unknown; modelProfileId?: unknown; providerKey?: unknown; preference?: unknown };
+    if (typeof p.providerKey !== "string" || typeof p.preference !== "object" || !p.preference) return;
+    const normalized = normalizeReasoningPreference(p.preference);
+    if (!normalized) return;
+
+    const current = loadModelSettings();
+    const session = typeof p.sessionId === "string" ? (await getSession(p.sessionId)) : undefined;
+    if (session?.modelProfileId) {
+      const profile = listSavedModelProfiles(current).find((item) => item.id === session.modelProfileId);
+      if (!profile || profile.provider !== p.providerKey) return;
+      saveModelProfile({ ...profile, reasoning: normalized });
+      return;
+    }
+
+    // 无会话（欢迎页）：与 GET 对称——优先写渲染端待定档案，其次默认档案，
+    // 都没有才写顶层镜像。否则 GET 读的是档案、SET 写的是顶层，切了等于没切。
+    const profiles = listSavedModelProfiles(current);
+    const requestedId = typeof p.modelProfileId === "string" && p.modelProfileId ? p.modelProfileId : undefined;
+    const profile = profiles.find((item) => item.id === requestedId) ?? getDefaultModelProfile(current);
+    if (profile) {
+      if (profile.provider !== p.providerKey) return;
+      saveModelProfile({ ...profile, reasoning: normalized });
+      return;
+    }
+
+    if (current.provider !== p.providerKey) return;
+    saveModelSettings({ reasoning: normalized });
+  });
+
+  ipc.handle(IPC.CHAT_INGEST_FILES, async (_event, entries: unknown) => {
+    const list = Array.isArray(entries)
+      ? entries.filter((entry): entry is { path: string; mime?: string } =>
+          typeof entry === "object" && entry !== null
+          && typeof (entry as { path?: unknown }).path === "string")
+      : [];
+    if (list.length === 0) return [];
+    try {
+      return list.map((entry) => describePendingAttachment(entry.path, entry.mime));
+    } catch (err: any) {
+      console.error("[Cyrene] ingestFiles ERROR:", err?.message || err);
+      return [];
+    }
+  });
+
+  ipc.handle(IPC.CHAT_PASTE_FILES, async () => {
+    const attachments: ReturnType<typeof describePendingAttachment>[] = [];
+    const seenPaths = new Set<string>();
+    try {
+      for (const item of await clipboard.read()) {
+        if (!item.types.includes("text/uri-list")) continue;
+        const clipboardData = await item.getType("text/uri-list");
+        if (!("text" in clipboardData) || typeof clipboardData.text !== "function") continue;
+        const uriList = await clipboardData.text();
+        for (const line of uriList.split(/\r?\n/)) {
+          const value = line.trim();
+          if (!value || value.startsWith("#")) continue;
+          try {
+            const url = new URL(value);
+            if (url.protocol !== "file:") continue;
+            const filePath = fileURLToPath(url);
+            if (seenPaths.has(filePath)) continue;
+            const fileStat = await stat(filePath);
+            if (!fileStat.isFile()) continue;
+            seenPaths.add(filePath);
+            attachments.push(describePendingAttachment(filePath));
+          } catch {
+            // 忽略无效 URI、已删除文件和目录。
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("[Cyrene] pasteClipboardFiles ERROR:", err?.message || err);
+    }
+    return attachments;
+  });
+
+  ipc.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
+    const filePath = payload && typeof payload === "object"
+      ? (payload as { filePath?: unknown }).filePath
+      : undefined;
+    const hasAnnotations = payload && typeof payload === "object"
+      ? (payload as { hasAnnotations?: unknown }).hasAnnotations === true
+      : false;
+    const settings = resolveModelSettingsProfile(loadModelSettings());
+    const vision = resolveCaptionVisionConfig(settings);
+    if (!vision.ok) {
+      return { ok: false, error: vision.error };
+    }
+
+    return captionImageSafe(filePath, buildImageCaptionPrompt(hasAnnotations), vision.config);
+  });
+
+  ipc.handle(IPC.CHAT_GET_IMAGE_PREVIEW, (_event, payload: unknown) => {
+    const filePath = payload && typeof payload === "object"
+      ? (payload as { filePath?: unknown }).filePath
+      : undefined;
+    const validated = validateCaptionImagePath(filePath);
+    if (!validated.ok) return { ok: false, error: validated.error };
+    return {
+      ok: true,
+      dataUrl: `data:${validated.mime};base64,${validated.buffer.toString("base64")}`,
+    };
+  });
+
+  ipc.handle(IPC.CHAT_SAVE_GENERATED_IMAGE, async (event, payload: unknown) => {
+    const raw = payload && typeof payload === "object"
+      ? payload as { filePath?: unknown; name?: unknown }
+      : {};
+    if (typeof raw.filePath !== "string") return { ok: false, error: "图片路径无效" };
+    const safeName = typeof raw.name === "string" ? path.basename(raw.name) : "generated-image.png";
+    const name = safeName.toLowerCase().endsWith(".png") ? safeName : `${safeName}.png`;
+    let bytes: Buffer;
+    try {
+      bytes = await createGeneratedImageStore({
+        rootDirectory: path.join(app.getPath("userData"), "chat-media", "generated-images"),
+      }).readManagedPng(raw.filePath);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "图片不可用" };
+    }
+
+    const options = { defaultPath: name, filters: [{ name: "PNG 图片", extensions: ["png"] }] };
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    try {
+      await writeFile(result.filePath, bytes);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "图片保存失败" };
+    }
+  });
+
+  ipc.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, async (_event, payload: unknown) => {
+    // 按会话统一解析（binding + effective model）：会话绑定的档案若声明了 multimodal
+    // 则优先于全局值；无 sessionId / 会话不存在 → 回退全局（现行为）。
+    const sessionId = payload && typeof payload === "object"
+      ? (payload as { sessionId?: unknown }).sessionId
+      : undefined;
+    let settings = loadModelSettings();
+    if (typeof sessionId === "string" && sessionId) {
+      const sessionRecord = (await getSessionRecord(sessionId));
+      if (sessionRecord) settings = resolveSessionModelSettings(settings, sessionRecord);
+    }
+    // 图片路由统一收口在 image-router；返回形状保持 { mode: "direct" | "caption" } 不变。
+    // reject（纯文本主模型 + 未配视觉模型）映射为 caption：UI 侧转述请求会拿到路由的
+    // 人话错误并如实展示，而不是假装能直发。
+    const imageRoute = resolveImageRoute("attachment", settings);
+    return { mode: imageRoute.mode === "direct" ? "direct" as const : "caption" as const };
+  });
+
+  // 状态栏专用入口：打开/复用 reactChatWindow
+  // 注意：必须用 deps.windowManager 实时读取 getter，不能在注册时解构。
+  // registerChatUiIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
+  // 解构会捕获 null 并导致后续 ?. 永远短路，按钮点了打不开窗口。
+  ipc.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) return false;
+    void deps.windowManager?.openReactChatWindow(sessionId);
+    return true;
+  });
+
+  // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听
+  ipc.on(IPC.CHATS_REACT_READY, (event) => {
+    const win = reactChatWindow;
+    if (!win || win.isDestroyed()) return;
+    if (event.sender !== win.webContents) return;
+    const pending = reactChatSession.markReady();
+    if (pending) {
+      win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, pending);
+    }
+  });
+
+  // 聊天窗口启动/切换会话时上报当前活跃目标（会话 + 模式 + 渲染目标标识）；
+  // 只有聊天窗口的 webContents 可以登记，其他窗口的上报被忽略；main 广播给所有窗口
+  ipc.handle(IPC.CHATS_SET_ACTIVE_SESSION, (event, payload: unknown) => {
+    const chatWindow = reactChatWindow;
+    if (!chatWindow || chatWindow.isDestroyed() || event.sender !== chatWindow.webContents) {
+      return false;
+    }
+    let activeSessionId: string | null = null;
+    const previousSessionId = activeConversationRegistry.get(event.sender.id)?.sessionId ?? null;
+    if (payload == null) {
+      activeChatTargetRegistry.clearActive(event.sender);
+      activeConversationRegistry.clearWindow(event.sender.id);
+    } else {
+      const parsed = parseActiveTargetPayload(payload);
+      if (parsed) {
+        activeChatTargetRegistry.setActive({ sender: event.sender, ...parsed });
+        activeConversationRegistry.set(event.sender.id, parsed.sessionId, parsed.mode);
+        activeSessionId = parsed.sessionId;
+      }
+    }
+    if (previousSessionId && previousSessionId !== activeSessionId) {
+      void flushSummaryMemory(previousSessionId).catch((error) => {
+        console.warn("[SummaryMemory] flush on session switch failed:", previousSessionId, error);
+      });
+    }
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try { win.webContents.send(IPC.CHATS_ACTIVE_SESSION_CHANGED, activeSessionId); } catch { /* ignore */ }
+    }
+    return true;
+  });
+
+  ipc.handle(IPC.CHATS_GET_ACTIVE_SESSION, () => getActiveChatSessionId());
+}

@@ -458,6 +458,7 @@ const settingsApi = {
   channelsFeishuTestConnection: () => ipcRenderer.invoke(IPC.CHANNELS_FEISHU_TEST_CONNECTION),
   channelsFeishuTestWebhookReachable: () => ipcRenderer.invoke(IPC.CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE),
   channelsQqTestConnection: () => ipcRenderer.invoke(IPC.CHANNELS_QQ_TEST_CONNECTION),
+  channelsQqResolveAuthRequirement: (payload: { listenMode?: string; customHost?: string }) => ipcRenderer.invoke(IPC.CHANNELS_QQ_RESOLVE_AUTH_REQUIREMENT, payload),
   channelsQqBotTestConnection: () => ipcRenderer.invoke(IPC.CHANNELS_QQBOT_TEST_CONNECTION),
   // 消息日志
   channelsLogGet: (limit?: number) => ipcRenderer.invoke(IPC.CHANNELS_LOG_GET, limit ?? 100),
@@ -686,6 +687,7 @@ const memoryPanelApi = {
   getColdRecall: (conversationId: string) => ipcRenderer.invoke(IPC.MEMORY_COLD_RECALL_GET, { conversationId }),
   resolveColdRecall: (conversationId: string, messageId: string, entryId: string, action: "related" | "unrelated" | "undo") =>
     ipcRenderer.invoke(IPC.MEMORY_COLD_RECALL_FEEDBACK, { conversationId, messageId, entryId, action }),
+  resolveSemanticReview: (id: string, expectedContent: string, action: "keep" | "edit" | "delete", content?: string) => ipcRenderer.invoke(IPC.MEMORY_SEMANTIC_REVIEW_RESOLVE, { id, expectedContent, action, content }),
   editL2: (id: string, content: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_EDIT_L2, { id, content }),
   deleteL2: (id: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_L2, { id }),
   deleteImportedDoc: (importId: string, fileName?: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, { importId, fileName }),
@@ -767,8 +769,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_IGNORE_PLUGIN_MESSAGE, { conversationId, messageId }) as Promise<{ ok: boolean }>,
   replaceMessages: (id: string, messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_REPLACE_MESSAGES, { id, messages }),
-  replaceTail: (id: string, startIndex: number, messages: unknown[]) =>
-    ipcRenderer.invoke(IPC.CHATS_REPLACE_TAIL, { id, startIndex, messages }),
+  replaceTail: (id: string, startIndex: number, messages: unknown[], expectedTailIds?: string[]) =>
+    ipcRenderer.invoke(IPC.CHATS_REPLACE_TAIL, { id, startIndex, messages, expectedTailIds }),
   // 主动压缩：把模型窗口内旧消息摘要成一条记忆（上下文容量菜单小人点击触发）
   compactConversation: (sessionId: string) =>
     ipcRenderer.invoke(IPC.CHATS_COMPACT, { sessionId }) as Promise<{

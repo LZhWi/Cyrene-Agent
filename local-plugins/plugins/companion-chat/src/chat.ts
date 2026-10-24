@@ -15,11 +15,13 @@ export interface Turn {
   inputMessageId?: string;
   finalMessageId?: string;
   origin?: "companion-chat" | "host";
+  hostSourceVersion?: { conversationId: string; userTurnId: string; userEntryId: string; assistantEntryId: string };
 }
 interface Message { id: string; role: "user" | "assistant"; text: string; at: number; status?: "pending" | "complete" | "failed" | "cancelled" }
 interface Session { id: string; title: string; messages: Message[] }
 interface State { version: 1; sessions: Session[]; outbox: Turn[]; interrupted: boolean }
 export interface ChatDeps {
+  onSourceChange?: () => void;
   storage: PluginStorage;
   retrieve(query: string, signal: AbortSignal): Promise<string>;
   ingest(turn: Turn): Promise<unknown>;
@@ -33,7 +35,7 @@ export function createChat(deps: ChatDeps) {
   let state = deps.storage.get<State>("chat-state") ?? { version: 1 as const, sessions: [], outbox: [], interrupted: false };
   if (state.version !== 1 || !Array.isArray(state.sessions) || !Array.isArray(state.outbox)) throw new Error("不兼容的聊天存储，拒绝覆盖");
   let current: AbortController | undefined;
-  function save(next: State) { deps.storage.set("chat-state", next); state = next; }
+  function save(next: State) { deps.storage.set("chat-state", next); state = next; deps.onSourceChange?.(); }
   function view() { return structuredClone({ ...state, busy: Boolean(current) }); }
   async function sync() {
     for (const turn of [...state.outbox]) {
@@ -76,7 +78,7 @@ export function createChat(deps: ChatDeps) {
         ], signal);
         if (signal.aborted) throw new Error("请求已取消");
         const assistant: Message = { id: randomUUID(), role: "assistant", text: reply, at: Date.now(), status: "complete" };
-        const turn: Turn = { id: user.id, sessionId, user: user.text, assistant: reply, userAt: user.at, assistantAt: assistant.at };
+        const turn: Turn = { id: user.id, sessionId, user: user.text, assistant: reply, userAt: user.at, assistantAt: assistant.at, origin: "companion-chat" };
         save({ ...state, interrupted: false, sessions: state.sessions.map((s) => s.id === sessionId ? { ...s, messages: [...s.messages.map((m) => m.id === user.id ? { ...m, status: "complete" as const } : m), assistant] } : s), outbox: [...state.outbox, turn] });
         let warning = "";
         try { await sync(); } catch { warning = "回复已保存；记忆同步未完成，待投递记录已保留，可稍后重试。"; }

@@ -28,7 +28,7 @@ export interface ChatStoreApi extends WorkspaceInspectorApi {
   create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
   append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
   upsert: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
-  replaceTail: (id: string, startIndex: number, messages: ChatMessage[]) => Promise<ChatSession | null>;
+  replaceTail: (id: string, startIndex: number, messages: ChatMessage[], expectedTailIds?: string[]) => Promise<ChatSession | null>;
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
   ignorePluginMessage: (conversationId: string, messageId: string) => Promise<{ ok: boolean }>;
   rename: (id: string, title: string) => Promise<ChatSession | null>;

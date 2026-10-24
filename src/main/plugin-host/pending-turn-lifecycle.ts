@@ -64,6 +64,7 @@ export function createPendingTurnLifecycle(deps: PendingTurnLifecycleDeps) {
   const ackTimeoutMs = deps.ackTimeoutMs ?? 60_000;
   const graceMs = deps.graceMs ?? 60_000;
   const entries = new Map<string, PendingTurnEntry>();
+  const drainWaiters = new Set<() => void>();
 
   function clearAckTimer(entry: PendingTurnEntry): void {
     if (entry.ackTimer !== undefined) {
@@ -79,6 +80,7 @@ export function createPendingTurnLifecycle(deps: PendingTurnLifecycleDeps) {
     clearAckTimer(entry);
     entries.delete(runId);
     if (reason) deps.onAbandon?.(runId, reason);
+    if (entries.size === 0) for (const done of [...drainWaiters]) done();
   }
 
   function publishFinished(entry: PendingTurnEntry): void {
@@ -166,6 +168,24 @@ export function createPendingTurnLifecycle(deps: PendingTurnLifecycleDeps) {
     settleTerminal,
     confirmPersistence,
     disposeEntry,
+    /** Keep renderers and persistence IPC alive until receipts arrive or exit expires. */
+    drain(signal: AbortSignal): Promise<void> {
+      return new Promise((resolve) => {
+        const done = (): void => {
+          drainWaiters.delete(done);
+          signal.removeEventListener("abort", abort);
+          resolve();
+        };
+        const abort = (): void => {
+          for (const runId of [...entries.keys()]) disposeEntry(runId, "shutdown deadline before persistence ack");
+          done();
+        };
+        if (signal.aborted) { abort(); return; }
+        if (entries.size === 0) { resolve(); return; }
+        drainWaiters.add(done);
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    },
     /** 应用关闭 / 渲染进程整体失效时清理全部条目，不发布任何事件。 */
     disposeAll(): void {
       for (const runId of [...entries.keys()]) {

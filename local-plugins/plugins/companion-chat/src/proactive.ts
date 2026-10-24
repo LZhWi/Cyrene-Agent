@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { PluginLlmMessage, PluginStorage, PluginWeatherContextSnapshot } from "@playa0v0/cyrene-plugin-sdk";
 import { buildProactiveMessages, NIGHT_ACTIVE_IDLE_LIMIT_SECONDS, parseProactiveDecision, type ProactiveHistoryTurn } from "./proactive-prompt";
 import type { LifeShareReceipt, LifeShareSource } from "./life-sharing";
+import { createDurableProactiveDelivery, type ProactiveDeliveryIntent, type ProactiveDeliveryLifecycle } from "./durable-proactive-delivery";
 export { NIGHT_ACTIVE_IDLE_LIMIT_SECONDS } from "./proactive-prompt";
 import {
   isWeatherSceneHour,
@@ -59,6 +61,7 @@ export interface ProactiveControllerDeps {
   retrieve(query: string, signal: AbortSignal, runId: string): Promise<string>;
   recentContext?: () => Promise<{ ordinaryHistory: ProactiveHistoryTurn[]; proactiveHistory: ProactiveHistoryTurn[]; recentTopic: string }>;
   profileContext?: (query: string, lastAssistant: string, signal: AbortSignal, runId: string) => Promise<string>;
+  acceptContext?: (runId: string, messages: PluginLlmMessage[], signal: AbortSignal) => Promise<void>;
   commitContext?: (runId: string) => Promise<void>;
   discardContext?: (runId: string) => Promise<void>;
   lifeContext?: (query: string) => string;
@@ -75,8 +78,9 @@ export interface ProactiveControllerDeps {
   presence?(): Promise<UserPresenceSnapshot>;
   weather?(): Promise<PluginWeatherContextSnapshot | null>;
   canStartDelivery?(): Promise<boolean>;
-  deliver(text: string, options: { allowIgnoreFeedback: boolean }): Promise<{ conversationId: string; messageId: string; at: string; deliveredText?: string }>;
+  deliver(text: string, options: { allowIgnoreFeedback: boolean; contextRunId?: string }): Promise<{ conversationId: string; messageId: string; at: string; deliveredText?: string }>;
   stopSignal: AbortSignal;
+  canGenerate?: () => boolean;
   now?: () => number;
   setInterval?: typeof globalThis.setInterval;
   clearInterval?: typeof globalThis.clearInterval;
@@ -153,11 +157,78 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
   let currentDone: Promise<void> | undefined;
   let resolveCurrentDone: (() => void) | undefined;
   let stopped = false;
+  const pending = new Set<Promise<unknown>>();
   let conversationBusy = false;
+  const durableDelivery = createDurableProactiveDelivery(deps.storage);
+  let recoveryDone = !durableDelivery;
+  let recovering: Promise<boolean> | undefined;
 
   function save(next: ProactiveState): void {
     deps.storage.set(STATE_KEY, next);
     state = next;
+  }
+
+  function deliveredState(intent: ProactiveDeliveryIntent, lifecycle: Extract<ProactiveDeliveryLifecycle, { state: "delivered" }>): ProactiveState {
+    const { source, delivery } = lifecycle;
+    if (source.runId !== intent.runId || source.pluginId !== "companion-chat" || source.status !== "delivered"
+      || !Number.isFinite(source.deliveredAt) || source.deliveredAt < 0
+      || source.conversationId !== delivery.conversationId || source.messageId !== delivery.messageId
+      || Date.parse(delivery.at) !== source.deliveredAt || !delivery.deliveredText.trim()
+      || delivery.deliveredText.length > MAX_PROACTIVE_TEXT_LENGTH) throw new Error("PROACTIVE_DELIVERY_PROOF_INVALID");
+    const next = structuredClone(state);
+    const unchanged = next.epoch === intent.generationEpoch;
+    if (intent.candidate) {
+      const todayFired = { ...next.planner!.todayFired };
+      const date = new Date(source.deliveredAt);
+      const deliveryDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      if (unchanged) {
+        markPlannerCommitted(next.planner!, intent.candidate, source.deliveredAt);
+        if (deliveryDate !== next.planner!.lastDate) next.planner!.todayFired = todayFired;
+        if (!next.feedbackLearningEnabled) next.planner!.pendingFeedback = null;
+        else if (intent.ignoredMessageIds?.includes(delivery.messageId)) settleIgnoreFeedback(next.planner!);
+      } else {
+        // 用户活动/原生设置已推进 epoch：保留新的未回复数与反馈，只补真实发送的硬冷却。
+        next.planner!.globalDesire = 0;
+        next.planner!.lastFiredAt[intent.candidate.scene] = source.deliveredAt;
+      }
+    }
+    return {
+      ...next, epoch: next.epoch + 1,
+      unansweredCount: unchanged ? Math.min(MAX_UNANSWERED_PROACTIVE, next.unansweredCount + 1) : next.unansweredCount,
+      lastSentAt: source.deliveredAt, lastSilentAt: null,
+      lastScene: intent.candidate?.scene ?? next.lastScene,
+      lastDeliveredText: delivery.deliveredText, lastDeliveredMessageId: delivery.messageId,
+      lastDeliveredConversationId: delivery.conversationId,
+      deliveredHistory: [...(next.deliveredHistory ?? []), { text: delivery.deliveredText, at: source.deliveredAt }].slice(-16),
+    };
+  }
+
+  function recoverDelivery(): Promise<boolean> {
+    if (!durableDelivery) return Promise.resolve(true);
+    if (recovering) return recovering;
+    const work = (async () => {
+      const original = durableDelivery.read();
+      if (!original) return true;
+      const lifecycle = await durableDelivery.status(original.runId);
+      if (lifecycle.state === "inflight" || lifecycle.state === "unknown") return false;
+      // 读取期间可能收到反馈；事务前重新读取，不能覆盖最新设置/反馈。
+      const intent = durableDelivery.read();
+      if (!intent || intent.runId !== original.runId) throw new Error("PROACTIVE_DELIVERY_INTENT_CHANGED");
+      const next = lifecycle.state === "delivered" ? deliveredState(intent, lifecycle) : undefined;
+      durableDelivery.finish(intent, lifecycle, () => {
+        if (!next || lifecycle.state !== "delivered") return;
+        if (intent.lifeShare) {
+          if (!deps.lifeSharing) throw new Error("PROACTIVE_LIFE_SHARE_RECOVERY_UNAVAILABLE");
+          deps.lifeSharing.complete(intent.lifeShare, lifecycle.delivery);
+        }
+        deps.storage.set(STATE_KEY, next);
+      });
+      if (next) state = next;
+      return true;
+    })();
+    recovering = work;
+    void work.then(() => { recovering = undefined; }, () => { recovering = undefined; });
+    return work;
   }
 
   function policyAllows(at: number, presence?: UserPresenceSnapshot): boolean {
@@ -186,7 +257,7 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
   }
 
   function ensureTimer(): void {
-    if (!state.enabled || stopped || timer) return;
+    if (!state.enabled || stopped || timer || !recoveryDone) return;
     timer = setTimer(() => {
       void evaluate().catch((error) => {
         console.warn("[Proactive] 定时检查失败:", error instanceof Error ? error.message : String(error));
@@ -201,9 +272,22 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
     timer = undefined;
   }
 
-  async function generateAndDeliver(force: boolean) {
+  function generateAndDeliver(force: boolean) {
+    if (stopped || deps.stopSignal.aborted || deps.canGenerate?.() === false) return Promise.resolve({ kind: "skipped" as const });
+    const work = generateAndDeliverAccepted(force);
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  }
+
+  async function generateAndDeliverAccepted(force: boolean) {
+    if (durableDelivery) {
+      await ready;
+      if (current || !(await recoverDelivery())) return { kind: "skipped" as const };
+    }
     const startedAt = now();
     const initialPresence = force ? undefined : await deps.presence?.();
+    if (stopped || deps.stopSignal.aborted || deps.canGenerate?.() === false) return { kind: "skipped" as const };
     let candidate: ProactiveCandidate | null = null;
     let lifeShare: LifeShareSource | undefined;
     let weather: PluginWeatherContextSnapshot | null | undefined;
@@ -211,6 +295,7 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
       const allowed = canStart(startedAt, initialPresence);
       const localHour = initialPresence.localHour ?? new Date(startedAt).getHours();
       weather = isWeatherSceneHour(localHour) ? await deps.weather?.() : null;
+      if (stopped || deps.stopSignal.aborted || deps.canGenerate?.() === false) return { kind: "skipped" as const };
       const availableLifeShare = deps.lifeSharing?.candidate();
       candidate = (deps.planCandidate ?? sampleAndPlan)({
         state: state.planner!,
@@ -259,8 +344,9 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
       unansweredCount: state.unansweredCount,
     }));
     const signal = AbortSignal.any([deps.stopSignal, controller.signal]);
-    const contextRunId = `proactive-${startedAt}-${generationEpoch}`;
+    const contextRunId = deps.acceptContext || durableDelivery ? `proactive-${randomUUID()}` : `proactive-${startedAt}-${generationEpoch}`;
     try {
+      await durableDelivery?.begin(contextRunId);
       const recent = await deps.recentContext?.() ?? { ordinaryHistory: [], proactiveHistory: [], recentTopic: "" };
       const sceneId = candidate?.scene ?? "manual-test";
       const query = `${sceneId}\n${recent.recentTopic}`.trim();
@@ -270,7 +356,7 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
       ]);
       if (signal.aborted || generationEpoch !== state.epoch || (lifeShare && !deps.lifeSharing?.eligible(lifeShare))) return { kind: "stale" as const };
       const screen = deps.screenContext?.().trim() ?? "";
-      const rawDecision = await deps.generate(buildProactiveMessages({
+      const messages = buildProactiveMessages({
         basePersona: deps.systemPrompt(),
         userProfile: profile,
         relevantMemory: memory,
@@ -284,7 +370,10 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
         idleSec: initialPresence?.idleSeconds ?? Number.POSITIVE_INFINITY,
         unansweredCount: state.unansweredCount as 0 | 1 | 2,
         toneRules: deps.toneRules?.(),
-      }), signal);
+      });
+      await deps.acceptContext?.(contextRunId, messages, signal);
+      if (signal.aborted || generationEpoch !== state.epoch) return { kind: "stale" as const };
+      const rawDecision = await deps.generate(messages, signal);
       const commitPresence = force ? undefined : await deps.presence?.();
       if (signal.aborted || generationEpoch !== state.epoch || (!force && (!policyAllows(now(), commitPresence) || !candidateAllows(candidate!, now())))) return { kind: "stale" as const };
       const decision = parseProactiveDecision(rawDecision);
@@ -311,11 +400,19 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
       const deliveryPresence = force ? undefined : await deps.presence?.();
       if (signal.aborted || generationEpoch !== state.epoch
         || (!force && (!deliveryPresence || !policyAllows(now(), deliveryPresence) || !candidateAllows(candidate!, now())))) return { kind: "stale" as const };
-      // 同步预占紧邻唯一投递入口；失败或停机留下预占，由生活账本阻止自动重发。
-      if (lifeShare && (!deps.lifeSharing?.eligible(lifeShare) || !deps.lifeSharing.reserve(lifeShare))) return { kind: "stale" as const };
+      // 隔离路径将生活预占与发送意图一起提交；恢复只补账，绝不重投未知结果。
+      const reserve = () => !lifeShare || Boolean(deps.lifeSharing?.eligible(lifeShare) && deps.lifeSharing.reserve(lifeShare));
+      if (durableDelivery) {
+        if (!durableDelivery.prepare({ version: 1, runId: contextRunId, generationEpoch, preparedAt: now(),
+          text: decision.text, candidate, ...(lifeShare ? { lifeShare } : {}) }, reserve)) return { kind: "stale" as const };
+      } else if (!reserve()) return { kind: "stale" as const };
       const delivered = await deps.deliver(decision.text, {
         allowIgnoreFeedback: state.feedbackLearningEnabled === true && candidate !== null,
+        ...(deps.acceptContext || durableDelivery ? { contextRunId } : {}),
       });
+      if (durableDelivery) {
+        if (!(await recoverDelivery())) throw new Error("PROACTIVE_DELIVERY_OUTCOME_UNRESOLVED");
+      } else {
       const actualText = delivered.deliveredText ?? decision.text;
       const committedAt = now();
       if (candidate) {
@@ -340,6 +437,7 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
         try { deps.lifeSharing!.complete(lifeShare, delivered); }
         catch (error) { console.warn("[Proactive] 已投递生活消息的来源记账失败:", error instanceof Error ? error.message : String(error)); }
       }
+      }
       try { await deps.commitContext?.(contextRunId); }
       catch (error) { console.warn("[Proactive] 已投递消息的上下文记账失败:", error); }
       console.log("[Proactive] 已发送:", JSON.stringify({
@@ -350,6 +448,13 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
       }));
       return { kind: "committed" as const, ...delivered };
     } finally {
+      if (durableDelivery) {
+        try {
+          // 此处已离开唯一 await deliver；桥接故障/未知写入时 seal 拒绝，不能猜测未送达。
+          await durableDelivery.seal(contextRunId);
+          await recoverDelivery();
+        } catch (error) { console.warn("[Proactive] 投递收尾待恢复:", error); }
+      }
       try { await deps.discardContext?.(contextRunId); }
       catch (error) { console.warn("[Proactive] 清理未提交上下文失败:", error); }
       current = undefined;
@@ -363,9 +468,11 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
     return generateAndDeliver(false);
   }
 
-  if (state.enabled) ensureTimer();
+  const ready = durableDelivery ? recoverDelivery().then(() => { recoveryDone = true; ensureTimer(); }) : Promise.resolve();
+  if (!durableDelivery && state.enabled) ensureTimer();
 
   return {
+    ready,
     view() { return structuredClone({ ...state, busy: Boolean(current) }); },
     configure(enabled: boolean, feedbackLearningEnabled = false, pace: ProactivePace = state.pace ?? "normal") {
       if (typeof enabled !== "boolean" || typeof feedbackLearningEnabled !== "boolean"
@@ -399,6 +506,7 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
       save({ ...state, epoch: state.epoch + 1, lastActivityAt: at, lastNormalConversationEndedAt: at, lastSilentAt: null });
     },
     ignoreMessage(messageId: string) {
+      if (state.feedbackLearningEnabled && messageId !== state.lastDeliveredMessageId && durableDelivery?.rememberIgnore(messageId)) return true;
       if (!state.feedbackLearningEnabled || messageId !== state.lastDeliveredMessageId
         || !settleIgnoreFeedback(state.planner!)) return false;
       save({ ...state });
@@ -421,12 +529,18 @@ export function createProactiveController(deps: ProactiveControllerDeps) {
     evaluate,
     manualTest() { return generateAndDeliver(true); },
     cancel() { current?.abort(); },
-    stop() {
-      if (stopped) return;
+    async cancelAndDrain() {
+      current?.abort();
+      await Promise.allSettled([...pending]);
+    },
+    async stop() {
       stopped = true;
       current?.abort();
       clearScheduledTimer();
+      await Promise.allSettled([...pending]);
+      await Promise.allSettled([ready, ...(recovering ? [recovering] : [])]);
       console.log("[Proactive] 停止");
     },
   };
 }
+

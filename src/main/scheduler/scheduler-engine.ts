@@ -1,4 +1,5 @@
 import { isTaskEnabled } from "./execution-spec";
+import { waitForProducer } from "../application/wait-for-producer";
 import { computeNextFireAtAfter, normalizeOverdueNextFireAt } from "./schedule-calculator";
 import type { ScheduledRunResult, ScheduledTask, ScheduledTaskHistoryEntry } from "./types";
 
@@ -26,6 +27,8 @@ export interface SchedulerEngineDeps {
 export class SchedulerEngine {
   private timer: NodeJS.Timeout | null = null;
   private runningTaskIds = new Set<string>();
+  private readonly pending = new Set<Promise<void>>();
+  private closing = false;
   private readonly now: () => Date;
   private readonly id: () => string;
   private unsubscribeStore?: () => void;
@@ -36,6 +39,7 @@ export class SchedulerEngine {
   }
 
   start(): void {
+    if (this.closing) return;
     this.normalizeOverdueTasks();
     this.unsubscribeStore?.();
     this.unsubscribeStore = this.deps.store.onChange(() => this.scheduleNextTimer());
@@ -49,16 +53,24 @@ export class SchedulerEngine {
     this.unsubscribeStore = undefined;
   }
 
+  shutdown(signal: AbortSignal): Promise<void> {
+    this.closing = true;
+    this.stop();
+    return waitForProducer("scheduler", [...this.pending], signal);
+  }
+
   /**
    * 插件启停后调用：重新归一化逾期任务并重排计时器。
    * 只推进下一次触发时间，不补跑停用期间错过的任务。
    */
   refreshPluginTasks(): void {
+    if (this.closing) return;
     this.normalizeOverdueTasks();
     this.scheduleNextTimer();
   }
 
   async fireNow(taskId: string): Promise<{ ok: boolean; reason?: string }> {
+    if (this.closing) return { ok: false, reason: "scheduler shutting down" };
     const task = this.deps.store.getTasks().find(t => t.id === taskId);
     if (!task) return { ok: false, reason: "task not found" };
     if (!isTaskEnabled(task)) return { ok: false, reason: "task is disabled" };
@@ -108,6 +120,7 @@ export class SchedulerEngine {
   }
 
   private scheduleNextTimer(): void {
+    if (this.closing) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const now = this.now();
@@ -123,6 +136,7 @@ export class SchedulerEngine {
   }
 
   private async fireDueTasks(): Promise<void> {
+    if (this.closing) return;
     const now = this.now();
     const due = this.deps.store.getTasks().filter(task => {
       if (!isTaskEnabled(task) || !task.nextFireAt) return false;
@@ -153,7 +167,9 @@ export class SchedulerEngine {
         }
         continue;
       }
-      void this.runOne(task, scheduledFireAt, false);
+      void this.runOne(task, scheduledFireAt, false).catch(error => {
+        console.error(`[Scheduler] task ${task.id} failed`, error);
+      });
       const rawNext = computeNextFireAtAfter(task.schedule, scheduledFireAt);
       const next = rawNext && rawNext.getTime() <= now.getTime()
         ? normalizeOverdueNextFireAt(task.schedule, rawNext, now)
@@ -167,7 +183,15 @@ export class SchedulerEngine {
     this.scheduleNextTimer();
   }
 
-  private async runOne(task: ScheduledTask, scheduledFireAt: Date, manual: boolean): Promise<void> {
+  private runOne(task: ScheduledTask, scheduledFireAt: Date, manual: boolean): Promise<void> {
+    if (this.closing) return Promise.resolve();
+    const work = this.runOneAccepted(task, scheduledFireAt, manual);
+    this.pending.add(work);
+    void work.then(() => this.pending.delete(work), () => this.pending.delete(work));
+    return work;
+  }
+
+  private async runOneAccepted(task: ScheduledTask, scheduledFireAt: Date, manual: boolean): Promise<void> {
     if (this.runningTaskIds.has(task.id)) {
       if (!manual) {
         this.deps.store.recordHistory({

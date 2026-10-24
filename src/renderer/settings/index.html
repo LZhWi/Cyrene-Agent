@@ -937,6 +937,11 @@
               <p class="memory-card__hint">模型不支持关闭或所选档位时，会按该模型的能力自动折叠到可用设置。</p>
               <p class="memory-card__hint" id="companion-tool-reasoning-save-status" role="status" aria-live="polite"></p>
             </div>
+            <div class="memory-card" id="memory-semantic-review-card" hidden>
+              <div class="memory-card__head"><div><h2>待确认的记忆</h2>
+              <p>这些记忆已保存并可参与召回。措辞提示不代表错误，你可以确认、编辑或删除。</p></div></div>
+              <div id="memory-semantic-review-list"></div>
+            </div>
             <div class="memory-card" id="memory-lifecycle-card" hidden>
               <label><input id="memory-lifecycle-tracking" type="checkbox" disabled /> 生命周期跟踪</label>
               <p class="memory-card__hint">记录实际召回的使用时间、次数和权重，供老化、归档与重新激活使用。权重衰减还需后台生命周期执行开启；此开关不会删除记忆。</p>

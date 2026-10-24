@@ -1,4 +1,5 @@
 import { logger, LogTag } from "../../logger";
+import { isBackgroundIndexClosing, trackBackgroundIndex } from "../../application/background-index-work";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "../../rag/embedding";
 import { BUILT_IN_STICKER_DESCRIPTIONS } from "../../sticker-descriptions";
 import { buildCachedStickerEmbeddingIndex } from "../../sticker-embedding-cache";
@@ -14,7 +15,7 @@ export interface EmbeddingIndexService {
   refreshSceneEmbeddingIndex(reason: string): void;
   invalidateStickerEmbeddingIndex(): void;
   invalidateSceneEmbeddingIndex(): void;
-  scheduleStartupRefreshes(delayMs?: number): void;
+  scheduleStartupRefreshes(delayMs?: number): { dispose(): void };
 }
 
 export function createEmbeddingIndexService(): EmbeddingIndexService {
@@ -24,8 +25,9 @@ export function createEmbeddingIndexService(): EmbeddingIndexService {
   let sceneEmbeddingRefreshSeq = 0;
 
   function refreshStickerEmbeddingIndex(reason: string): void {
+    if (isBackgroundIndexClosing()) return;
     const seq = ++stickerEmbeddingRefreshSeq;
-    void (async () => {
+    void trackBackgroundIndex("sticker-embedding", async () => {
       try {
         const provider = getEmbeddingProvider();
         if (!provider) {
@@ -46,12 +48,13 @@ export function createEmbeddingIndexService(): EmbeddingIndexService {
         if (seq === stickerEmbeddingRefreshSeq) stickerEmbeddingIndex = null;
         console.error("[StickerEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
       }
-    })();
+    });
   }
 
   function refreshSceneEmbeddingIndex(reason: string): void {
+    if (isBackgroundIndexClosing()) return;
     const seq = ++sceneEmbeddingRefreshSeq;
-    void (async () => {
+    void trackBackgroundIndex("scene-embedding", async () => {
       try {
         const sceneProvider = getSceneEmbeddingProvider();
         if (!sceneProvider) {
@@ -68,7 +71,7 @@ export function createEmbeddingIndexService(): EmbeddingIndexService {
         if (seq === sceneEmbeddingRefreshSeq) sceneEmbeddingIndex = null;
         console.error("[SceneEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
       }
-    })();
+    });
   }
 
 
@@ -84,10 +87,11 @@ export function createEmbeddingIndexService(): EmbeddingIndexService {
       sceneEmbeddingIndex = null;
     },
     scheduleStartupRefreshes: (delayMs = 1500) => {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         refreshStickerEmbeddingIndex("startup");
         refreshSceneEmbeddingIndex("startup");
       }, delayMs);
+      return { dispose: () => clearTimeout(timer) };
     },
   };
 }

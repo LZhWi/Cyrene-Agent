@@ -39,7 +39,14 @@ export function createAutoReflection(
   let state = load(storage), stopped = false, running = false;
   let controller: AbortController | undefined;
   const save = (next: AutoReflectionState) => { storage.set(STATE_KEY, next); state = next; };
-  const onTurn = async (event: PluginTurnFinishedEvent, due = false) => {
+  const pending = new Set<Promise<void>>();
+  const onTurn = (event: PluginTurnFinishedEvent, due = false): Promise<void> => {
+    const work = runTurn(event, due);
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  };
+  const runTurn = async (event: PluginTurnFinishedEvent, due = false) => {
     if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion" || event.status !== "success") return;
     const pendingTurns = due ? TURN_INTERVAL : Math.min(TURN_INTERVAL, state.pendingTurns + 1); save({ ...state, pendingTurns });
     if (pendingTurns < TURN_INTERVAL || running) return;
@@ -69,6 +76,6 @@ export function createAutoReflection(
       if (!enabled) { controller?.abort(); save({ ...state, pendingTurns: 0 }); }
       return this.view();
     },
-    stop() { if (stopped) return; stopped = true; controller?.abort(); off(); },
+    async stop() { if (!stopped) { stopped = true; controller?.abort(); off(); } await Promise.allSettled([...pending]); },
   };
 }

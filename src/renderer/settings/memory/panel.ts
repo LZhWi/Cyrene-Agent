@@ -17,6 +17,39 @@ import { shallowEqual } from "../shared/utils";
 import { formatDateTime, escapeHtml } from "../shared/format";
 import { showModal } from "../shared/modal";
 
+const semanticReviewCard = document.getElementById("memory-semantic-review-card");
+const semanticReviewList = document.getElementById("memory-semantic-review-list");
+function renderSemanticReviews() {
+  const reviews = memoryState.panelCache?.semanticReviews ?? [];
+  if (semanticReviewCard) semanticReviewCard.hidden = !reviews.length;
+  if (!semanticReviewList) return;
+  semanticReviewList.innerHTML = reviews.map(item => `<div class="memory-record" data-review-id="${escapeHtml(item.id)}">
+    <div class="memory-record__main"><p class="memory-record__title">${escapeHtml(item.layer)} · ${escapeHtml(item.content)}</p>
+    <p class="memory-record__body">复核提示：${escapeHtml(item.reason)}（词语命中不代表错误）</p>
+    <p class="memory-record__body">原文证据：${escapeHtml(item.evidenceQuotes.join("\n"))}</p>
+    <textarea class="memory-record__editor" maxlength="${item.layer === "L2" ? 2000 : 1500}" aria-label="编辑待确认记忆" hidden>${escapeHtml(item.content)}</textarea></div>
+    <div class="memory-record__actions"><button type="button" class="memory-record__save" data-review-action="keep">确认无误</button>
+    <button type="button" class="memory-record__save" data-review-action="edit">编辑</button><button type="button" class="memory-record__save" data-review-action="delete">删除</button></div></div>`).join("");
+}
+semanticReviewList?.addEventListener("click", async event => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-review-action]");
+  const record = button?.closest<HTMLElement>("[data-review-id]");
+  const review = memoryState.panelCache?.semanticReviews?.find(item => item.id === record?.dataset.reviewId);
+  if (!button || !record || !review || !window.memoryPanel) return;
+  const action = button.dataset.reviewAction as "keep" | "edit" | "delete";
+  const editor = record.querySelector<HTMLTextAreaElement>("textarea");
+  if (action === "edit" && editor?.hidden) { editor.hidden = false; editor.focus(); button.textContent = "保存"; return; }
+  if (action === "delete" && !await showModal({ title: "删除记忆", message: `确定删除这条已保存的记忆？\n${review.content}`, confirmText: "删除", cancelText: "取消" })) return;
+  record.querySelectorAll("button").forEach(item => { item.disabled = true; });
+  try {
+    await window.memoryPanel.resolveSemanticReview(review.id, review.content, action, action === "edit" ? editor?.value : undefined);
+    await loadMemoryPanel();
+  } catch (error) {
+    record.querySelectorAll("button").forEach(item => { item.disabled = false; });
+    await showModal({ title: "操作失败", message: error instanceof Error ? error.message : String(error), confirmText: "知道了" });
+  }
+});
+
 const lifecycleCard = document.getElementById("memory-lifecycle-card");
 const lifecycleToggle = document.getElementById("memory-lifecycle-tracking") as HTMLInputElement | null;
 const lifecycleStatus = document.getElementById("memory-lifecycle-status");
@@ -163,6 +196,7 @@ export async function loadMemoryPanel(): Promise<void> {
     const payload = await window.memoryPanel?.getData();
     if (!payload) return;
     memoryState.panelCache = payload;
+    renderSemanticReviews();
     if (lifecycleCard) lifecycleCard.hidden = typeof payload.lifecycleTrackingEnabled !== "boolean";
     if (lifecycleToggle) {
       lifecycleToggle.checked = payload.lifecycleTrackingEnabled === true;

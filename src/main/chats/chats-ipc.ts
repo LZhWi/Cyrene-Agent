@@ -281,10 +281,10 @@ export function registerChatsIpc(
   );
   ipc.handle(
     IPC.CHATS_REPLACE_TAIL,
-    async (event, payload: { id: string; startIndex: number; messages: ChatMessage[] }) => {
+    async (event, payload: { id: string; startIndex: number; messages: ChatMessage[]; expectedTailIds?: string[] }) => {
       if (!payload?.id || !Array.isArray(payload.messages)) return null;
       const before = chatsStore.getSession(payload.id)?.messages ?? [];
-      const session = chatsStore.replaceMessagesTail(payload.id, payload.startIndex, payload.messages);
+      const session = chatsStore.replaceMessagesTail(payload.id, payload.startIndex, payload.messages, payload.expectedTailIds);
       if (session) {
         changedUserImages(before, session.messages)
           .forEach((message) => scheduleVisualHistoryCaption(payload.id, message.id));

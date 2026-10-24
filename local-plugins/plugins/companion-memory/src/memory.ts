@@ -14,7 +14,7 @@ import { stripAssistantHiddenText } from "./derived-text";
 import { buildRelationshipContext } from "./relationship-context";
 import { buildMemoryExtractionMessages, parseMemoryExtraction, type ExtractionPromptMessage } from "./memory-extraction";
 import { relatedMemories, bindExtractionEvidence, patchMemory } from "./memory-incremental";
-import { requireSemanticReview } from "./memory-semantic-review";
+import { semanticRisk } from "./memory-semantic-review";
 export type { Entry } from "./entries";
 interface ReflectionSource { entry: Entry; kind: "turn" | "verified-evidence"; evidence?: Evidence; confidence: number; reason: string }
 interface ProfileChange { id: string; layer: "L0" | "L1"; field: string; before: ProfileFact; after: ProfileFact; status: "pending" | "kept" | "accepted" | "undone"; reflection?: ReflectionSource }
@@ -29,13 +29,19 @@ interface EntryReview { id: string; left: Entry; right: Entry; leftEvidence?: Ev
 interface CompressionReview { id: string; entries: Entry[]; evidence: Evidence[][]; kind?: "manual" | "regular" | "dream"; relation?: "same_event" | "same_series" | "unrelated" | "uncertain"; verdict: "mergeable" | "different" | "uncertain"; summary?: string; reason: string; confidence?: number; coverageConfirmed?: boolean; status: "pending" | "dismissed" | "stale" | "applied" | "undone"; createdAt: number; appliedAt?: number; undoneAt?: number; staleAt?: number; staleReason?: "source-changed" | "source-expired" | "evidence-changed"; resultId?: string }
 interface LifecycleChange { id: string; entries: Entry[]; target: "active" | "aging" | "archived"; status: "applied" | "undone"; createdAt: number }
 interface ConflictChange { id: string; entries: Entry[]; action: "mark-candidate" | "fast-supersede"; status: "applied" | "undone"; createdAt: number }
-interface State { version: 2; revision: number; turns: Turn[]; processed: string[]; entries: Entry[]; evidence: Evidence[]; profiles: Profiles; profileChanges: ProfileChange[]; entryReviews: EntryReview[]; compressionReviews: CompressionReview[]; lifecycleChanges: LifecycleChange[]; conflictChanges: ConflictChange[]; legacyImport?: { sourceHash: string; sourceBytes: number; importedAt: number; sourceAttested?: boolean; runtimePreserved?: boolean }; legacyRuntime?: NonNullable<LegacyImportPlan["runtime"]>; legacyCompatibility?: LegacyImportPlan["compatibility"] }
+export interface IsolatedExtractionBatch { before: Turn[]; pending: Turn[] }
+export interface IsolatedExtractionReceipt { version: 1; key: string; completed: boolean; previousContents: Array<[string, string]> }
+export interface SemanticReview { id: string; layer: "L0" | "L1" | "L2"; target: string; content: string; reason: string; evidenceQuotes: string[]; createdAt: number }
+interface State { semanticReviews?: SemanticReview[]; version: 2; revision: number; turns: Turn[]; processed: string[]; entries: Entry[]; evidence: Evidence[]; profiles: Profiles; profileChanges: ProfileChange[]; entryReviews: EntryReview[]; compressionReviews: CompressionReview[]; lifecycleChanges: LifecycleChange[]; conflictChanges: ConflictChange[]; isolatedExtractionReceipts?: Record<string, IsolatedExtractionReceipt>; legacyImport?: { sourceHash: string; sourceBytes: number; importedAt: number; sourceAttested?: boolean; runtimePreserved?: boolean }; legacyRuntime?: NonNullable<LegacyImportPlan["runtime"]>; legacyCompatibility?: LegacyImportPlan["compatibility"] }
 interface AuditRecord { revision: number; at: number; changes: string[]; entryIds: string[]; turnIds: string[] }
 const AUDIT_KEY = "memory-trace";
 export const PROFILE_REFLECTION_MIN_CONFIDENCE = 0.7;
 const normalize = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]/gu, "");
 const EXTRACTION_BATCH_TURNS = 6;
 const EXTRACTION_CONTEXT_TURNS = 2;
+const extractionHash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const extractionContentHash = (text: string) => extractionHash(text);
+const extractionBatchKey = (batch: IsolatedExtractionBatch) => extractionHash(batch);
 function resolverPlan(raw: any): ResolverPlan {
   if (!raw || !["unrelated", "context_difference", "preference_evolution", "direct_conflict", "uncertain"].includes(raw.resolutionType) || !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 || !raw.actions || typeof raw.actions !== "object") throw new Error("L2 Resolver 计划无效");
   const actions = raw.actions, statuses = [actions.leftStatus, actions.rightStatus];
@@ -55,6 +61,9 @@ export function validateTurn(t: any): asserts t is Turn {
     || (t.finalMessageId !== undefined && (typeof t.finalMessageId !== "string" || !t.finalMessageId || t.finalMessageId.length > 500))
     || (t.memoryContext !== undefined && (typeof t.memoryContext !== "string" || t.memoryContext.length > 32000))
     || (t.origin !== undefined && !["companion-chat", "host"].includes(t.origin))) throw new Error("轮次数据无效");
+  if (t.hostSourceVersion !== undefined && (!t.hostSourceVersion
+    || ["conversationId", "userTurnId", "userEntryId", "assistantEntryId"].some(key => typeof t.hostSourceVersion[key] !== "string" || !t.hostSourceVersion[key] || t.hostSourceVersion[key].length > 1000)
+    || t.hostSourceVersion.conversationId !== (t.origin === "companion-chat" ? `private:companion-chat:${t.sessionId}` : t.sessionId) || t.hostSourceVersion.userTurnId !== t.inputMessageId)) throw new Error("持久化轮次来源版本无效");
 }
 
 /** 首版词面检索只作为可验证基线；不是本地向量/Reranker/DMAE 的替代。 */
@@ -67,6 +76,14 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
     entries: (original?.entries ?? []).map((e: Entry) => ({ ...e, status: "active" })), evidence: [], profiles: emptyProfiles(), profileChanges: [], entryReviews: [], compressionReviews: [], lifecycleChanges: [], conflictChanges: [],
   };
   if (!Number.isSafeInteger(state.revision) || state.revision < 0 || !state.profiles || typeof state.profiles.l0Locked !== "boolean") throw new Error("记忆存储结构无效，拒绝覆盖");
+  if (state.isolatedExtractionReceipts !== undefined) {
+    if (!state.isolatedExtractionReceipts || typeof state.isolatedExtractionReceipts !== "object" || Array.isArray(state.isolatedExtractionReceipts)) throw new Error("隔离提取阶段回执损坏");
+    for (const [key, receipt] of Object.entries(state.isolatedExtractionReceipts)) {
+      if (!/^[a-f0-9]{64}$/.test(key) || receipt?.version !== 1 || receipt.key !== key || typeof receipt.completed !== "boolean"
+        || !Array.isArray(receipt.previousContents) || receipt.previousContents.some(row => !Array.isArray(row) || row.length !== 2 || typeof row[0] !== "string" || !row[0] || !/^[a-f0-9]{64}$/.test(row[1]))
+        || new Set(receipt.previousContents.map(row => row[0])).size !== receipt.previousContents.length) throw new Error("隔离提取阶段回执损坏");
+    }
+  }
   for (const t of state.turns) validateTurn(t);
   const turnIds = new Set(state.turns.map((t) => t.id));
   if (turnIds.size !== state.turns.length || new Set(state.processed).size !== state.processed.length || state.processed.some((id) => !turnIds.has(id))) throw new Error("记忆队列标识损坏，拒绝覆盖");
@@ -144,13 +161,21 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
     if (!change || typeof change.id !== "string" || !change.id || conflictChangeIds.has(change.id) || !Array.isArray(change.entries) || change.entries.length !== 2 || new Set(change.entries.map((entry) => entry.id)).size !== 2 || !["mark-candidate", "fast-supersede"].includes(change.action) || !["applied", "undone"].includes(change.status) || !Number.isFinite(change.createdAt)) throw new Error("冲突变更记录损坏");
     conflictChangeIds.add(change.id); change.entries.forEach(validateEntry);
   }
+  function semanticReviewCurrent(snapshot: State, review: SemanticReview) {
+    if (review.layer === "L2") {
+      const entry = snapshot.entries.find(item => item.id === review.target);
+      return entry?.content === review.content && entry.status !== "merged" && entry.status !== "superseded";
+    }
+    const facts = (review.layer === "L0" ? snapshot.profiles.l0 : snapshot.profiles.l1) as Record<string, ProfileFact>;
+    return facts[review.target]?.content === review.content;
+  }
   function save(next: State) {
     // 首次提交新格式前保存旧格式快照；失败时不修改内存，也不丢掉迁移备份。
     if (oldSnapshot) {
       if (storage.get("memory-state-v1-backup") === undefined) storage.set("memory-state-v1-backup", oldSnapshot);
       oldSnapshot = undefined;
     }
-    const committed = { ...next, revision: state.revision + 1 };
+    const committed = { ...next, semanticReviews: (next.semanticReviews ?? []).filter(review => semanticReviewCurrent(next, review)), revision: state.revision + 1 };
     storage.set("memory-state", committed);
     try {
       const beforeEntries = new Map(state.entries.map((entry) => [entry.id, JSON.stringify(entry)]));
@@ -360,7 +385,7 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
     return { text: selected.join("\n\n"), includedMemoryIds };
   }
   return {
-    view() { return structuredClone({ ...state, maintaining, reviewing, pending: state.turns.length - state.processed.length, auditRecords: Array.isArray(storage.get<unknown>(AUDIT_KEY)) ? (storage.get<unknown[]>(AUDIT_KEY)?.length ?? 0) : 0 }); },
+    view() { return structuredClone({ ...state, semanticReviews: (state.semanticReviews ?? []).filter(review => semanticReviewCurrent(state, review)), maintaining, reviewing, pending: state.turns.length - state.processed.length, auditRecords: Array.isArray(storage.get<unknown>(AUDIT_KEY)) ? (storage.get<unknown[]>(AUDIT_KEY)?.length ?? 0) : 0 }); },
     relationshipContext() { return buildRelationshipContext(state.turns); },
     entryIds() { return state.entries.map((entry) => entry.id); },
     recallableEntryIds() { return state.entries.filter((entry) => isRecallable(entry, Date.now())).map((entry) => entry.id); },
@@ -834,6 +859,21 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
       if (typeof raw.locked !== "boolean") throw new Error("锁定状态无效");
       save({ ...state, profiles: { ...state.profiles, l0Locked: raw.locked } }); return this.view();
     },
+    resolveSemanticReview(raw: any) {
+      const review = state.semanticReviews?.find(item => item.id === raw?.id);
+      if (!review || review.content !== raw.expectedContent || !semanticReviewCurrent(state, review)) throw new Error("复核内容已变化，请刷新后重试");
+      if (!["keep", "edit", "delete"].includes(raw.action)) throw new Error("复核操作无效");
+      if (raw.action === "edit" && (typeof raw.content !== "string" || !raw.content.trim())) throw new Error("记忆内容不能为空");
+      if (raw.action !== "keep") {
+        if (review.layer === "L2") {
+          const entry = state.entries.find(item => item.id === review.target)!;
+          if (raw.action === "delete") this.deleteEntry({ id: entry.id, revision: state.revision });
+          else this.editEntry({ ...entry, content: raw.content, revision: state.revision });
+        } else this.editProfile({ layer: review.layer, field: review.target, content: raw.action === "delete" ? "" : raw.content, revision: state.revision });
+      }
+      save({ ...state, semanticReviews: (state.semanticReviews ?? []).filter(item => item.id !== review.id) });
+      return { layer: review.layer, target: review.target, action: raw.action };
+    },
     editEntry(raw: any) {
       checkRevision(raw?.revision);
       const entry = state.entries.find((e) => e.id === raw.id);
@@ -1050,24 +1090,44 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
       return renderSearch(query, expansions, semanticIds, rerankedIds, selectedIds, maxChars, includeExpired, purpose, plan);
     },
     profileContext() { return currentProfileContext().join("\n\n"); },
-    async maintain(generate: (messages: ExtractionPromptMessage[]) => Promise<string>, signal: AbortSignal, validateSources?: (turns: Turn[], signal: AbortSignal) => Promise<string[]>, ingestEntities?: (texts: string[]) => void) {
+    extractionReceipt(batch: IsolatedExtractionBatch) {
+      return structuredClone(state.isolatedExtractionReceipts?.[extractionBatchKey(batch)]);
+    },
+    completeExtractionReceipt(batch: IsolatedExtractionBatch) {
+      const key = extractionBatchKey(batch), receipt = state.isolatedExtractionReceipts?.[key];
+      if (!receipt || batch.pending.some(turn => !state.processed.includes(turn.id))) throw new Error("SQLITE_EXTRACTION_RECEIPT_MISSING");
+      if (!receipt.completed) save({ ...state, isolatedExtractionReceipts: { ...state.isolatedExtractionReceipts, [key]: { ...receipt, completed: true, previousContents: [] } } });
+    },
+    async maintain(generate: (messages: ExtractionPromptMessage[]) => Promise<string>, signal: AbortSignal, validateSources?: (turns: Turn[], signal: AbortSignal) => Promise<string[]>, ingestEntities?: (texts: string[]) => void, isolatedBatch?: { before: Turn[]; pending: Turn[] }) {
       if (maintaining) throw new Error("提取正在进行");
+      if (isolatedBatch && (isolatedBatch.pending.length !== EXTRACTION_BATCH_TURNS || isolatedBatch.before.length > EXTRACTION_CONTEXT_TURNS
+        || new Set([...isolatedBatch.before, ...isolatedBatch.pending].map(turn => turn.id)).size !== isolatedBatch.before.length + isolatedBatch.pending.length
+        || [...isolatedBatch.before, ...isolatedBatch.pending].some(turn => turn.sessionId !== isolatedBatch.pending[0].sessionId))) throw new Error("隔离批次无效");
+      if (isolatedBatch) {
+        const count = isolatedBatch.pending.filter(turn => state.processed.includes(turn.id)).length;
+        if (count > 0 && count < isolatedBatch.pending.length) throw new Error("SQLITE_PARTIAL_BATCH_RECEIPT");
+        if (count) {
+          if (!state.isolatedExtractionReceipts?.[extractionBatchKey(isolatedBatch)]) throw new Error("SQLITE_EXTRACTION_RECEIPT_MISSING");
+          return { batches: 0, pending: state.turns.length - state.processed.length };
+        }
+      }
       maintaining = true;
       let batches = 0;
       try {
         // 每次取同会话 6 个新轮次，额外提供前两轮及其可核验的旧记忆。
-        for (const sessionId of new Set(state.turns.map((t) => t.sessionId))) {
+        for (const sessionId of new Set(isolatedBatch ? [isolatedBatch.pending[0].sessionId] : state.turns.map((t) => t.sessionId))) {
           while (!signal.aborted) {
             const all = state.turns.filter((t) => t.sessionId === sessionId);
-            const pending = all.filter((t) => !state.processed.includes(t.id));
+            const pending = isolatedBatch?.pending ?? all.filter((t) => !state.processed.includes(t.id));
             if (pending.length < EXTRACTION_BATCH_TURNS) break;
             const batch = pending.slice(0, EXTRACTION_BATCH_TURNS);
-            let before = all.slice(0, all.findIndex((t) => t.id === batch[0].id)).slice(-EXTRACTION_CONTEXT_TURNS);
+            let before = isolatedBatch?.before ?? all.slice(0, all.findIndex((t) => t.id === batch[0].id)).slice(-EXTRACTION_CONTEXT_TURNS);
             if (validateSources) {
               const validIds = new Set(await validateSources([...before, ...batch], signal));
               if (signal.aborted) throw new Error("提取已取消");
               const invalidBatchIds = new Set(batch.filter((turn) => !validIds.has(turn.id)).map((turn) => turn.id));
               if (invalidBatchIds.size > 0) {
+                if (isolatedBatch) throw new Error("隔离批次来源已变化");
                 save({ ...state, turns: state.turns.filter((turn) => !invalidBatchIds.has(turn.id)), processed: state.processed.filter((id) => !invalidBatchIds.has(id)) });
                 continue;
               }
@@ -1086,7 +1146,6 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
             const previous = relatedMemories(state.entries, before);
             const messages = buildMemoryExtractionMessages(transcript, sessionId, previous.map(({ id, content }) => ({ id, content })));
             let candidates: ReturnType<typeof parseMemoryExtraction> = [];
-            const semanticRequests = new Set<string>();
             for (let attempt = 0; attempt < 2; attempt++) {
               const raw = await generate(messages);
               if (signal.aborted) throw new Error("提取已取消");
@@ -1097,7 +1156,6 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
                   bindExtractionEvidence(candidate, [...before, ...batch], batch);
                   if (candidate.targetMemoryId) patchMemory(previous.find(entry => entry.id === candidate.targetMemoryId)!, candidate);
                 }
-                requireSemanticReview(candidates, semanticRequests, attempt > 0);
                 break;
               } catch (error) {
                 if (attempt === 1) throw error;
@@ -1113,6 +1171,7 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
               if (before.some(turn => !validIds.has(turn.id))) throw new Error("前置来源已变化，保留待处理队列");
               const invalidBatchIds = new Set(batch.filter((turn) => !validIds.has(turn.id)).map((turn) => turn.id));
               if (invalidBatchIds.size > 0) {
+                if (isolatedBatch) throw new Error("隔离批次来源已变化");
                 save({ ...state, turns: state.turns.filter((turn) => !invalidBatchIds.has(turn.id)), processed: state.processed.filter((id) => !invalidBatchIds.has(id)) });
                 continue;
               }
@@ -1166,9 +1225,35 @@ export function createMemory(storage: PluginStorage, onNewTurn?: (turn: Turn) =>
                 });
               } else throw new Error("未知记忆层级");
             }
-            save({ ...state, profiles, entries, profileChanges, processed: [...state.processed, ...batch.map((t) => t.id)] });
+            const semanticReviews = [...(state.semanticReviews ?? [])];
+            for (const candidate of candidates) {
+              const reason = semanticRisk(candidate);
+              if (!reason) continue;
+              const layer = candidate.layer;
+              if (layer !== "L0" && layer !== "L1" && layer !== "L2") continue;
+              const entry = layer === "L2" ? entries.find(item => candidate.targetMemoryId
+                ? item.id === candidate.targetMemoryId : item.content === candidate.content.trim()) : undefined;
+              const facts = (layer === "L0" ? profiles.l0 : profiles.l1) as Record<string, ProfileFact>;
+              const inferredL1 = /目标|想要|计划|打算/u.test(candidate.content) ? "recentGoals" : /项目|工程|开发|制作/u.test(candidate.content) ? "currentProject" : "recentPreferences";
+              const target = layer === "L2" ? entry?.id : profileField(layer, layer === "L1" ? inferredL1 : candidate.field);
+              if (!target || (layer !== "L2" && facts[target]?.content !== candidate.content.trim())) continue;
+              const content = entry?.content ?? facts[target].content;
+              const previous = layer === "L2" ? state.entries.find(item => item.id === target)?.content
+                : ((layer === "L0" ? state.profiles.l0 : state.profiles.l1) as Record<string, ProfileFact>)[target]?.content;
+              if (previous === content) continue;
+              for (let i = semanticReviews.length - 1; i >= 0; i--) {
+                if (semanticReviews[i].layer === layer && semanticReviews[i].target === target) semanticReviews.splice(i, 1);
+              }
+              semanticReviews.push({ id: randomUUID(), layer, target, content, reason,
+                evidenceQuotes: [...candidate.evidenceQuotes], createdAt: Date.now() });
+            }
+            const isolatedReceipt = isolatedBatch ? { version: 1 as const, key: extractionBatchKey(isolatedBatch), completed: false,
+              previousContents: state.entries.map(entry => [entry.id, extractionContentHash(entry.content)] as [string, string]) } : undefined;
+            save({ ...state, semanticReviews, profiles, entries, profileChanges, processed: [...state.processed, ...batch.map((t) => t.id)],
+              ...(isolatedReceipt ? { isolatedExtractionReceipts: { ...state.isolatedExtractionReceipts, [isolatedReceipt.key]: isolatedReceipt } } : {}) });
             ingestEntities?.(batch.map((turn) => turn.user));
             batches++;
+            if (isolatedBatch) break;
           }
         }
         return { batches, pending: state.turns.length - state.processed.length };

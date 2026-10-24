@@ -173,9 +173,17 @@ export class PluginManager {
    * 发布普通宿主事件（旁路）：监听器在后续宏任务中派发，发布方不等待任何第三方监听器。
    * 单个监听器同步抛错或异步失败只记录日志，不影响其余监听器。
    */
-  publishHostEvent<T = unknown>(event: string, payload: T): Promise<void> {
+  async publishHostEvent<T = unknown>(event: string, payload: T): Promise<void> {
+    if (process.env.CYRENE_SQLITE_ISOLATION === "1"
+      && await import("../main/storage/storage-backend").then(m => m.persistStorageHostEvent(event, payload))) return;
     return this.eventBus.emit(qualifyHostEvent(event), payload);
   }
+  /** Host-owned durable outbox; not exposed to plugin contexts. */
+  deliverStoredHostEvent(event: string, payload: unknown): Promise<void> {
+    if (!["host:turn:started", "host:turn:finished", "host:prompt:accepted", "host:conversation:changed", "host:assistant-message:feedback"].includes(event)) throw new Error("Unsupported stored host event");
+    return this.eventBus.emitDurable(event, payload);
+  }
+  drainHostEvents(): Promise<void> { return this.eventBus.drain(); }
 
   /**
    * 发布插件系统启动/停止屏障事件：顺序等待每个监听器完成（含单个超时）后才返回。
@@ -213,6 +221,7 @@ export class PluginManager {
   }
 
   private notifyRunningState(pluginId: string, running: boolean): void {
+    void this.eventBus.emit("host:plugin:running", { id: pluginId, running, runningIds: [...this.instances.keys()] });
     for (const listener of this.runningStateListeners) {
       try {
         listener(pluginId, running);
@@ -481,10 +490,14 @@ export class PluginManager {
   stop(): Promise<void> {
     return this.enqueueOperation(async () => {
       if (!this.started) return;
+      await this.eventBus.drain();
       await this.publishHostLifecycleBarrier("plugins:stopping", undefined);
+      await this.eventBus.drain();
       for (const id of Array.from(this.instances.keys())) {
         await this.deactivate(id);
       }
+      // Deactivation notifications may enqueue ordinary host events too.
+      await this.eventBus.drain();
       for (const channel of [
         IPC.PLUGINS_LIST,
         IPC.PLUGINS_SET_ENABLED,
@@ -689,6 +702,7 @@ export class PluginManager {
     const context = this.contexts.get(id);
     if (!plugin && !context) return;
     this.statuses.set(id, "stopping");
+    await this.publishHostLifecycleBarrier("plugin:stopping", { id });
     context?.beginStop();
     try {
       if (plugin?.unregister) {

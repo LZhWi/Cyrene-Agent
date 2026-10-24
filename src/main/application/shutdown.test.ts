@@ -7,6 +7,34 @@ afterEach(() => {
 });
 
 describe("createShutdownCoordinator", () => {
+  it("latches the first request before invoking a reentrant disposer", async () => {
+    const coordinator = createShutdownCoordinator({ readiness: createStartupReadiness() });
+    const final = vi.fn(), nestedFinal = vi.fn(), dispose = vi.fn();
+    let nested: Promise<void> | undefined;
+    coordinator.register({ id: "reentrant", phase: "quiesce", dispose: () => {
+      dispose();
+      if (dispose.mock.calls.length === 1) nested = coordinator.requestControlledShutdown({ reason: "nested", finalAction: nestedFinal });
+    } });
+    const first = coordinator.requestControlledShutdown({ reason: "first", finalAction: final });
+    await first;
+    expect(nested).toBe(first);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(final).toHaveBeenCalledOnce();
+    expect(nestedFinal).not.toHaveBeenCalled();
+  });
+
+  it("performs registered emergency flushes when an earlier phase times out", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    const coordinator = createShutdownCoordinator({ readiness: createStartupReadiness(), timeoutMs: 50, log: vi.fn() });
+    coordinator.register({ id: "stuck", phase: "stopProducers", dispose: () => new Promise(() => {}) });
+    coordinator.registerEmergencyFlush("persist", () => { order.push("flush"); });
+    const pending = coordinator.requestControlledShutdown({ reason: "timeout", finalAction: () => { order.push("final"); } });
+    await vi.advanceTimersByTimeAsync(50);
+    await pending;
+    coordinator.emergencyFlush();
+    expect(order).toEqual(["flush", "final"]);
+  });
   it("runs fixed phases sequentially and entries within one phase concurrently", async () => {
     const events: string[] = [];
     const readiness = createStartupReadiness();

@@ -1,3 +1,4 @@
+import { startStorageSubscribers } from "./storage/storage-backend";
 import { chatModuleHasOverride } from "./settings/chat-module-routes";
 import { app, dialog, powerMonitor, safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
@@ -151,7 +152,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
             const target = loadGeneralSettings().proactiveDeliveryTarget;
             return target === "local" || canStartProactiveChannelDelivery(target, channelManager);
           },
-          append: async ({ pluginId, text, allowIgnoreFeedback }) => {
+          append: async ({ pluginId, text, allowIgnoreFeedback, contextRunId }) => {
             const settings = loadGeneralSettings();
             const target = settings.proactiveDeliveryTarget;
             if (target !== "local") {
@@ -189,6 +190,17 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
               title: "昔涟的主动消息",
               identityId: null,
             });
+            // Isolation-only capability: the message and delivery proof commit together.
+            const durableDelivery = (chatsStore as unknown as {
+              appendProactiveMessage?: (id: string, input: {
+                runId: string; pluginId: string; text: string; at: number; allowIgnoreFeedback: boolean;
+              }) => { conversationId: string; messageId: string; at: string };
+            }).appendProactiveMessage;
+            if (contextRunId && durableDelivery) {
+              const result = durableDelivery(session.id, { runId: contextRunId, pluginId, text, at: Date.now(), allowIgnoreFeedback });
+              broadcastChatsChanged();
+              return result;
+            }
             const messageId = randomUUID();
             const at = Date.now();
             if (!chatsStore.appendMessage(session.id, {
@@ -328,5 +340,6 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
   // 设置面板静态资源协议：禁用插件立即 404，查询实时反映启停状态
   installPluginPanelProtocol((pluginId) => manager.getSettingsPanelDir(pluginId));
   await manager.start();
+  await startStorageSubscribers(manager);
   return manager;
 }

@@ -34,7 +34,7 @@ function dispatchListener(
   payload: unknown,
   event: string,
   onListenerError: (event: string, error: unknown) => void,
-): void {
+): void | Promise<void> {
   let result: void | Promise<void>;
   try {
     result = listener(payload);
@@ -43,11 +43,13 @@ function dispatchListener(
     return;
   }
   if (!result || typeof (result as Promise<void>).then !== "function") return;
+  return new Promise<void>((resolve) => {
   let settled = false;
   const timeoutHandle = setTimeout(() => {
     if (settled) return;
     settled = true;
     onListenerError(event, new Error(`事件监听器 ${event} 异步执行超时（${PLUGIN_EVENT_LISTENER_TIMEOUT_MS}ms）`));
+    resolve();
   }, PLUGIN_EVENT_LISTENER_TIMEOUT_MS);
   // 旁路计时器不单独阻止主进程退出。
   timeoutHandle.unref?.();
@@ -56,14 +58,17 @@ function dispatchListener(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
+      resolve();
     },
     (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
       onListenerError(event, error);
+      resolve();
     },
   );
+  });
 }
 
 function validateQualifiedEventName(event: string): void {
@@ -93,6 +98,10 @@ export interface PluginEventBus {
    * 只供插件系统 ready/stopping 使用，普通宿主事件禁止走此阻塞入口。
    */
   emitLifecycleBarrier(event: string, payload: unknown): Promise<void>;
+  /** Wait for queued dispatch and already running ordinary listeners. */
+  drain(): Promise<void>;
+  /** Isolation outbox only: acknowledge actual completion; never swallow failures. */
+  emitDurable(event: string, payload: unknown): Promise<void>;
   clear(): void;
 }
 
@@ -102,6 +111,7 @@ export function createPluginEventBus(
   },
 ): PluginEventBus {
   const listeners = new Map<string, Set<{ listener: PluginEventBusListener }>>();
+  const pending = new Set<Promise<void>>();
 
   return {
     on(event, listener) {
@@ -130,11 +140,14 @@ export function createPluginEventBus(
         }
         // 固定本轮快照：监听器在回调中退订时，不改变已经开始的发布顺序。
         const snapshot = Array.from(listeners.get(event) ?? []);
+        let finish!: () => void;
+        const completion = new Promise<void>((done) => { finish = done; });
+        pending.add(completion);
         // 宏任务旁路：先把当前调用栈交还事件循环，监听器从后续调度任务开始执行。
         setImmediate(() => {
-          for (const subscription of snapshot) {
-            dispatchListener(subscription.listener, payload, event, onListenerError);
-          }
+          const work = snapshot.map((subscription) =>
+            dispatchListener(subscription.listener, payload, event, onListenerError));
+          void Promise.all(work).finally(() => { pending.delete(completion); finish(); });
           resolve();
         });
       });
@@ -150,6 +163,23 @@ export function createPluginEventBus(
           onListenerError(event, error);
         }
       }
+    },
+    async drain() {
+      while (pending.size) await Promise.all([...pending]);
+    },
+    async emitDurable(event, payload) {
+      validateQualifiedEventName(event);
+      const snapshot = Array.from(listeners.get(event) ?? []);
+      // Do not retry a timed-out listener while it may still be mutating state.
+      // The outer shutdown deadline may stop waiting; the durable row stays pending.
+      const work = Promise.allSettled(snapshot.map(({ listener }) => Promise.resolve().then(() => listener(payload))));
+      const completion = work.then(() => {});
+      pending.add(completion);
+      try {
+        const results = await work;
+        const errors = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+        if (errors.length) throw new AggregateError(errors.map(r => r.reason), `Durable event failed: ${event}`);
+      } finally { pending.delete(completion); }
     },
     clear() {
       listeners.clear();

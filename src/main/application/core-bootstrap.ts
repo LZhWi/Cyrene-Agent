@@ -194,10 +194,26 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
 
   // 注册核心资源清理（固定阶段）；scheduler/proactive/更新定时器由 background 注册
   shutdown.register({
+    id: "tts-sessions",
+    phase: "stopProducers",
+    dispose: (signal) => services.ttsSession.shutdown(signal),
+  });
+  shutdown.register({
+    id: "proactive-generation",
+    phase: "stopProducers",
+    dispose: (signal) => services.proactive.shutdown(signal),
+  });
+  shutdown.register({
     id: "plugins",
     phase: "stopActiveWork",
-    dispose: async () => { await plugins.stop(); },
+    dispose: async () => {
+      const subscribers = stopStorageSubscribers();
+      await plugins.publishHostLifecycleBarrier("plugins:quiescing", undefined);
+      await subscribers;
+      await plugins.stop();
+    },
   });
+  shutdown.register({ id: "sqlite-owner", phase: "flushPersistence", dispose: stopStorageRuntime });
   shutdown.register({
     id: "channels",
     phase: "stopExternalConsumers",
@@ -243,3 +259,4 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
 
   return { runtime, services, channels, plugins, scheduler };
 }
+import { stopStorageRuntime, stopStorageSubscribers } from "../storage/storage-backend";

@@ -41,6 +41,7 @@ export function createSemanticIndexer(ctx: PluginContext, memory: MemorySource, 
   let controller = new AbortController();
   let running: Promise<void> | undefined;
   let rerun = false;
+  let stopped = false;
   let lastError: { at: number; kind: "configuration" | "request" | "stale" } | undefined;
   let backfillPreview: { id: string; revision: number; dimensions: number; hashes: Record<string, string> } | undefined;
 
@@ -91,7 +92,7 @@ export function createSemanticIndexer(ctx: PluginContext, memory: MemorySource, 
   }
 
   function kick() {
-    if (!settings.enabled || ctx.signal.aborted) return;
+    if (stopped || !settings.enabled || ctx.signal.aborted) return;
     if (running) { rerun = true; return; }
     const signal = AbortSignal.any([ctx.signal, controller.signal]);
     running = run(signal).finally(() => {
@@ -181,6 +182,6 @@ export function createSemanticIndexer(ctx: PluginContext, memory: MemorySource, 
     },
     retry() { if (!settings.enabled) throw new Error("请先启用新记忆语义索引"); lastError = undefined; kick(); return this.view(); },
     async whenIdle() { while (running) await running; },
-    stop() { controller.abort(); },
+    async stop() { stopped = true; rerun = false; controller.abort(); while (running) await running; },
   };
 }

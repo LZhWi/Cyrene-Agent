@@ -70,7 +70,14 @@ export function createAutoCompression(
   let controller: AbortController | undefined;
   const save = (next: AutoCompressionState) => { storage.set(STATE_KEY, next); state = next; };
 
-  const onTurn = async (event: PluginTurnFinishedEvent, due = false) => {
+  const pending = new Set<Promise<void>>();
+  const onTurn = (event: PluginTurnFinishedEvent, due = false): Promise<void> => {
+    const work = runTurn(event, due);
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  };
+  const runTurn = async (event: PluginTurnFinishedEvent, due = false) => {
     if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion" || event.status !== "success") return;
     if (isSuppressed()) { if (state.pendingTurns) save({ ...state, pendingTurns: 0 }); return; }
     const pendingTurns = due ? TURN_INTERVAL : Math.min(TURN_INTERVAL, state.pendingTurns + 1);
@@ -145,11 +152,12 @@ export function createAutoCompression(
       storage.set(APPLY_SETTINGS_KEY, value); applyEnabled = value;
       return this.view();
     },
-    stop() {
-      if (stopped) return;
+    async stop() {
+      if (stopped) { await Promise.allSettled([...pending]); return; }
       stopped = true;
       controller?.abort();
       off();
+      await Promise.allSettled([...pending]);
     },
   };
 }

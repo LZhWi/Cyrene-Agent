@@ -73,6 +73,11 @@ export function createGitWorkspaceWatcher(deps: GitWorkspaceWatcherDeps): GitWor
         const schedule = () => {
           const current = watched.get(key);
           if (!current) return;
+          // 新事件立即取消已排队的刷新，不能等下一层防抖到期才取消。
+          if (current.timer) {
+            clearTimeout(current.timer);
+            current.timer = undefined;
+          }
           if (current.eventTimer) clearTimeout(current.eventTimer);
           current.eventTimer = setTimeout(() => {
             current.eventTimer = undefined;

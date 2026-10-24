@@ -3,8 +3,8 @@
   "id": "cyrene-hud",
   "name": "昔涟桌面 HUD",
   "version": "0.8.7",
-  "description": "内置硬件采集的桌面状态栏与头像窗口快捷入口；不接入模型",
-  "author": "Cyrene local integration",
+  "description": "常驻性能监测&Cyrene状态&自定义快速跳转窗口三合一的仿灵动岛状态栏，可自定义外观",
+  "author": "Noimpty",
   "entry": "index.cjs",
   "defaultEnabled": false,
   "deps": ["window-navigation"]

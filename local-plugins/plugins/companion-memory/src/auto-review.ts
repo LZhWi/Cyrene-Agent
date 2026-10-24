@@ -60,6 +60,7 @@ export function createAutoReview(
   review: (candidate: AutoReviewCandidate, signal: AbortSignal) => Promise<unknown>,
   now: () => number = Date.now,
   apply?: (review: unknown) => { applied: boolean; reviewId?: string },
+  acquire?: (signal: AbortSignal) => Promise<() => void>,
 ) {
   let enabled = storage.get<boolean>(SETTINGS_KEY) ?? false;
   if (typeof enabled !== "boolean") throw new Error("后台复核设置损坏");
@@ -71,7 +72,14 @@ export function createAutoReview(
   let controller: AbortController | undefined;
   const save = (next: AutoReviewState) => { storage.set(STATE_KEY, next); state = next; };
 
-  const onTurn = async (event: PluginTurnFinishedEvent, due = false) => {
+  const pending = new Set<Promise<void>>();
+  const onTurn = (event: PluginTurnFinishedEvent, due = false): Promise<void> => {
+    const work = runTurn(event, due);
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  };
+  const runTurn = async (event: PluginTurnFinishedEvent, due = false) => {
     if (stopped || !enabled || event.mode !== "chat" || event.source !== "desktop" || event.chatBackend !== "companion" || event.status !== "success") return;
     const pendingTurns = due ? TURN_INTERVAL : Math.min(TURN_INTERVAL, state.pendingTurns + 1);
     save({ ...state, pendingTurns });
@@ -89,7 +97,10 @@ export function createAutoReview(
     save({ ...state, pendingTurns: 0, lastAttemptAt: at });
     running = true;
     controller = new AbortController();
+    let release: (() => void) | undefined;
     try {
+      release = await acquire?.(controller.signal);
+      if (stopped || controller.signal.aborted) return;
       const result = await review(candidate, controller.signal);
       if (stopped || controller.signal.aborted) return;
       const applied = applyEnabled ? apply?.(result) : undefined;
@@ -100,6 +111,7 @@ export function createAutoReview(
     } catch {
       if (!stopped && !controller.signal.aborted) save({ ...state, lastErrorAt: now() });
     } finally {
+      release?.();
       running = false;
       controller = undefined;
     }
@@ -129,11 +141,12 @@ export function createAutoReview(
       storage.set(APPLY_SETTINGS_KEY, value); applyEnabled = value;
       return this.view();
     },
-    stop() {
-      if (stopped) return;
+    async stop() {
+      if (stopped) { await Promise.allSettled([...pending]); return; }
       stopped = true;
       controller?.abort();
       off();
+      await Promise.allSettled([...pending]);
     },
   };
 }

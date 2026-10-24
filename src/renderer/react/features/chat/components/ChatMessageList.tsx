@@ -574,6 +574,7 @@ export function RunActivityDetail({
   taskDelegations = [],
   tools,
   interrupted = false,
+  processing = true,
 }: {
   agentRounds?: AgentRoundRecord[];
   reasoningBlocks: ReasoningBlock[];
@@ -581,6 +582,7 @@ export function RunActivityDetail({
   taskDelegations?: TaskDelegationDisplayRecord[];
   tools: ToolExecutionRecord[];
   interrupted?: boolean;
+  processing?: boolean;
 }) {
   const { t } = useTranslation();
   if (agentRounds.length > 0) {
@@ -590,7 +592,7 @@ export function RunActivityDetail({
       || taskDelegations.some((delegation) => delegation.roundId === round.id)
       || tools.some((tool) => tool.roundId === round.id));
     if (visibleRounds.length === 0) {
-      return <div className="cy-run-activity__empty">{t("messageList.organizingReply")}</div>;
+      return processing ? <div className="cy-run-activity__empty">{t("messageList.organizingReply")}</div> : null;
     }
     return (
       <div className="cy-run-activity__detail">
@@ -640,7 +642,7 @@ export function RunActivityDetail({
   }
   return timeline.length
     ? <div className="cy-run-activity__detail">{timeline}</div>
-    : <div className="cy-run-activity__empty">{t("messageList.organizingReply")}</div>;
+    : processing ? <div className="cy-run-activity__empty">{t("messageList.organizingReply")}</div> : null;
 }
 
 function RunActivityContent({
@@ -717,6 +719,7 @@ function RunActivityContent({
             taskDelegations={taskDelegations}
             tools={tools}
             interrupted={Boolean(activity.keepExpanded && activity.completedAt !== undefined)}
+            processing={snapshot.processing}
           />
           <div className="cy-run-activity__divider" />
         </div>

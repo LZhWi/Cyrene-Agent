@@ -11,18 +11,21 @@ export function createPeer(ctx: PluginContext, other: string,
   handle: (method: string, data: unknown, signal: AbortSignal) => Promise<unknown>) {
   const pending = new Map<string, { resolve: (data: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; cleanup: () => void }>();
   const inflight = new Map<string, AbortController>();
+  const handlers = new Set<Promise<void>>();
   let stopped = false;
   const offRequest = ctx.events.on<Request>(`plugin:${other}:request`, (r) => {
     if (stopped || !r || r.v !== 1 || r.from !== other || typeof r.id !== "string" || typeof r.method !== "string" || inflight.has(r.id)) return;
     const control = new AbortController(); inflight.set(r.id, control);
-    void Promise.resolve().then(() => {
+    const task = Promise.resolve().then(() => {
       if (stopped || control.signal.aborted) throw new Error("请求已取消");
       return handle(r.method, r.data, AbortSignal.any([ctx.signal, control.signal]));
     }).then(
       (data) => ({ v: 1, id: r.id, to: other, ok: true, data } as Reply),
       () => ({ v: 1, id: r.id, to: other, ok: false, error: "对方插件处理失败，请查看插件状态后重试" } as Reply),
-    ).then(async (reply) => { if (!stopped) await ctx.events.emit("reply", reply); })
+    ).then(async (reply) => { if (!stopped && !control.signal.aborted && !ctx.signal.aborted) await ctx.events.emit("reply", reply); })
       .catch(() => undefined).finally(() => inflight.delete(r.id));
+    handlers.add(task);
+    void task.then(() => handlers.delete(task));
   });
   const offCancel = ctx.events.on<{ v: number; id: string; from: string }>(`plugin:${other}:cancel`, (r) => {
     if (r?.v === 1 && r.from === other) inflight.get(r.id)?.abort();
@@ -34,12 +37,14 @@ export function createPeer(ctx: PluginContext, other: string,
     pending.delete(r.id); clearTimeout(p.timer); p.cleanup();
     if (r.ok) p.resolve(r.data); else p.reject(new Error(r.error || "插件请求失败"));
   });
-  function stop() {
-    if (stopped) return;
-    stopped = true; offRequest(); offReply(); offCancel();
-    for (const control of inflight.values()) control.abort();
-    for (const p of pending.values()) { clearTimeout(p.timer); p.cleanup(); p.reject(new Error("插件已停止")); }
-    pending.clear();
+  async function stop() {
+    if (!stopped) {
+      stopped = true; offRequest(); offReply(); offCancel();
+      for (const control of inflight.values()) control.abort();
+      for (const p of pending.values()) { clearTimeout(p.timer); p.cleanup(); p.reject(new Error("插件已停止")); }
+      pending.clear();
+    }
+    await Promise.allSettled([...handlers]);
   }
   ctx.onDispose(stop);
   return {

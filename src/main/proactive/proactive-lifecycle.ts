@@ -37,6 +37,7 @@ export interface ProactiveLifecycle {
   initializeProactiveChatService: () => void;
   initializeProactiveTrigger: () => void;
   stopProactiveTrigger: () => void;
+  shutdown: (signal: AbortSignal) => Promise<void>;
   getProactiveChatService: () => ProactiveChatService | null;
   proactiveConversationLifecycle: {
     onUserMessage: () => void;
@@ -290,6 +291,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     initializeProactiveChatService,
     initializeProactiveTrigger,
     stopProactiveTrigger,
+    async shutdown(signal) {
+      stopProactiveTrigger();
+      await proactiveChatService?.shutdown(signal);
+    },
     getProactiveChatService: () => proactiveChatService,
     proactiveConversationLifecycle,
   };

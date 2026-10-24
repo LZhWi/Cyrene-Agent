@@ -14,6 +14,27 @@ function makeCore(): CoreResult {
   };
 }
 
+describe("background late resources", () => {
+  it.each(["scheduleUpdateCheck", "scheduleEmbeddingRefresh", "startProactiveTrigger", "startMomentsReactionScanner"] as const)(
+    "disposes late %s result after runner stop",
+    async (key) => {
+      let release!: (value: { dispose(): void }) => void;
+      let started!: () => void;
+      const ready = new Promise<void>(r => { started = r; });
+      const pending = new Promise<{ dispose(): void }>(r => { release = r; });
+      const dispose = vi.fn();
+      const deps = makeBackgroundDeps([], { [key]: async () => { started(); return pending; } });
+      const background = startBackground(deps);
+      await ready;
+      const stopped = background.stop();
+      release({ dispose });
+      await stopped;
+      await background.settled;
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+});
+
 function makeBackgroundDeps(calls: string[], overrides: Partial<BackgroundDependencies> = {}): BackgroundDependencies & {
   readiness: ReturnType<typeof createStartupReadiness>;
   channels: { start: ReturnType<typeof vi.fn>; shutdown: ReturnType<typeof vi.fn> };
@@ -24,7 +45,8 @@ function makeBackgroundDeps(calls: string[], overrides: Partial<BackgroundDepend
   readiness.transition("core-ready");
   readiness.transition("background-starting");
   const channels = { start: vi.fn(async () => { calls.push("channels"); }), shutdown: vi.fn(async () => undefined) };
-  const scheduler = { start: vi.fn(() => { calls.push("scheduler"); }), stop: vi.fn() };
+  const stop = vi.fn();
+  const scheduler = { start: vi.fn(() => { calls.push("scheduler"); }), stop, engine: { shutdown: stop } };
 
   const deps: BackgroundDependencies = {
     core: makeCore(),

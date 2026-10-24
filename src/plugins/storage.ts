@@ -1,11 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { PluginStorage } from "./types";
+import { pluginStorageBackend } from "../main/storage/storage-backend";
 
 const KEY_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
 /** 每个 key 一个 JSON 文件：<rootDir>/<key>.json */
 export function createPluginStorage(rootDir: string): PluginStorage {
+  const backend = pluginStorageBackend(rootDir);
+  if (backend) return backend;
   mkdirSync(rootDir, { recursive: true });
   const fileFor = (key: string): string => path.join(rootDir, `${key}.json`);
   const assertKey = (key: string): void => {

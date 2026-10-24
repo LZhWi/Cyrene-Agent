@@ -17,6 +17,7 @@
 
 import { app } from "electron";
 import { enqueueLLMTask } from "../llm-queue";
+import { waitForProducer } from "../application/wait-for-producer";
 import { loadGeneralSettings } from "../settings/settings-facade";
 import { loadModelSettings } from "../settings/model-settings";
 import { loadPromptFile } from "../prompts/prompt-loader";
@@ -130,7 +131,7 @@ export interface MomentsService {
   /** 启动反应队列周期扫描器（启动即补扫一轮，重启后逾期任务尽快续上）；由后台启动组挂载 */
   startReactionScanner(): void;
   /** 停止反应队列周期扫描器 */
-  stopReactionScanner(): void;
+  stopReactionScanner(signal?: AbortSignal): Promise<void>;
   /** 手动扫描一轮到期反应任务（诊断与测试用）；已有排空在进行时返回 false */
   drainReactionQueue(): Promise<boolean>;
 }
@@ -197,14 +198,25 @@ export interface MomentsServiceDeps {
 }
 
 export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
+  let shutdownSignal: AbortSignal | undefined;
+  const pendingPosts = new Set<Promise<void>>();
+  const checkShutdownDeadline = () => {
+    if (shutdownSignal?.aborted) throw new Error("moments shutdown deadline reached");
+  };
   // 角色注册表：注入优先；缺省每次读盘（md 随时可改，无需重启生效）
   const loadPersonas = deps.loadPersonas
     ?? (() => loadCharacterPersonas({ log: (event, detail) => deps.log?.(event, detail) }));
 
   const agent: MomentsAgent = createMomentsAgent({
     buildPersona: deps.buildPersona,
-    runModel: deps.runModel,
+    runModel: async (messages) => {
+      checkShutdownDeadline();
+      const result = await deps.runModel(messages);
+      checkShutdownDeadline();
+      return result;
+    },
     commitPost: async (input) => {
+      checkShutdownDeadline();
       const result = await deps.store.createCyrenePost(input);
       // 昔涟发帖成功后同样进角色抽签池：角色们也会刷到她的动态
       if (result.applied) scheduleCharacterPostReactions(result.value);
@@ -644,6 +656,7 @@ export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
 
   /** run 成功收尾：记录 ring buffer → 设置/去重闸门（LLM 前）→ 入队生成。 */
   function scheduleTurn(input: MomentsTurnInput): void {
+    if (shutdownSignal) return;
     // ring buffer 永远记录：后续事件的摘录需要这段上下文，与发帖闸门无关
     const turns = [...(conversationTurns.get(input.conversationId) ?? []), {
       user: input.userText,
@@ -666,7 +679,8 @@ export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
     // 任务执行时只读这份快照，不重读当前会话状态
     const summary = buildConversationSummary(turns);
     const { conversationId, channel } = input;
-    deps.enqueueTask("MomentsPost", async () => {
+    const work = deps.enqueueTask("MomentsPost", async () => {
+      if (shutdownSignal?.aborted) return;
       // 执行时复核冷却与日上限：闸门通过到任务执行之间，世界可能已变
       const gate = canPost(loadPolicyState(), now());
       if (!gate.ok) {
@@ -682,6 +696,8 @@ export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
     }).catch((error) => {
       deps.log?.("post_task_failed", error instanceof Error ? error.message : String(error));
     });
+    pendingPosts.add(work);
+    void work.then(() => pendingPosts.delete(work), () => pendingPosts.delete(work));
   }
 
   return {
@@ -747,7 +763,13 @@ export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
     scheduleTurn,
 
     startReactionScanner: () => reactionQueue.start(),
-    stopReactionScanner: () => reactionQueue.stop(),
+    stopReactionScanner: async (signal) => {
+      if (signal) shutdownSignal = signal;
+      await Promise.all([
+        reactionQueue.stop(signal),
+        signal ? waitForProducer("moments posts", [...pendingPosts], signal) : Promise.allSettled([...pendingPosts]),
+      ]);
+    },
     drainReactionQueue: () => reactionQueue.drainOnce(),
   };
 }

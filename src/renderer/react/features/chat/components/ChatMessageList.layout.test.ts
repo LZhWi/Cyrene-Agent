@@ -43,7 +43,7 @@ describe("chat reading width", () => {
 describe("Chat assistant action bar", () => {
   it("keeps Work's regenerate button as the rightmost action, after archived recall", () => {
     expect(component).toMatch(/<ColdRecallButton[^>]*\/>[\s\S]*<LastTurnActionButton kind="regenerate"[^>]*\/>[\s\S]*<MessageTime/);
-    expect(stylesheet).toContain(".cy-page.is-chat-mode .cy-last-turn-action--edit {");
+    expect(stylesheet).not.toContain(".cy-page.is-chat-mode .cy-last-turn-action--edit {");
     expect(stylesheet).not.toContain(".cy-page.is-chat-mode .cy-last-turn-action {");
   });
 });

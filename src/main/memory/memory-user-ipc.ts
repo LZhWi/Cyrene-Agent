@@ -174,6 +174,11 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
     return invokeColdRecall("resolve-cold-recall", raw);
   });
 
+  ipc.handle(IPC.MEMORY_SEMANTIC_REVIEW_RESOLVE, async (_event, raw: unknown) => {
+    if (!useCompanionMemory()) throw new Error("请先选择陪伴聊天后端");
+    return invokeColdRecall("resolve-semantic-review", raw);
+  });
+
   ipc.handle(IPC.MEMORY_PANEL_GET_DATA, async () => {
     if (!useCompanionMemory()) return loadMemoryPanelData();
     return loadCompanionMemoryPanelData(invokeCompanionMemory, await loadImportedDocs());

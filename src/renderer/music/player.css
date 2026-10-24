@@ -92,6 +92,7 @@ body {
   justify-content: center;
   gap: 8px;
   color: var(--text-dim);
+  -webkit-app-region: drag;
 }
 
 .mp-not-ready p {
@@ -135,6 +136,13 @@ body {
 .mp-header .playlist-chip,
 .mp-header nav {
   -webkit-app-region: no-drag;
+}
+
+/* 歌单溢出时仍保留不可收缩的窗口拖拽区。 */
+.mp-header::after {
+  content: "";
+  flex: 1 0 48px;
+  align-self: stretch;
 }
 
 /* 按钮区域显式排除拖拽 */

@@ -7,6 +7,7 @@
  */
 
 import type { BrowserWindow, Tray } from "electron";
+import { IPC } from "../../shared/ipc-channels";
 import { createWindowLifecycleTracker, type TrackedBrowserWindowLike } from "../electron-window-lifecycle";
 import { attachWindowsSessionEndHandlers } from "./electron-lifecycle";
 import type { IpcScope } from "./ipc-scope";
@@ -138,9 +139,16 @@ export async function startShell(deps: ShellDependencies): Promise<ShellResult> 
     id: "shell-ipc",
     // 窗口销毁与同阶段任务会并行执行。若这里也放在 stopLocalResources，
     // 渲染器退出前的最后一次光标查询可能撞上已经移除的 handler。
-    // 延后一阶段注销，保证所有窗口先停止，同时仍在最终退出前释放 IPC。
+    // 延后一阶段注销；只读轮询保留无副作用响应，接住已经排队的迟到请求。
     phase: "flushPersistence",
-    dispose: async () => { ipc.dispose(); },
+    dispose: async () => { ipc.dispose({
+      // Already queued renderer polls may arrive after BrowserWindow destruction.
+      // Only these read-only endpoints retain inert replies until process exit.
+      [IPC.WINDOW_GET_CURSOR_POSITION]: { x: 0, y: 0 },
+      [IPC.WINDOW_GET_IDLE_STATE]: { systemIdleSeconds: 0, screenNoChangeCount: 0 },
+      [IPC.MEMORY_COLD_RECALL_GET]: [],
+      [IPC.REVIEW_GET]: null,
+    }); },
   });
   shutdown.register({
     id: "token-usage",

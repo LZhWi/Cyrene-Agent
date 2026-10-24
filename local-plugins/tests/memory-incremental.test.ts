@@ -40,7 +40,7 @@ describe("6/8 增量提取",()=>{
     expect(replay.invalidatedEntryIds).toEqual(first.invalidatedEntryIds);
     expect(restarted.view().entries.every(entry => entry.status === "archived")).toBe(true);
   });
-  it("有依据的同义转述经一次复核后写入，并保留其他候选",async()=>{
+  it("有依据的同义转述先写入并保存用户复核项",async()=>{
     const {storage}=fixture();
     const state:any=storage.get("memory-state");
     state.turns[2].user="以后就不喝咖啡了";
@@ -56,11 +56,12 @@ describe("6/8 增量提取",()=>{
       return JSON.stringify([keep("m1"),keep("m2"),{...candidate,...(second?{reason:"语义复核通过：以后就不喝了表示停止行为，不再与原文含义相同。"}:{})}]);
     });
     await memory.maintain(generate,signal());
-    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memory.view().semanticReviews).toHaveLength(1);
     expect(memory.view().pending).toBe(0);
     expect(memory.view().entries).toHaveLength(3);
   });
-  it("否定丢失即使两边都有一定也需复核，未解决不消费批次",async()=>{
+  it("否定风险写入后交给用户复核，不阻塞批次",async()=>{
     const {storage}=fixture();
     const state:any=storage.get("memory-state");
     state.turns[2].user="我不一定喜欢咖啡";
@@ -68,10 +69,11 @@ describe("6/8 增量提取",()=>{
     const memory=createMemory(storage);
     const generate=vi.fn(async()=>JSON.stringify([keep("m1"),keep("m2"),memoryCandidate({layer:"L2",summary:"用户一定喜欢咖啡",
       evidenceQuotes:[state.turns[2].user],evidenceTurnRefs:["T3"]})]));
-    await expect(memory.maintain(generate,signal())).rejects.toThrow("需要语义复核");
-    expect(generate).toHaveBeenCalledTimes(2);
-    expect(memory.view().pending).toBe(6);
-    expect(memory.view().entries).toHaveLength(2);
+    await memory.maintain(generate,signal());
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memory.view().pending).toBe(0);
+    expect(memory.view().entries).toHaveLength(3);
+    expect(memory.view().semanticReviews).toHaveLength(1);
   });
   it("提供同一来源的两个独立旧事实，追加补充并保留来源和审计，重启不重复处理",async()=>{
     const {memory,storage}=fixture();

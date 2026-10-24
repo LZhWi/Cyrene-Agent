@@ -1,3 +1,4 @@
+import { prepareNativeStorageTurn, failNativeStorageTurn } from "./storage/storage-backend";
 // AG-UI IPC 桥：按会话模式选择执行链并把事件透传给渲染进程。
 //
 // 架构：
@@ -196,6 +197,19 @@ interface SessionActiveRun {
 }
 
 const sessionActiveRuns = new Map<string, SessionActiveRun>();
+let bridgeStopping = false;
+
+export function quiesceAgUiBridge(): void {
+  bridgeStopping = true;
+}
+
+/** Keep normal terminal settlement alive until the coordinator's global deadline. */
+export async function shutdownAgUiBridge(): Promise<void> {
+  quiesceAgUiBridge();
+  const runs = [...sessionActiveRuns.values()];
+  for (const run of runs) run.abort();
+  await Promise.all(runs.map((run) => run.settled));
+}
 
 /** 单次 takeover 等待旧 run 结算的时间上限：结算链路自身故障时超时回顶部重检，而非无限挂起。 */
 let takeoverSettleTimeoutMs = 5_000;
@@ -378,6 +392,7 @@ export function registerAgUiIpc(
 
   const onFinished = onRunFinished;
   ipc.handle(IPC.AGUI_RUN, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
+    if (bridgeStopping) throw new Error("APPLICATION_STOPPING");
     if (!buildOptionsFn || !onFinished) {
       throw new Error("AG-UI 桥未初始化");
     }
@@ -441,6 +456,10 @@ export function registerAgUiIpc(
     const runAbortController = new AbortController();
     let releaseSessionGuard: (() => void) | null = null;
     for (let takeovers = 0; ; takeovers++) {
+      if (bridgeStopping) {
+        lifecycle?.onConversationEnded();
+        throw new Error("APPLICATION_STOPPING");
+      }
       const existing = sessionActiveRuns.get(sessionId);
       if (!existing) {
         let resolveSettled!: () => void;
@@ -479,6 +498,7 @@ export function registerAgUiIpc(
     const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
     try {
+    await prepareNativeStorageTurn({ conversationId: sessionId, runId, mode, chatBackend: chatBackendSnapshot, inputMessageId: input.userTurnId, assistantMessageId: input.assistantTurnId });
     built = await perf.track("build_options", () => buildOptionsFn!({
       ...input,
       runId,
@@ -487,7 +507,11 @@ export function registerAgUiIpc(
       chatBackendSnapshot,
       executionMode: agentExecutionMode,
     }));
+    if (bridgeStopping || runAbortController.signal.aborted) {
+      throw new Error("APPLICATION_STOPPING_OR_RUN_CANCELLED");
+    }
     } catch (error) {
+      await failNativeStorageTurn(sessionId, runId).catch(storageError => console.error("SQLite run failure settlement failed", storageError));
       perf.dump();
       releaseSessionGuard?.();
       releaseSessionGuard = null;

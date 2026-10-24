@@ -1,5 +1,7 @@
 # 昔涟桌面 HUD 0.8.7
 
+作者：Noimpty。原仓库：[Cyrene-Agent-Plugin / codex/cyrene-hud-upstream](https://github.com/LZhWi/Cyrene-Agent-Plugin/tree/codex/cyrene-hud-upstream)。上游提交版的完整使用与数据处理说明见 `README.upstream.md`，打包时作为兼容版的 `README.md`。
+
 0.8.7 性能采集由主进程定期执行：收起或隐藏时每 5 秒采集，展开时目标间隔为 1 秒，并立即请求一次更新；不依赖后台页面计时器。耗时采集不并发堆积，实际刷新受系统查询耗时影响。渲染页接收最新快照，展开后的状态与心情读取间隔也缩短为 1 秒。仅时间指标与 UI 模拟测试期间不采集硬件；禁用插件停止采集。
 
 0.8.6 将外壳、通知和详情动画缩短为 300 ms，沿用无回弹的三次缓动；设置页「显示内容」右侧增加 ⓘ 按钮，五段使用说明默认隐藏，点击以注释形式展开，再次点击收起。
@@ -120,7 +122,7 @@ HUD 唤出时重新设置置顶并抬高层级，可见期间每秒维护一次�
 
 设置保存在插件私有存储；禁用 HUD 会统一销毁 HUD、设置窗口及原生模糊窗口、计时器、显示器监听器，清理数据 IPC 并中止采集。HUD 依赖宿主运行，退出 Cyrene 后退出。
 
-Windows 使用 Node 系统接口、PowerShell/CIM 和可选的 nvidia-smi。CPU、网络首次采样没有差分基准，返回 null；主进程定期采集绕过完成缓存，进行中的查询合并，页面读取最新快照不重新采集。NVIDIA 读取 GPU 0；不可用时 GPU 使用率回退 WMI 引擎总和（夹紧至 100%，属于估算），温度和显存保持 null。不支持 CPU 温度、风扇、功耗。网速是全部网卡的收发合计，虚拟网卡可能重复计数。PowerShell 超时 8 秒，nvidia-smi 超时 3 秒。
+Windows 使用 Node 系统接口、PowerShell/CIM 和可选的 nvidia-smi。CPU、网络首次采样没有差分基准，返回 null；主进程定期采集绕过完成缓存，进行中的查询合并，页面读取最新快照不重新采集。NVIDIA 读取 GPU 0；不可用时 GPU 使用率回退 WMI 引擎总和（夹紧至 100%，属于估算），温度和显存保持 null。CPU 温度和风扇支持固定 ASUS ATKACPI 查询，不支持的设备显示未知；不读取功耗。网速是全部网卡的收发合计，虚拟网卡可能重复计数。PowerShell 超时 8 秒，nvidia-smi 超时 3 秒。
 
 从 0.1.0 更新时导入同名新版 HUD，保留原有 HUD 设置。之前的独立数据源不再需要，可以停用；此更新不会自动卸载其他插件。上游 system-status 的采集代码来源和 MIT 许可保留在 NOTICE.md / LICENSE，本插件没有包含上游的两个模型工具。
 

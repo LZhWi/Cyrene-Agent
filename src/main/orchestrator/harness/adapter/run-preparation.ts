@@ -111,7 +111,7 @@ export async function prepareHarnessRun(
   };
 
   const tools = [...(options.capabilities?.tools ?? options.tools ?? toolRegistry.getEnabledTools())];
-  const runStore = getHarnessRunStore(app.getPath("userData"));
+  const runStore = getHarnessRunStore(app.getPath("userData"), threadId);
   const recovered = options.resumeFromRunId
     ? (() => {
       const previous = runStore.get(options.resumeFromRunId!);

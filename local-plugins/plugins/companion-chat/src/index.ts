@@ -10,6 +10,9 @@ import { createLifeContext } from "./life-context";
 import { readLifeDayMessages } from "./life-message-history";
 import { createPersonaService, personaStyleFromHost } from "./persona";
 import { createWorldbook } from "./worldbook";
+import { createDurableChatContexts, type ChatIsolationSources, type ChatIsolationTransaction } from "./durable-chat-context";
+import { createMinecraftPersonaReader } from "./minecraft-context";
+import { validateMinecraftSources } from "./minecraft-source-validity";
 import { createScreenMonitor } from "./screen-monitor";
 import type { ProactivePace, UserPresenceSnapshot } from "./proactive";
 
@@ -18,11 +21,13 @@ type PhasedStablePromptProvider = Parameters<NonNullable<Parameters<CyrenePlugin
 type ChatScopedPluginTool = Omit<PluginTool, "modes"> & { modes: ["chat"] };
 
 let openWindow: (() => Promise<void>) | undefined;
-let stop: (() => void) | undefined;
+let stop: (() => Promise<void>) | undefined;
 const plugin: CyrenePlugin = {
-  register(ctx) {
+  async register(ctx) {
     if (ctx.id !== CHAT_ID) throw new Error("插件 ID 不匹配");
     const storage = strictStorage(ctx);
+    const isolationAggregate = (ctx.storage as typeof ctx.storage & { isolationAggregate?: boolean }).isolationAggregate === true;
+    if (isolationAggregate) Object.assign(storage, { isolationAggregate: true });
     const models = createModelService({ ...ctx, storage });
     const persona = createPersonaService();
     const life = createLifeContext(storage, Date.now, {
@@ -37,6 +42,11 @@ const plugin: CyrenePlugin = {
     });
     ctx.registerIpc("life-status", () => life.status());
     const worldbook = createWorldbook(storage);
+    const isolation = ctx.storage as typeof ctx.storage & { isolationSources?: ChatIsolationSources; isolationTransaction?: ChatIsolationTransaction };
+    if (isolationAggregate && (!isolation.isolationSources || !isolation.isolationTransaction)) throw new Error("SQLITE_CHAT_RECOVERY_CAPABILITY_REQUIRED");
+    const contextReceipts = isolationAggregate ? createDurableChatContexts(storage, isolation.isolationTransaction!, isolation.isolationSources!, worldbook, life) : undefined;
+    const contextRecovery = contextReceipts?.recover() ?? Promise.resolve();
+    void contextRecovery.catch(error => console.warn("[ChatContext] 回执恢复失败:", error instanceof Error ? error.name : "Error"));
     const screenMonitor = createScreenMonitor({
       storage,
       observe: (input) => ctx.deps.screenObservation!.observeSnapshot(input),
@@ -47,6 +57,9 @@ const plugin: CyrenePlugin = {
       userPresence?: { snapshot(): Promise<UserPresenceSnapshot> };
     }).userPresence;
     const standalonePersona = () => persona.build("01_default", models.config.systemPrompt);
+    const minecraftPeer = createPeer(ctx, "minecraft-body", createMinecraftPersonaReader({
+      persona: standalonePersona, tone: () => persona.buildTone(), worldbook: (query) => worldbook.previewReadonly(query),
+    }));
     const readRecentChatContext = async () => {
       const empty: ProactiveHistoryTurn[] = [];
       if (!ctx.deps.conversations) return { ordinaryHistory: empty, proactiveHistory: empty, recentTopic: "" };
@@ -55,8 +68,9 @@ const plugin: CyrenePlugin = {
       let listCursor: string | undefined;
       do {
         const page = await ctx.deps.conversations.list({ cursor: listCursor, limit: 100 });
-        ordinary ??= page.items.find((item) => item.mode === "chat" && item.purpose !== "proactive-chat");
-        proactiveSession ??= page.items.find((item) => item.mode === "chat" && item.purpose === "proactive-chat");
+        const items = page.items as Array<(typeof page.items)[number] & { purpose?: string }>;
+        ordinary ??= items.find((item) => item.mode === "chat" && item.purpose !== "proactive-chat");
+        proactiveSession ??= items.find((item) => item.mode === "chat" && item.purpose === "proactive-chat");
         listCursor = page.nextCursor;
       } while (listCursor && (!ordinary || !proactiveSession));
       const readHistory = async (conversationId?: string): Promise<ProactiveHistoryTurn[]> => {
@@ -151,6 +165,7 @@ const plugin: CyrenePlugin = {
         const turn = input as typeof input & { chatBackend?: "native" | "companion"; runId?: string };
         const companion = turn.chatBackend === "companion";
         if (!companion || input.channel || !turn.runId) return "";
+        await contextRecovery;
         let previousAssistant = "";
         if (ctx.deps.conversations && input.conversationId) {
           let cursor: string | undefined;
@@ -160,7 +175,9 @@ const plugin: CyrenePlugin = {
             cursor = page.nextCursor;
           } while (cursor);
         }
-        return worldbook.preview(turn.runId, input.userText, previousAssistant);
+        const block = worldbook.preview(turn.runId, input.userText, previousAssistant);
+        if (contextReceipts) await contextReceipts.prepareDesktop(input.conversationId!, turn.runId, "worldbook");
+        return block;
       },
     });
     ctx.registerPromptProvider({
@@ -172,10 +189,13 @@ const plugin: CyrenePlugin = {
         if (input.source !== "conversation") return "";
         await life.awaitPendingDiary();
         if (input.chatBackend !== "companion" || input.channel) return "";
+        await contextRecovery;
         let recentMessages: Awaited<ReturnType<typeof readLifeRecentMessages>> = [];
         try { if (input.runId && input.conversationId) recentMessages = await readLifeRecentMessages(input.conversationId); }
         catch { /* 历史不可用时仍提供当前生活状态 */ }
-        return life.build(input.userText, { conversationRunId: input.runId, recentMessages });
+        const block = life.build(input.userText, { conversationRunId: input.runId, recentMessages });
+        if (contextReceipts && input.runId) await contextReceipts.prepareDesktop(input.conversationId!, input.runId, "life");
+        return block;
       },
     });
     const savedLink = storage.get<{ enabled: boolean }>("memory-link");
@@ -184,7 +204,11 @@ const plugin: CyrenePlugin = {
     }
     let memoryEnabled = savedLink?.enabled ?? false;
     let maintenance: AbortController | undefined;
-    const peer = createPeer(ctx, MEMORY_ID, async () => { throw new Error("不支持的请求"); });
+    let minecraftSourceRevision = 0;
+    const peer = createPeer(ctx, MEMORY_ID, async (method, data, signal) => {
+      if (method === "validate-minecraft-sources") return { ...validateMinecraftSources(data, chat.view().sessions, signal), revision: minecraftSourceRevision };
+      throw new Error("不支持的请求");
+    });
     const memorySearchTool: ChatScopedPluginTool = {
       id: "companion-chat_memory_search",
       name: "查询陪伴记忆",
@@ -312,39 +336,61 @@ const plugin: CyrenePlugin = {
       },
     };
     ctx.registerTool(screenObservationTool as unknown as PluginTool);
-    const proactiveMemoryPreviews = new Set<string>();
+    const proactiveMemoryPreviews = new Map<string, string>();
+    const proactiveWorldbookPreviews = new Map<string, string>();
+    let memoryPeerAvailable = true;
     const proactive = createProactiveController({
+      canGenerate: () => !memoryEnabled || memoryPeerAvailable,
       storage,
       retrieve: async (query, signal, runId) => {
         const [memory, documents, entity] = await Promise.all([
           memoryEnabled ? peer.request<string>("preview-for-proactive", { query, runId }, signal, 140000)
-            .then((text) => { proactiveMemoryPreviews.add(runId); return text; }).catch(() => "") : Promise.resolve(""),
+            .then((text) => { proactiveMemoryPreviews.set(runId, text); return text; }).catch(() => "") : Promise.resolve(""),
           ctx.deps.proactiveDocuments?.search(query, signal).catch(() => "") ?? Promise.resolve(""),
           memoryEnabled ? peer.request<string>("entity-for-proactive", query, signal).catch(() => "") : Promise.resolve(""),
         ]);
         return [memory, documents, entity].filter(Boolean).join("\n\n");
       },
       profileContext: async (query, lastAssistant, signal, runId) => {
+        await contextRecovery;
         let world = "";
         try {
           world = worldbook.preview(runId, query, lastAssistant);
-        } catch { /* 与本地版一致：世界书失败不阻止主动轮。 */ }
+          if (contextReceipts && world.trim()) {
+            await contextReceipts.prepareProactive(runId);
+            proactiveWorldbookPreviews.set(runId, world);
+          }
+        } catch { world = ""; /* 世界书持久准备失败时不向模型发送未登记的上下文。 */ }
         const profile = memoryEnabled
           ? await peer.request<string>("profile-for-proactive", null, signal).catch(() => "")
           : "";
         return [world, profile].filter(Boolean).join("\n\n");
       },
+      acceptContext: contextReceipts ? async (runId, messages, signal) => {
+        const included = (text: string | undefined) => Boolean(text?.trim() && messages.some(message => typeof message.content === "string" && message.content.includes(text.trim())));
+        if (included(proactiveMemoryPreviews.get(runId))) await peer.request("accept-proactive-receipt", runId, signal, 140000);
+        if (included(proactiveWorldbookPreviews.get(runId))) await contextReceipts.accept(runId, "proactive");
+      } : undefined,
       commitContext: async (runId) => {
-        try {
-          if (proactiveMemoryPreviews.delete(runId)) await peer.request("commit-proactive-receipt", runId, ctx.signal, 140000);
-        } finally {
+        if (proactiveMemoryPreviews.has(runId)) {
+          const committed = await peer.request<boolean>("commit-proactive-receipt", runId, ctx.signal, 140000);
+          if (committed) proactiveMemoryPreviews.delete(runId);
+        }
+        if (contextReceipts) await contextReceipts.commitProactive(runId);
+        else {
           worldbook.accept(runId);
           worldbook.commit(runId);
         }
+        proactiveWorldbookPreviews.delete(runId);
       },
       discardContext: async (runId) => {
-        worldbook.discard(runId);
-        if (proactiveMemoryPreviews.delete(runId)) await peer.request("discard-proactive-receipt", runId, ctx.signal, 140000).catch(() => {});
+        if (contextReceipts) await contextReceipts.discardProactive(runId);
+        else worldbook.discard(runId);
+        proactiveWorldbookPreviews.delete(runId);
+        if (proactiveMemoryPreviews.has(runId)) {
+          await peer.request("discard-proactive-receipt", runId, ctx.signal, 140000);
+          proactiveMemoryPreviews.delete(runId);
+        }
       },
       recentContext: readRecentChatContext,
       toneRules: () => persona.buildTone(),
@@ -417,19 +463,26 @@ const plugin: CyrenePlugin = {
     });
     const offPromptAccepted = ctx.events.on<PluginPromptAcceptedEvent>("host:prompt:accepted", (event) => {
       if (event.providerId === `plugin:${ctx.id}:worldbook`
-        && event.complete) worldbook.accept(event.runId);
+        && event.complete) {
+        if (contextReceipts) return contextRecovery.then(() => contextReceipts.accept(event.runId, "desktop", event.complete));
+        worldbook.accept(event.runId);
+      }
     });
-    const offTurnFinished = ctx.events.on<PluginTurnFinishedEvent>("host:turn:finished", (event) => {
+    const offTurnFinished = ctx.events.on<PluginTurnFinishedEvent>("host:turn:finished", async (event) => {
       if (event.source === "channel") {
         proactive.noteConversationEnded();
         return;
       }
       if (event.source !== "desktop" || event.mode !== "chat") return;
       proactive.noteConversationEnded();
+      if (contextReceipts) { await contextRecovery; await contextReceipts.finishDesktop(event); return; }
       const lifeUpdate = (event as typeof event & { companionLifeUpdate?: string }).companionLifeUpdate;
       if (event.chatBackend === "companion" && event.status === "success" && event.finalMessageId && lifeUpdate) {
         try { life.applyConversationUpdate(event.runId, lifeUpdate, event.finalMessageId); }
-        catch (error) { console.warn("[Life] 对话生活调整未提交:", error instanceof Error ? error.message : String(error)); }
+        catch (error) {
+          if (isolationAggregate) throw error;
+          console.warn("[Life] 对话生活调整未提交:", error instanceof Error ? error.message : String(error));
+        }
       } else life.discardConversationUpdate(event.runId);
       if (event.status === "success" && event.finalMessageId) worldbook.commit(event.runId);
       else worldbook.discard(event.runId);
@@ -437,22 +490,57 @@ const plugin: CyrenePlugin = {
     const offAssistantFeedback = ctx.events.on<PluginAssistantMessageFeedbackEvent>("host:assistant-message:feedback", (event) => {
       if (event.pluginId === ctx.id && event.action === "ignore") proactive.ignoreMessage(event.messageId);
     });
-    const offConversationChanged = ctx.events.on<PluginConversationChangedEvent>("host:conversation:changed", (event) => {
+    const offConversationChanged = ctx.events.on<PluginConversationChangedEvent>("host:conversation:changed", async (event) => {
+      if (contextReceipts) { await contextRecovery; await contextReceipts.invalidate(event.conversationId, event.allMessages, event.invalidatedMessageIds); }
       if (event.reason !== "messages-replaced") {
         proactive.invalidateDeliveredMessage(event.conversationId, event.allMessages, event.invalidatedMessageIds);
       }
     });
     const chat = createChat({ storage,
+      onSourceChange: () => {
+        minecraftSourceRevision++;
+        void ctx.events.emit("minecraft-sources-changed", { version: 1, revision: minecraftSourceRevision }).catch(() => {});
+      },
       retrieve: (query, signal) => memoryEnabled ? peer.request<string>("search-for-chat", query, signal, 140000) : Promise.resolve(""),
       ingest: (turn) => memoryEnabled ? peer.request("ingest", turn) : Promise.resolve(),
       generate: (messages, signal) => models.generate(messages, signal),
       beforeGenerate: () => life.awaitPendingDiary(),
       systemPrompt: (query) => [standalonePersona(), life.build(query)].filter(Boolean).join("\n\n---\n\n"),
     });
+    void ctx.events.emit("minecraft-sources-changed", { version: 1, revision: minecraftSourceRevision }).catch(() => {});
     const window = createWindow(ctx, __dirname, "独立陪伴聊天");
     openWindow = window.open;
     life.start();
-    stop = () => { maintenance?.abort(); life.stop(); screenMonitor.stop(); proactive.stop(); offChatPreferences(); offTurnStarted(); offPromptAccepted(); offTurnFinished(); offAssistantFeedback(); offConversationChanged(); chat.cancel(); peer.stop(); window.close(); openWindow = undefined; };
+    let stopping: Promise<void> | undefined;
+    stop = () => stopping ??= (async () => {
+      maintenance?.abort();
+      const screenDone = screenMonitor.stop();
+      const proactiveDone = proactive.stop();
+      offQuiescing(); offStopping(); offPeerStopping(); offPeerRunning();
+      offChatPreferences(); offTurnStarted(); offPromptAccepted(); offTurnFinished(); offAssistantFeedback(); offConversationChanged(); chat.cancel();
+      // Delivery settlement can still complete a reserved life share while stopping.
+      try { await proactiveDone; }
+      finally { await Promise.all([life.stop(), screenDone]); }
+      await contextReceipts?.whenIdle();
+      await Promise.all([peer.stop(), minecraftPeer.stop()]); window.close(); openWindow = undefined;
+    })();
+    const offQuiescing = ctx.events.on("host:plugins:quiescing", () => {
+      maintenance?.abort(); chat.cancel();
+      return proactive.cancelAndDrain();
+    });
+    // Drain cross-plugin receipts while both peers and lifecycle signals are still live.
+    const offStopping = ctx.events.on("host:plugins:stopping", stop);
+    const offPeerStopping = ctx.events.on<{ id: string }>("host:plugin:stopping", async ({ id }) => {
+      if (id === CHAT_ID) await stop?.();
+      else if (id === MEMORY_ID) {
+        memoryPeerAvailable = false;
+        await proactive.cancelAndDrain();
+      }
+    });
+    const offPeerRunning = ctx.events.on<{ id: string; running: boolean; runningIds?: string[] }>("host:plugin:running", ({ id, running, runningIds }) => {
+        if (runningIds) memoryPeerAvailable = runningIds.includes(MEMORY_ID);
+        else if (id === MEMORY_ID) memoryPeerAvailable = running;
+    });
     ctx.onDispose(stop);
     registerUi(ctx, async (action, data) => {
       switch (action) {
@@ -532,8 +620,10 @@ const plugin: CyrenePlugin = {
         default: throw new Error("未知操作");
       }
     });
+    if (isolationAggregate) await Promise.all([contextRecovery, proactive.ready]);
   },
   async open() { await openWindow?.(); },
-  unregister() { stop?.(); stop = undefined; },
+  async unregister() { const cleanup = stop; stop = undefined; await cleanup?.(); },
 };
 export = plugin;
+

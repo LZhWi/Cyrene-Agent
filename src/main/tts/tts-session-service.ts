@@ -1,4 +1,5 @@
 import type { StartTtsRequest, TtsSessionEvent, TtsStartResult } from "../../shared/tts-session";
+import { waitForProducer } from "../application/wait-for-producer";
 
 export interface TtsSessionExecution {
   result: TtsStartResult;
@@ -14,10 +15,17 @@ type SynthesizeTts = (
 /** requestId 只负责会话隔离与取消；远端合成本身不承诺可暂停。 */
 export class TtsSessionService {
   private readonly active = new Map<string, AbortController>();
+  private readonly pending = new Set<Promise<void>>();
+  private closing = false;
 
   constructor(private readonly synthesize: SynthesizeTts) {}
 
   async start(request: StartTtsRequest, onEvent: (event: TtsSessionEvent) => void = () => undefined): Promise<TtsStartResult> {
+    if (this.closing) return { requestId: request.requestId, status: "cancelled" };
+    let settled!: () => void;
+    const completion = new Promise<void>((resolve) => { settled = resolve; });
+    this.pending.add(completion);
+    const finish = () => { this.pending.delete(completion); settled(); };
     this.cancel(request.requestId);
     const controller = new AbortController();
     this.active.set(request.requestId, controller);
@@ -42,6 +50,7 @@ export class TtsSessionService {
           });
         }).finally(() => {
           if (this.active.get(request.requestId) === controller) this.active.delete(request.requestId);
+          finish();
         });
       }
       return controller.signal.aborted
@@ -49,7 +58,14 @@ export class TtsSessionService {
         : result;
     } finally {
       if (!ownsAsyncCompletion && this.active.get(request.requestId) === controller) this.active.delete(request.requestId);
+      if (!ownsAsyncCompletion) finish();
     }
+  }
+
+  shutdown(signal: AbortSignal): Promise<void> {
+    this.closing = true;
+    for (const id of this.active.keys()) this.cancel(id);
+    return waitForProducer("tts", [...this.pending], signal);
   }
 
   cancel(requestId: string): boolean {

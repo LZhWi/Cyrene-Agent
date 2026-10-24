@@ -11,6 +11,7 @@ export type ShutdownPhase =
   | "stopProducers"
   | "stopActiveWork"
   | "stopExternalConsumers"
+  | "drainBackgroundWork"
   | "stopExternalProviders"
   | "stopLocalResources"
   | "flushPersistence";
@@ -21,6 +22,7 @@ const SHUTDOWN_PHASE_ORDER: readonly ShutdownPhase[] = [
   "stopProducers",
   "stopActiveWork",
   "stopExternalConsumers",
+  "drainBackgroundWork",
   "stopExternalProviders",
   "stopLocalResources",
   "flushPersistence",
@@ -73,6 +75,18 @@ export function createShutdownCoordinator(options: CreateShutdownCoordinatorOpti
   let emergencyFlushDone = false;
   let shutdownPromise: Promise<void> | null = null;
   let firstRequest: { reason: string; finalAction(): void } | null = null;
+
+  function emergencyFlush(): void {
+    if (emergencyFlushDone) return;
+    emergencyFlushDone = true;
+    for (const [id, flush] of emergencyFlushers) {
+      try {
+        flush();
+      } catch (error) {
+        log(`shutdown: emergency flush failed for ${id}`, error);
+      }
+    }
+  }
 
   // 依次执行各阶段；同一阶段内并行，单项失败记录后继续，不跳过后续阶段。
   async function runPhases(signal: AbortSignal, pendingIds: Set<string>): Promise<void> {
@@ -144,11 +158,13 @@ export function createShutdownCoordinator(options: CreateShutdownCoordinatorOpti
         timeoutHandle = setTimeoutFn(() => {
           controller.abort();
           log(`shutdown: total timeout (${timeoutMs}ms) reached, incomplete resources: ${[...pendingIds].join(", ") || "(none)"}`);
+          emergencyFlush();
           resolve();
         }, timeoutMs);
       });
 
-      shutdownPromise = Promise.race([runPhases(controller.signal, pendingIds), deadline]).then(() => {
+      // 先建立退出 Promise，再运行可能同步重入退出入口的 disposer。
+      shutdownPromise = Promise.race([Promise.resolve().then(() => runPhases(controller.signal, pendingIds)), deadline]).then(() => {
         if (timeoutHandle !== undefined) clearTimeoutFn(timeoutHandle);
         finalize();
       });
@@ -156,17 +172,7 @@ export function createShutdownCoordinator(options: CreateShutdownCoordinatorOpti
     },
 
     // 紧急落盘：同步、幂等，不等待网络、不执行完整受控退出。
-    emergencyFlush() {
-      if (emergencyFlushDone) return;
-      emergencyFlushDone = true;
-      for (const [id, flush] of emergencyFlushers) {
-        try {
-          flush();
-        } catch (error) {
-          log(`shutdown: emergency flush failed for ${id}`, error);
-        }
-      }
-    },
+    emergencyFlush,
 
     isStopping: () => stopping,
     isFinalizing: () => finalizing,

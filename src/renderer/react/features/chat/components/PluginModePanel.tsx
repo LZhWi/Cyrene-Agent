@@ -165,12 +165,13 @@ export function PluginModePanel({ api: providedApi }: PluginModePanelProps) {
     setError(null);
     try {
       setOverview(normalizePluginOverview(await api.rescan()));
+      if (view === "market") await loadMarket();
     } catch (cause) {
       setError(t("pluginPanel.refreshFailed", { error: cause instanceof Error ? cause.message : String(cause) }));
     } finally {
       setHeaderAction(null);
     }
-  }, [api, t]);
+  }, [api, t, view, loadMarket]);
 
   const importPlugin = useCallback(async () => {
     if (!api) return;

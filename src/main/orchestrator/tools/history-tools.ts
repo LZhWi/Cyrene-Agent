@@ -9,6 +9,7 @@
 
 import { addMemory, searchHistoryEntries } from "../../rag";
 import { toolRegistry } from "./registry/tool-registry";
+import { isBackgroundIndexClosing, trackBackgroundIndex } from "../../application/background-index-work";
 import { currentUserTimezone } from "./built-in-tools";
 import { getDateLocale } from "../../locale-context";
 
@@ -19,7 +20,12 @@ const LOG_PREFIX = "[History]";
  * user 和 assistant 各存一条，方便按角色召回。
  * 失败不抛错（历史存储是副作用，不能影响主流程）。
  */
-export async function indexConversationTurn(
+export async function indexConversationTurn(sessionId: string, userText: string, assistantText: string): Promise<void> {
+  if (isBackgroundIndexClosing()) return;
+  await trackBackgroundIndex("history:" + sessionId, () => indexConversationTurnImpl(sessionId, userText, assistantText));
+}
+
+async function indexConversationTurnImpl(
   sessionId: string,
   userText: string,
   assistantText: string,

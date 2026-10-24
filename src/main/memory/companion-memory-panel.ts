@@ -20,6 +20,7 @@ interface CompanionEntry {
   pinned?: unknown;
 }
 interface CompanionState {
+  semanticReviews?: Array<{ id: string; layer: string; target: string; content: string; reason: string; evidenceQuotes: string[]; createdAt: number }>;
   revision?: unknown;
   lifecycle?: { enabled?: boolean };
   profiles?: { l0?: Record<string, ProfileFact>; l1?: Record<string, ProfileFact> };
@@ -112,7 +113,7 @@ export async function loadCompanionMemoryPanelData(
     ...(timestamp(entry.sourceEndAt) ? { sourceEndAt: timestamp(entry.sourceEndAt) } : {}),
     isSummary: entry.isSummary === true,
   })).sort((a, b) => b.createdAt - a.createdAt);
-  return { l0, l1, l2, importedDocs, reflections: reflectionItems(state), lifecycleTrackingEnabled: state.lifecycle?.enabled === true };
+  return { semanticReviews: state.semanticReviews ?? [], l0, l1, l2, importedDocs, reflections: reflectionItems(state), lifecycleTrackingEnabled: state.lifecycle?.enabled === true };
 }
 
 function requireRevision(state: CompanionState): number {

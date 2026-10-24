@@ -29,6 +29,7 @@ import { startInboundServer, stopInboundServer } from "./inbound-server";
 import { FeishuAdapter } from "./adapters/feishu";
 import { ILinkBotAdapter, loadCredentials } from "./adapters/wechat/ilink-bot-adapter";
 import { NapCatAdapter } from "./adapters/qq/napcat-adapter";
+import { resolveQqListenAuthRequirement } from "./adapters/qq/onebot-reverse-ws";
 import { QqBotAdapter } from "./adapters/qqbot/qqbot-adapter";
 import { getRecentLog, clearLog, reloadLogFromDisk } from "./message-log";
 import { logger, LogTag } from "../logger";
@@ -167,6 +168,13 @@ function registerChannelsIpc(
   ipc.handle(IPC.CHANNELS_LIST, () => channelManager.listChannels());
 
   ipc.handle(IPC.CHANNELS_GET_STATUS, () => channelManager.getAllStatus());
+
+  // 与实际启动共用监听地址解析，包含 auto 自动选择 WSL 网卡的情况。
+  ipc.handle(IPC.CHANNELS_QQ_RESOLVE_AUTH_REQUIREMENT, (_e, payload: unknown) =>
+    resolveQqListenAuthRequirement(
+      (payload ?? {}) as { listenMode?: unknown; customHost?: unknown },
+    ),
+  );
 
   ipc.handle(IPC.CHANNELS_RESTART, async () => {
     await channelManager.stopAll();

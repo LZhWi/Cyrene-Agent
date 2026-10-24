@@ -35,11 +35,11 @@ describe("L0/L1/L2 分层与编辑边界", () => {
     expect(memory.view().profiles.l0.preferredName?.origin).toBe("user-edit");
     expect(() => memory.editProfile({ layer: "L0", field: "__proto__", content: "x", revision: memory.view().revision })).toThrow("白名单");
   });
-  it("不明确或助手推断的 L0 不落库；无证据的绝对化表述拒绝", async () => {
+  it("不明确或助手推断的 L0 不落库；范围风险写入后复核", async () => {
     const { memory, candidate } = fixture();
-    await expect(memory.maintain(async () => JSON.stringify([memoryCandidate({ summary: "永远叫小林" })]), new AbortController().signal)).rejects.toThrow();
-    expect(memory.view().profiles.l0).toEqual({});
-    expect(memory.view().pending).toBe(6);
+    await memory.maintain(async () => JSON.stringify([memoryCandidate({ summary: "永远叫小林" })]), new AbortController().signal);
+    expect(memory.view().semanticReviews).toHaveLength(1);
+    expect(memory.view().pending).toBe(0);
     const next = fixture();
     await next.memory.maintain(async () => JSON.stringify([memoryCandidate({ attribution: "assistant_inferred" })]), new AbortController().signal);
     expect(next.memory.view().profiles.l0).toEqual({});

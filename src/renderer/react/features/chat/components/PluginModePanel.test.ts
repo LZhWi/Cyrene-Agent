@@ -137,6 +137,53 @@ describe("PluginModePanel", () => {
     await act(async () => toggle?.click());
   }
 
+  async function clickRefresh(): Promise<void> {
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="刷新插件"]');
+    expect(button).not.toBeNull();
+    await act(async () => button!.click());
+  }
+
+  it("refreshes only installed plugins when outside the market", async () => {
+    const api = apiFor([]);
+    await renderPanel(api);
+    await clickRefresh();
+    expect(api.rescan).toHaveBeenCalledTimes(1);
+    expect(api.marketList).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the visible market list as well as installed plugins", async () => {
+    const api = apiFor([]);
+    vi.mocked(api.marketList)
+      .mockResolvedValueOnce({ ok: true, plugins: [marketEntry({ name: "旧市场内容" })] })
+      .mockResolvedValueOnce({ ok: true, plugins: [marketEntry({ name: "新市场内容" })] });
+    await renderPanel(api);
+    await clickMarketToggle();
+    expect(container.textContent).toContain("旧市场内容");
+    await clickRefresh();
+    expect(api.rescan).toHaveBeenCalledTimes(1);
+    expect(api.marketList).toHaveBeenCalledTimes(2);
+    expect(api.marketList).toHaveBeenLastCalledWith();
+    expect(container.textContent).toContain("新市场内容");
+    expect(container.textContent).not.toContain("旧市场内容");
+  });
+
+  it("shows a failed market refresh and allows retrying without leaving the view", async () => {
+    const api = apiFor([]);
+    vi.mocked(api.marketList)
+      .mockResolvedValueOnce({ ok: true, plugins: [] })
+      .mockRejectedValueOnce(new Error("网络中断"))
+      .mockResolvedValueOnce({ ok: true, plugins: [marketEntry()] });
+    await renderPanel(api);
+    await clickMarketToggle();
+    await clickRefresh();
+    expect(container.textContent).toContain("获取插件列表失败：网络中断");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="刷新插件"]')?.disabled).toBe(false);
+    await clickRefresh();
+    expect(container.textContent).toContain("市场演示");
+    expect(container.textContent).not.toContain("网络中断");
+    expect(api.marketList).toHaveBeenCalledTimes(3);
+  });
+
   it("shows icon, plugin metadata, developer, and the three requested actions", async () => {
     const api = apiFor([plugin()]);
     await renderPanel(api);

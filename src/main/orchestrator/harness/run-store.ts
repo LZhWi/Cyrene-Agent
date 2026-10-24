@@ -1,3 +1,4 @@
+import { getStorageRuntime } from "../../storage/storage-backend";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChatMessage } from "../vendors/types";
@@ -74,6 +75,7 @@ export interface HarnessRunCheckpoint {
 }
 
 export interface HarnessRunStoreOptions {
+  sqlite?: boolean;
   now?: () => number;
 }
 
@@ -125,6 +127,8 @@ function isSession(value: unknown): value is HarnessRunSession {
  * 主 Harness 的可恢复运行存储。使用既有 JSON + 原子 rename 方案，避免引入第二套数据库。
  */
 export class HarnessRunStore {
+  private readonly backend: ReturnType<typeof getStorageRuntime>;
+  private pendingCheckpoint?: HarnessRunSession;
   private readonly root: string;
   private readonly sessionsDir: string;
   private readonly indexPath: string;
@@ -138,6 +142,7 @@ export class HarnessRunStore {
   private checkpointCount = 0;
 
   constructor(userDataRoot: string, options: HarnessRunStoreOptions = {}) {
+    this.backend = options.sqlite === false ? undefined : getStorageRuntime();
     this.root = path.join(userDataRoot, ROOT_DIR_NAME);
     this.sessionsDir = path.join(this.root, SESSIONS_DIR_NAME);
     this.indexPath = path.join(this.root, INDEX_FILE_NAME);
@@ -235,6 +240,7 @@ export class HarnessRunStore {
   }
 
   deleteConversation(conversationId: string): void {
+    if (this.backend) { this.backend.call("harness.delete", conversationId); for (const [id,row] of this.index) if (row.conversationId === conversationId) this.index.delete(id); return; }
     const rows = [...this.index.values()].filter((row) => row.conversationId === conversationId);
     for (const row of rows) {
       const file = this.sessionPath(row.runId);
@@ -247,6 +253,14 @@ export class HarnessRunStore {
   }
 
   private initialize(): void {
+    if (this.backend) {
+      for (const value of this.backend.call("harness.all") as unknown[]) {
+        if (!isSession(value)) continue;
+        this.index.set(value.runId, { conversationId: value.conversationId, runId: value.runId, status: value.status, updatedAt: value.updatedAt });
+        if (value.status === "running") { value.status = "interrupted"; value.updatedAt = this.now(); this.write(value); this.appendEvent(value, "run_interrupted"); }
+      }
+      return;
+    }
     fs.mkdirSync(this.sessionsDir, { recursive: true });
     this.readIndex();
     let changed = false;
@@ -302,6 +316,7 @@ export class HarnessRunStore {
 
   private read(runId: string): HarnessRunSession | null {
     if (!validRunId(runId)) return null;
+    if (this.backend) { const value = this.backend.call("harness.get", runId); return isSession(value) ? { ...value, cache: isCacheState(value.cache) ? value.cache : { ...INITIAL_HARNESS_CACHE_STATE } } : null; }
     const file = this.sessionPath(runId);
     if (!fs.existsSync(file)) return null;
     try {
@@ -318,6 +333,7 @@ export class HarnessRunStore {
 
   /** session 文件每次都写（恢复的权威数据源）；index 按调用方语义分类写入。 */
   private write(session: HarnessRunSession, mode: "now" | "lazy" = "lazy"): void {
+    if (this.backend) { this.pendingCheckpoint = clone(session); return; }
     this.atomicWrite(this.sessionPath(session.runId), session);
     this.index.set(session.runId, {
       conversationId: session.conversationId,
@@ -366,10 +382,19 @@ export class HarnessRunStore {
       clearTimeout(this.indexWriteTimer);
       this.indexWriteTimer = undefined;
     }
+    if (this.backend) return;
     this.atomicWrite(this.indexPath, [...this.index.values()]);
   }
 
   private appendEvent(session: HarnessRunSession, type: string, data?: Record<string, unknown>): void {
+    if (this.backend) {
+      const event = { at: session.updatedAt, type, ...data };
+      const checkpoint = this.pendingCheckpoint; this.pendingCheckpoint = undefined;
+      if (checkpoint) this.backend.call("harness.commit", checkpoint, event);
+      else this.backend.call("harness.event", session.runId, event);
+      this.index.set(session.runId, { conversationId: session.conversationId, runId: session.runId, status: session.status, updatedAt: session.updatedAt });
+      return;
+    }
     fs.appendFileSync(this.eventPath(session.runId), `${JSON.stringify({ at: session.updatedAt, type, ...data })}\n`, "utf8");
   }
 
@@ -395,12 +420,15 @@ export class HarnessRunStore {
 /** 同一 Electron 进程每个 userData 根只初始化一次，避免并行 Run 被误判为重启中断。 */
 const sharedStores = new Map<string, HarnessRunStore>();
 
-export function getHarnessRunStore(userDataRoot: string): HarnessRunStore {
+export function getHarnessRunStore(userDataRoot: string, conversationId?: string): HarnessRunStore {
   const key = path.resolve(userDataRoot);
-  let store = sharedStores.get(key);
+  const owner = getStorageRuntime();
+  const sqlite = Boolean(owner) && (!conversationId || Boolean(owner?.store.getSession(conversationId)));
+  const cacheKey = key + (sqlite ? ":sqlite" : ":json");
+  let store = sharedStores.get(cacheKey);
   if (!store) {
-    store = new HarnessRunStore(key);
-    sharedStores.set(key, store);
+    store = new HarnessRunStore(key, { sqlite });
+    sharedStores.set(cacheKey, store);
   }
   return store;
 }

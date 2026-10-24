@@ -111,6 +111,91 @@ vi.mock("./permission", () => ({
 }));
 
 describe("agui-bridge sticker event ordering", () => {
+  it("shutdown cancels active runs through terminal settlement and rejects new runs", async () => {
+    vi.resetModules();
+    mocks.runCyreneAgent.mockClear();
+    mocks.getSession.mockReturnValue({ id: "shutdown", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    mocks.completeOnAbort = true;
+    const bridge = await import("./agui-bridge");
+    bridge.registerAgUiIpc(async () => ({ options: { messages: [] } as any, latestUserText: "test" }), async () => ({}), () => null);
+    const send = vi.fn();
+    const event = { sender: { isDestroyed: () => false, send } };
+    const invoke = mocks.handlers.get(IPC.AGUI_RUN)!;
+    const ack = await invoke(event, { sessionId: "shutdown", messages: [] }) as any;
+    await bridge.shutdownAgUiBridge();
+    await bridge.shutdownAgUiBridge();
+    expect(bridge.__hasActiveRunForTest(ack.runId)).toBe(false);
+    expect(bridge.__getSessionActiveRunForTest("shutdown")).toBeUndefined();
+    expect(send.mock.calls.some(([, e]) => e.type === "RUN_FINISHED" && e.result?.status === "cancelled")).toBe(true);
+    await expect(invoke(event, { sessionId: "shutdown", messages: [] })).rejects.toThrow("APPLICATION_STOPPING");
+    expect(mocks.runCyreneAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("shutdown waits for reserved buildOptions without starting a model afterward", async () => {
+    vi.resetModules();
+    mocks.runCyreneAgent.mockClear();
+    mocks.getSession.mockReturnValue({ id: "building", mode: "chat" });
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const bridge = await import("./agui-bridge");
+    bridge.registerAgUiIpc(async () => { await ready; return { options: { messages: [] } as any, latestUserText: "test" }; }, async () => ({}), () => null);
+    const run = mocks.handlers.get(IPC.AGUI_RUN)!({ sender: { isDestroyed: () => false, send: vi.fn() } }, { sessionId: "building", messages: [] });
+    const rejected = expect(run).rejects.toThrow("APPLICATION_STOPPING_OR_RUN_CANCELLED");
+    let drained = false;
+    const stop = bridge.shutdownAgUiBridge().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    release();
+    await rejected;
+    await stop;
+    expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
+    expect(bridge.__getSessionActiveRunForTest("building")).toBeUndefined();
+  });
+
+  it("a stuck run is bounded by the shutdown coordinator deadline", async () => {
+    vi.resetModules();
+    mocks.getSession.mockReturnValue({ id: "stuck", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    const bridge = await import("./agui-bridge");
+    const { createShutdownCoordinator } = await import("./application/shutdown");
+    const { createStartupReadiness } = await import("./application/readiness");
+    bridge.registerAgUiIpc(async () => ({ options: { messages: [] } as any, latestUserText: "test" }), async () => ({}), () => null);
+    await mocks.handlers.get(IPC.AGUI_RUN)!({ sender: { isDestroyed: () => false, send: vi.fn() } }, { sessionId: "stuck", messages: [] });
+    const log = vi.fn();
+    const finalAction = vi.fn();
+    const coordinator = createShutdownCoordinator({ readiness: createStartupReadiness(), timeoutMs: 20, log });
+    coordinator.register({ id: "agui-runs", phase: "stopProducers", dispose: bridge.shutdownAgUiBridge });
+    await coordinator.requestControlledShutdown({ reason: "test", finalAction });
+    expect(finalAction).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(log.mock.calls)).toContain("agui-runs");
+  });
+
+  it("drains successful terminal side effects before disposing plugins", async () => {
+    vi.resetModules();
+    mocks.getSession.mockReturnValue({ id: "settling", mode: "chat" });
+    let release!: () => void;
+    const finished = new Promise<void>((resolve) => { release = resolve; });
+    const bridge = await import("./agui-bridge");
+    const { createShutdownCoordinator } = await import("./application/shutdown");
+    const { createStartupReadiness } = await import("./application/readiness");
+    bridge.registerAgUiIpc(async () => ({ options: { messages: [] } as any, latestUserText: "test" }), async () => { await finished; return {}; }, () => null);
+    await mocks.handlers.get(IPC.AGUI_RUN)!({ sender: { isDestroyed: () => false, send: vi.fn() } }, { sessionId: "settling", messages: [] });
+    const plugins = vi.fn();
+    const coordinator = createShutdownCoordinator({ readiness: createStartupReadiness() });
+    coordinator.register({ id: "agui-runs", phase: "stopProducers", dispose: bridge.shutdownAgUiBridge });
+    coordinator.register({ id: "plugins", phase: "stopActiveWork", dispose: plugins });
+    const shutdown = coordinator.requestControlledShutdown({ reason: "test", finalAction: vi.fn() });
+    await Promise.resolve(); await Promise.resolve();
+    expect(plugins).not.toHaveBeenCalled();
+    release();
+    await shutdown;
+    expect(plugins).toHaveBeenCalledTimes(1);
+    expect(bridge.__getSessionActiveRunForTest("settling")).toBeUndefined();
+  });
+
   // 每个测试前重置可定制的终态行为字段，
   // 避免上一个测试的副作用泄漏到下一个测试。
   beforeEach(() => {
