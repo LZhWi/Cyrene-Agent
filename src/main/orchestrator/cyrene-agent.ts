@@ -1,3 +1,5 @@
+import { createPersistentExecutionLedger } from "../storage/persistent-execution-ledger";
+import { harnessRunScope } from "./harness/run-scope";
 // CyreneAgent —— 把两条 Agent 循环包进 AG-UI 的 AbstractAgent。
 //
 // - 持有 runWithEvents 入口：Chat 使用 chat-loop，其余模式使用 CyreneHarness。
@@ -415,7 +417,8 @@ export class CyreneAgent extends AbstractAgent {
     const runOptions: CyreneRunOptions = {
       ...options,
       runId,
-      executionLedger: options.executionLedger ?? executionLedgers.forScope(runId),
+      executionLedger: options.executionLedger ?? (resolveExecutionMode(options.executionMode) !== 'chat'
+        ? createPersistentExecutionLedger(`${harnessRunScope(options.conversationId, runId)}:${runId}`) : undefined) ?? executionLedgers.forScope(runId),
     };
     const conversationId = runOptions.conversationId ?? "default";
     const abortController = new AbortController();
@@ -599,7 +602,7 @@ export class CyreneAgent extends AbstractAgent {
             subscriber.complete();
             return;
           }
-          const safeErr = new AgentRuntimeError("E_MODEL_REQUEST_FAILED", classification.userMessage, {
+          const safeErr = new AgentRuntimeError(classification.diagnostics.errorCode === "HARNESS_SCOPE_BUSY" ? "E_HARNESS_SCOPE_BUSY" : "E_MODEL_REQUEST_FAILED", classification.userMessage, {
             ...(classification.modelFailure ? { modelFailure: classification.modelFailure } : {}),
           });
           finished = true;
@@ -702,8 +705,14 @@ export function classifyRunError(
   }
 
   // AgentRuntimeError（E_MODEL_REQUEST_FAILED 等）：映射为用户安全消息，避免泄露 HTTP 原始响应
+  if (err instanceof Error && err.message.startsWith("HARNESS_SCOPE_BUSY:")) {
+    diagnostics.errorCode = "HARNESS_SCOPE_BUSY";
+    return { source: abortSource ?? "upstream_cleanup", phase, diagnostics,
+      userMessage: "此会话已有正在运行的任务，请等待其结束或取消后重试。" };
+  }
   if (err instanceof AgentRuntimeError) {
     const safeMessages: Record<string, string> = {
+      E_HARNESS_SCOPE_BUSY: "此会话已有正在运行的任务，请等待其结束或取消后重试。",
       E_MODEL_REQUEST_FAILED: "模型服务暂时不可用，请稍后重试。",
       E_MODEL_REQUEST_TIMEOUT: "模型响应超时，请稍后重试。",
       E_MODEL_HTTP_ERROR: "模型服务请求失败，请稍后重试。",

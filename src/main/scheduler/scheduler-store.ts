@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
+import { getServiceState, type ServiceState } from "../storage/service-state";
 import { computeInitialNextFireAt, normalizeOverdueNextFireAt } from "./schedule-calculator";
 import type { PluginPromptMode } from "../../plugins/api";
 import type {
@@ -13,6 +14,8 @@ import type {
 } from "./types";
 
 interface StoreDeps {
+  /** Production uses the SQLite owner; explicit file paths remain isolated fixture adapters. */
+  storage?: () => Pick<ServiceState, "get" | "set">;
   tasksFile: string;
   historyFile: string;
   now: () => Date;
@@ -21,6 +24,7 @@ interface StoreDeps {
 
 function defaultDeps(): StoreDeps {
   return {
+    storage: () => getServiceState(app.getPath("userData"), "scheduler"),
     tasksFile: path.join(app.getPath("userData"), "scheduled-tasks.json"),
     historyFile: path.join(app.getPath("userData"), "scheduled-tasks-history.jsonl"),
     now: () => new Date(),
@@ -112,9 +116,15 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
 
 export function createSchedulerStore(deps: StoreDeps) {
   let tasks: ScheduledTask[] = [];
+  let committedTasks: ScheduledTask[] = [];
   let listeners: Array<(next: ScheduledTask[]) => void> = [];
 
   function persistTasks(): void {
+    if (deps.storage) {
+      try { deps.storage().set("tasks", { tasks }); committedTasks = structuredClone(tasks); }
+      catch (error) { tasks = structuredClone(committedTasks); throw error; }
+      return;
+    }
     ensureParent(deps.tasksFile);
     fs.writeFileSync(deps.tasksFile, JSON.stringify({ tasks }, null, 2), "utf8");
   }
@@ -127,6 +137,12 @@ export function createSchedulerStore(deps: StoreDeps) {
   }
 
   function load(): void {
+    if (deps.storage) {
+      const parsed = deps.storage().get("tasks") as { tasks?: unknown[] };
+      tasks = Array.isArray(parsed?.tasks) ? parsed.tasks.map(normalizeLoadedTask).filter((task): task is ScheduledTask => task !== null) : [];
+      committedTasks = structuredClone(tasks);
+      return;
+    }
     try {
       const parsed = JSON.parse(fs.readFileSync(deps.tasksFile, "utf8")) as { tasks?: unknown[] };
       tasks = Array.isArray(parsed.tasks)
@@ -269,6 +285,7 @@ export function createSchedulerStore(deps: StoreDeps) {
   }
 
   function readAllHistory(): ScheduledTaskHistoryEntry[] {
+    if (deps.storage) return (deps.storage().get("history") as ScheduledTaskHistoryEntry[]).filter(item => item && typeof item.taskId === "string");
     try {
       return fs.readFileSync(deps.historyFile, "utf8")
         .split(/\r?\n/)
@@ -281,7 +298,7 @@ export function createSchedulerStore(deps: StoreDeps) {
   }
 
   function recordHistory(entry: ScheduledTaskHistoryEntry): void {
-    ensureParent(deps.historyFile);
+    if (!deps.storage) ensureParent(deps.historyFile);
     const existing = readAllHistory().filter(item => item.id !== entry.id);
     existing.push(entry);
     const grouped = new Map<string, ScheduledTaskHistoryEntry[]>();
@@ -294,7 +311,8 @@ export function createSchedulerStore(deps: StoreDeps) {
       .flatMap(group => group.sort((a, b) => a.firedAt.localeCompare(b.firedAt)).slice(-50))
       .sort((a, b) => a.firedAt.localeCompare(b.firedAt))
       .slice(-1000);
-    fs.writeFileSync(deps.historyFile, compacted.map(item => JSON.stringify(item)).join("\n") + (compacted.length ? "\n" : ""), "utf8");
+    if (deps.storage) deps.storage().set("history", compacted);
+    else fs.writeFileSync(deps.historyFile, compacted.map(item => JSON.stringify(item)).join("\n") + (compacted.length ? "\n" : ""), "utf8");
   }
 
   function getHistory(taskId: string, limit = 10): ScheduledTaskHistoryEntry[] {

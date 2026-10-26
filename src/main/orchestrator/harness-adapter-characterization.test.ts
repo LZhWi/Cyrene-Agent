@@ -43,6 +43,8 @@ vi.mock("electron", () => ({
   app: { getPath: vi.fn(() => "C:\\cyrene-characterization") },
 }));
 
+vi.mock('../storage/service-state',()=>({getServiceState:()=>({all:()=>({}),get:()=>undefined,set:()=>{},call:()=>{throw Error('unexpected SQL call');}})}));
+
 import { runHarnessWithAdapter } from "./harness-adapter";
 
 describe("harness-adapter characterization", () => {

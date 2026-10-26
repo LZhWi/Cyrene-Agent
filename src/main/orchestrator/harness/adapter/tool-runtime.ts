@@ -66,7 +66,7 @@ export function prepareToolRuntime(input: {
 
   const toolContext: ToolContext = {
     userQuery: extractLastUserQuery(options.messages),
-    conversationId: options.conversationId ?? "default",
+    conversationId: threadId,
     imageAttachments: options.imageAttachments,
     visionConfig: options.visionConfig,
     runId,

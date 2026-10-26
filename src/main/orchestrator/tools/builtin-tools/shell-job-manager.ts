@@ -17,6 +17,8 @@ import { spawn, type ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
+import { randomUUID } from "node:crypto";
+import { getStorageRuntime } from "../../../storage/storage-backend";
 import { logger, LogTag } from "../../../logger";
 
 // ── 常量 ─────────────────────────────────────────────
@@ -64,6 +66,9 @@ interface ShellJob {
   totalTimer?: NodeJS.Timeout;
   startedAtMs: number;
   startedAtIso: string;
+  endedAtMs: number | null;
+  logClosed?: Promise<void>;
+  persisted?: Promise<void>;
   /** 终态达成时唤醒所有 waitForShellJob 等待者 */
   terminalWaiters: Set<() => void>;
 }
@@ -89,8 +94,37 @@ export interface ShellJobSnapshot {
 // 终态条目只保留元数据（量级 KB），不做淘汰：运行中进程由 total 上限兜底，
 // 磁盘日志由 7 天清理兜底，注册表自然增长无实际风险。
 const jobs = new Map<string, ShellJob>();
-let jobCounter = 0;
 let lifecycleInstalled = false;
+let recovered = false;
+let stopping = false;
+let cleanup: Promise<void> | undefined;
+
+type SavedJob = Pick<ShellJob, "jobId" | "command" | "shell" | "status" | "exitCode" | "reason" | "totalBytes" | "logFile" | "startedAtMs" | "endedAtMs">;
+function recordOf(job: ShellJob): SavedJob {
+  const {jobId,command,shell,status,exitCode,reason,totalBytes,logFile,startedAtMs,endedAtMs}=job;
+  return {jobId,command,shell,status,exitCode,reason,totalBytes,logFile,startedAtMs,endedAtMs};
+}
+function database() {
+  const owner=getStorageRuntime();
+  if(owner&&!recovered){owner.call("shellJobs.recover",Date.now());recovered=true;}
+  return owner;
+}
+function savedSnapshot(jobId: string): ShellJobSnapshot | null {
+  const job=database()?.call("shellJobs.get",jobId) as SavedJob | null | undefined;
+  if(!job)return null;
+  // Only read this profile's task logs; imported paths are not authority to read other files.
+  const owned=path.dirname(path.resolve(job.logFile))===path.resolve(defaultJobsDir());
+  if(job.reason==="app_restarted_execution_unknown"&&owned){try{job.totalBytes=fs.statSync(job.logFile).size;}catch{}}
+  const {jobId: id,status,exitCode,reason,totalBytes,logFile,command,shell}=job;
+  return {jobId:id,pid:null,status,exitCode,reason,totalBytes,logFile,command,shell,startedAt:new Date(job.startedAtMs).toISOString(),durationMs:(job.endedAtMs??Date.now())-job.startedAtMs,tail:owned?readLogTail(job.logFile):""};
+}
+function persistTerminal(job: ShellJob): Promise<void> {
+  if(job.persisted)return job.persisted;
+  const write=job.logClosed!.then(()=>{database()?.call("shellJobs.finish",recordOf(job));});
+  job.persisted=write;
+  void write.catch(error=>{job.persisted=undefined;logger.warn(LogTag.BuiltinTools,`[shell_job] 状态保存失败 ${job.jobId}: ${String(error)}`);});
+  return write;
+}
 
 /** 可靠终止进程树。Windows 上 child.kill("SIGKILL") 只杀直接子进程，杀不掉孙进程。 */
 export function killTree(child: ChildProcess | undefined | null): void {
@@ -126,22 +160,24 @@ function ensureLifecycle(jobsDir: string): void {
   if (lifecycleInstalled) return;
   lifecycleInstalled = true;
   // 过期日志清理：fire-and-forget，失败不影响本次任务启动
-  void cleanupOldJobLogs(jobsDir);
-  // 应用退出时终止所有仍在运行的后台任务，避免孤儿进程残留
-  try {
-    app.on("before-quit", () => disposeAllShellJobs());
-  } catch {
-    // 非 Electron 运行环境（单测）没有可用的 app 对象，跳过
-  }
+  cleanup = cleanupOldJobLogs(jobsDir);
+  // The shutdown coordinator awaits disposeAllShellJobs before closing SQLite.
 }
 
 async function cleanupOldJobLogs(jobsDir: string): Promise<void> {
   try {
-    const names = await fs.promises.readdir(jobsDir);
     const cutoff = Date.now() - SHELL_JOB_LOG_RETENTION_MS;
+    const owner=database();
+    for(const job of (owner?.call("shellJobs.expired",cutoff)??[]) as SavedJob[]){
+      if(path.dirname(path.resolve(job.logFile))!==path.resolve(jobsDir))continue;
+      await fs.promises.rm(job.logFile,{force:true});
+      owner!.call("shellJobs.delete",job.jobId);
+    }
+    const names = await fs.promises.readdir(jobsDir);
     await Promise.all(names.filter((n) => n.endsWith(".log")).map(async (name) => {
       const file = path.join(jobsDir, name);
       try {
+        if(owner?.call("shellJobs.get",name.slice(0,-4)))return;
         const st = await fs.promises.stat(file);
         if (st.mtimeMs < cutoff) await fs.promises.unlink(file);
       } catch { /* 单个文件失败不影响其余清理 */ }
@@ -161,8 +197,10 @@ function settleJob(
   job.status = status;
   job.exitCode = status === "exited" ? (patch.exitCode ?? null) : null;
   job.reason = patch.reason ?? null;
+  job.endedAtMs = Date.now();
   clearTimeout(job.totalTimer);
-  try { job.logStream.end(); } catch { /* 流已销毁则忽略 */ }
+  job.logClosed=new Promise<void>(resolve=>{if(job.logStream.closed)resolve();else job.logStream.once("close",resolve);job.logStream.end();});
+  void persistTerminal(job);
   for (const wake of job.terminalWaiters) wake();
   job.terminalWaiters.clear();
   logger.info(LogTag.BuiltinTools, `[shell_job] ${job.jobId} → ${status}${job.reason ? ` (${job.reason})` : ""} bytes=${job.totalBytes}`);
@@ -210,7 +248,7 @@ function snapshotJob(job: ShellJob): ShellJobSnapshot {
     command: job.command,
     shell: job.shell,
     startedAt: job.startedAtIso,
-    durationMs: Date.now() - job.startedAtMs,
+    durationMs: (job.endedAtMs ?? Date.now()) - job.startedAtMs,
     // tail 是唯一大字段，必须排在最后：下游头尾截断时尾窗优先覆盖最新输出
     tail: readLogTail(job.logFile),
   };
@@ -232,11 +270,13 @@ export function startShellJob(opts: {
   /** 单任务日志上限（测试注入用）；缺省 64MB 生产常量 */
   logMaxBytes?: number;
 }): { jobId: string; logFile: string } {
+  if(stopping)throw Error("SHELL_JOBS_STOPPING");
+  const owner=database();
   const jobsDir = opts.logDir ?? defaultJobsDir();
   fs.mkdirSync(jobsDir, { recursive: true });
   ensureLifecycle(jobsDir);
 
-  const jobId = `job-${formatJobTimestamp()}-${String(++jobCounter).padStart(3, "0")}`;
+  const jobId = `job-${formatJobTimestamp()}-${randomUUID()}`;
   const logMaxBytes = opts.logMaxBytes ?? SHELL_JOB_LOG_MAX_BYTES;
   const logFile = path.join(jobsDir, `${jobId}.log`);
   // 同步建空文件：createWriteStream 的 open 是异步的，同步 touch 保证 startShellJob
@@ -262,11 +302,16 @@ export function startShellJob(opts: {
     logStream,
     startedAtMs: now,
     startedAtIso: new Date(now).toISOString(),
+    endedAtMs: null,
     terminalWaiters: new Set(),
   };
+  // Persist before spawn: an unregistered command must never execute.
+  try { owner?.call("shellJobs.create",recordOf(job)); }
+  catch(error){logStream.end();throw error;}
   jobs.set(jobId, job);
 
-  const child = spawn(opts.spec.command, opts.spec.args, {
+  let child: ChildProcess;
+  try { child = spawn(opts.spec.command, opts.spec.args, {
     cwd: opts.spec.cwd || undefined,
     shell: false,
     windowsHide: true,
@@ -277,7 +322,7 @@ export function startShellJob(opts: {
     ...(opts.spec.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     // stdin→NUL：误启动交互式进程时让它读到 EOF 立即退出，不悬挂
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }); } catch(error){settleJob(job,"failed",{reason:`spawn_error: ${String(error)}`});throw error;}
   job.child = child;
 
   const totalMs = Math.min(Math.max(opts.totalMs ?? SHELL_JOB_TOTAL_TIMEOUT_MS, 1_000), SHELL_JOB_TOTAL_TIMEOUT_MS);
@@ -313,8 +358,11 @@ export function clampWaitMs(raw: unknown): number {
  */
 export async function waitForShellJob(jobId: string, waitMs: number, signal?: AbortSignal): Promise<ShellJobSnapshot | null> {
   const job = jobs.get(jobId);
-  if (!job) return null;
-  if (job.status !== "running" || waitMs <= 0) return snapshotJob(job);
+  if (!job) return savedSnapshot(jobId);
+  if (job.status !== "running" || waitMs <= 0) {
+    if(job.status!=="running")void persistTerminal(job);
+    return snapshotJob(job);
+  }
   await new Promise<void>((resolve) => {
     let done = false;
     const finish = () => {
@@ -340,20 +388,26 @@ export async function waitForShellJob(jobId: string, waitMs: number, signal?: Ab
 /** 停止任务（幂等：已到终态的任务直接返回终态快照）。任务不存在返回 null。 */
 export function stopShellJob(jobId: string): ShellJobSnapshot | null {
   const job = jobs.get(jobId);
-  if (!job) return null;
+  if (!job) return savedSnapshot(jobId);
   if (job.status === "running") {
     settleJob(job, "stopped");
     killTree(job.child);
   }
+  void persistTerminal(job);
   return snapshotJob(job);
 }
 
 /** 应用退出收尾：终止所有仍在运行的后台任务 */
-export function disposeAllShellJobs(): void {
+export async function disposeAllShellJobs(): Promise<void> {
+  stopping = true;
   for (const job of jobs.values()) {
     if (job.status === "running") {
       settleJob(job, "stopped", { reason: "app_exiting" });
       killTree(job.child);
     }
   }
+  await cleanup;
+  const results=await Promise.allSettled([...jobs.values()].map(persistTerminal));
+  const failures=results.filter((r): r is PromiseRejectedResult=>r.status==='rejected');
+  if(failures.length)throw new AggregateError(failures.map(r=>r.reason),'SHELL_JOB_PERSISTENCE_FAILED');
 }

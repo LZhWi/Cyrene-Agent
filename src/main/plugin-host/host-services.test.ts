@@ -103,6 +103,9 @@ function factory(windowNavigation?: PluginHostServicesOptions["windowNavigation"
       category: "clear", temperatureC: 24, precipitationMm: 0,
     }) },
     companionContext: {
+      chatPreferences: () => ({ chatBackend: "companion", proactiveChatMode: "off", companionProactivePace: "normal",
+        proactiveDeliveryTarget: "local", chatSocialContextEnabled: true, companionFeedbackLearningEnabled: false,
+        companionScreenMonitorEnabled: false, companionLifeEnabled: true, companionImportantDatesText: "" }),
       snapshot: async ({ kinds }) => ({
         items: (kinds ?? ["call", "minecraft", "music"]).map((kind) => ({
           kind,
@@ -117,6 +120,16 @@ function factory(windowNavigation?: PluginHostServicesOptions["windowNavigation"
 }
 
 describe("宿主服务装配工厂", () => {
+  it("插件注册前可读原生偏好副本，停止后拒绝读取", () => {
+    const controller = new AbortController();
+    const deps = factory().createForPlugin({ pluginId: "companion-chat", signal: controller.signal, trackResource: undefined as never });
+    const snapshot = deps.companionContext!.chatPreferences!();
+    expect(snapshot.chatBackend).toBe("companion");
+    snapshot.chatBackend = "native";
+    expect(deps.companionContext!.chatPreferences!().chatBackend).toBe("companion");
+    controller.abort();
+    expect(() => deps.companionContext!.chatPreferences!()).toThrow("插件已停止");
+  });
   it("仅提供窗口管理入口时装配导航，插件停止后禁止打开窗口", async () => {
     const controller = new AbortController();
     const input = { pluginId: "hud", signal: controller.signal, trackResource: undefined as never };

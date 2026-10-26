@@ -173,6 +173,7 @@ export function handleGeneralSettingsChanged(
   }
   if (
     before.proactiveChatMode !== after.proactiveChatMode
+    || before.chatBackend !== after.chatBackend
     || before.proactiveDeliveryTarget !== after.proactiveDeliveryTarget
   ) {
     deps.proactiveLifecycle.getProactiveChatService()?.invalidate();

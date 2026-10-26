@@ -1,6 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { getServiceState, type ServiceState } from '../storage/service-state';
 import type {
   TaskSession,
   TaskSessionStatus,
@@ -11,9 +10,6 @@ import type {
   TaskTranscriptMessage,
 } from "../../shared/task-session";
 
-const ROOT_DIR_NAME = "cyrene-tasks";
-const SESSIONS_DIR_NAME = "sessions";
-const INDEX_FILE_NAME = "index.json";
 const TRACE_LIMIT = 2_000;
 
 export interface CreateTaskSessionInput {
@@ -109,33 +105,26 @@ function isTaskSession(value: unknown): value is TaskSession {
 function cloneSession(session: TaskSession): TaskSession {
   return JSON.parse(JSON.stringify(session)) as TaskSession;
 }
+function taskState(root: string): ServiceState { return getServiceState(root,'tasks'); }
 
 /** Inspector reads must not run startup recovery or mutate a running task. */
 export function readTaskSession(root: string, taskId: string): TaskSession | null {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(taskId)) return null;
-  try {
-    const file = path.join(root, ROOT_DIR_NAME, SESSIONS_DIR_NAME, `${taskId}.json`);
-    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-    return isTaskSession(parsed) && parsed.id === taskId ? { ...parsed, todoItems: cloneTodoItems(parsed.todoItems) } : null;
-  } catch { return null; }
+  const sql=taskState(root);const value=sql.get(taskId);return isTaskSession(value)&&value.id===taskId?{...value,todoItems:cloneTodoItems(value.todoItems)}:null;
 }
 
 /**
  * Task 私有会话存储。它不依赖 Electron，方便测试；生产启动时传入 app.getPath("userData")。
  */
 export class TaskSessionStore {
-  private readonly taskRoot: string;
-  private readonly sessionsDir: string;
-  private readonly indexPath: string;
+  private readonly sql: ServiceState;
   private readonly now: () => number;
   private readonly createId: () => string;
   private readonly createChildRunId: () => string;
   private index = new Map<string, TaskSessionIndexRow>();
 
   constructor(root: string, options: TaskSessionStoreOptions = {}) {
-    this.taskRoot = path.join(root, ROOT_DIR_NAME);
-    this.sessionsDir = path.join(this.taskRoot, SESSIONS_DIR_NAME);
-    this.indexPath = path.join(this.taskRoot, INDEX_FILE_NAME);
+    this.sql=taskState(root);
     this.now = options.now ?? Date.now;
     this.createId = options.createId ?? randomUUID;
     this.createChildRunId = options.createChildRunId ?? randomUUID;
@@ -221,10 +210,8 @@ export class TaskSessionStore {
   }
 
   private initialize(): void {
-    fs.mkdirSync(this.sessionsDir, { recursive: true });
     this.readIndex();
 
-    let changed = false;
     for (const row of this.index.values()) {
       const session = this.read(row.id);
       if (!session) continue;
@@ -233,10 +220,8 @@ export class TaskSessionStore {
         session.updatedAt = this.now();
         this.writeSession(session);
         this.index.set(session.id, this.indexRow(session));
-        changed = true;
       }
     }
-    if (changed) this.writeIndex();
   }
 
   private require(taskId: string): TaskSession {
@@ -246,49 +231,22 @@ export class TaskSessionStore {
   }
 
   private read(taskId: string): TaskSession | null {
-    const file = path.join(this.sessionsDir, `${taskId}.json`);
-    if (!fs.existsSync(file)) return null;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
-      return isTaskSession(parsed)
-        ? { ...parsed, todoItems: cloneTodoItems((parsed as Partial<TaskSession>).todoItems) }
-        : null;
-    } catch {
-      return null;
-    }
+    if(this.sql){const value=this.sql.get(taskId);return isTaskSession(value)?{...value,todoItems:cloneTodoItems(value.todoItems)}:null;}
+    return null;
   }
 
   private write(session: TaskSession): void {
     this.writeSession(session);
     this.index.set(session.id, this.indexRow(session));
-    this.writeIndex();
   }
 
   private writeSession(session: TaskSession): void {
-    this.atomicWrite(path.join(this.sessionsDir, `${session.id}.json`), session);
-  }
+    if(this.sql){this.sql.set(session.id,session);return;}
 
-  private writeIndex(): void {
-    this.atomicWrite(this.indexPath, [...this.index.values()]);
   }
 
   private readIndex(): void {
-    if (!fs.existsSync(this.indexPath)) return;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.indexPath, "utf8")) as unknown;
-      if (!Array.isArray(parsed)) return;
-      for (const row of parsed) {
-        if (!row || typeof row !== "object") continue;
-        const candidate = row as Partial<TaskSessionIndexRow>;
-        if (typeof candidate.id !== "string"
-          || typeof candidate.parentConversationId !== "string"
-          || !isTaskStatus(candidate.status)
-          || typeof candidate.updatedAt !== "number") continue;
-        this.index.set(candidate.id, candidate as TaskSessionIndexRow);
-      }
-    } catch {
-      this.index.clear();
-    }
+    if(this.sql){for(const s of Object.values(this.sql.all()) as TaskSession[])this.index.set(s.id,this.indexRow(s));return;}
   }
 
   private indexRow(session: TaskSession): TaskSessionIndexRow {
@@ -300,9 +258,5 @@ export class TaskSessionStore {
     };
   }
 
-  private atomicWrite(filePath: string, value: unknown): void {
-    const tempPath = `${filePath}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), "utf8");
-    fs.renameSync(tempPath, filePath);
-  }
+
 }

@@ -21,6 +21,17 @@ function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage
 }
 
 describe("渠道上下文", () => {
+  it('统一日志提交后不再双写，失败时不回落到非原子写入',async()=>{
+    const appendJournal=vi.fn().mockResolvedValue(true),appendChannelHistory=vi.fn(),appendBoundConversationMessage=vi.fn();
+    const context=createChannelContext({appendJournal,appendChannelHistory,appendBoundConversationMessage,migrateHistory:vi.fn()});
+    const message=makeIncoming({chatType:'group',messageId:'m'}),snapshot={sessionId:'channel',boundConversationId:'desktop'};
+    await context.appendIncomingContext(message,snapshot);
+    expect(appendJournal).toHaveBeenCalledWith('channel','desktop','user',message.text,expect.objectContaining({modelContext:formatChannelUserText(message)}));
+    expect(appendChannelHistory).not.toHaveBeenCalled();expect(appendBoundConversationMessage).not.toHaveBeenCalled();
+    appendJournal.mockRejectedValueOnce(Error('transaction failed'));
+    await expect(context.appendIncomingContext(message,snapshot)).rejects.toThrow('transaction failed');
+    expect(appendChannelHistory).not.toHaveBeenCalled();
+  });
   it("为同一渠道会话生成稳定标识", () => {
     expect(makeSessionId("feishu", "ou_abc123"))
       .toBe(makeSessionId("feishu", "ou_abc123"));

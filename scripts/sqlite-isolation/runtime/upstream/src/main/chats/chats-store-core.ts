@@ -331,7 +331,7 @@ export function createSession(opts?: {
   return session;
 }
 export function getSessionByPurpose(purpose: ChatSessionPurpose): ChatSession | null {
-  const meta = readIndexFromDisk().find((session) => session.purpose === purpose);
+  const meta = readIndexFromDisk().sort((a, b) => b.updatedAt - a.updatedAt).find((session) => session.purpose === purpose);
   const record = meta ? readSessionRecordFile(meta.id) : null;
   return record ? sessionView(record) : null;
 }

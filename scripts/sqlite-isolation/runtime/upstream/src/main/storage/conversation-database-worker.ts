@@ -1,10 +1,12 @@
 import { runShellJobCommand } from "./shell-job-repository";
+import { serviceStateCommand } from './life-service-state';
 import { harnessCommand, initializeLifeHarness } from './life-harness-store';
+import { initializePluginAgent, pluginAgentCommand } from './life-plugin-agent';
 import { parentPort, workerData } from "node:worker_threads";
 import path from "node:path";
 // This experimental worker must never open formal user data, even if called incorrectly.
 const isolationRoot=path.resolve(__dirname,'../../../..');
-if(!path.resolve(workerData.root).startsWith(isolationRoot+path.sep))throw Error('SQLITE_EXPERIMENT_ROOT_REQUIRED');
+require('../../../../../data-boundary.cjs').dataRoot(workerData.root, isolationRoot);
 import { importRuns, runCommand } from "./conversation-run-repository";
 import { importTaskSessions, runTaskCommand } from "./conversation-task-repository";
 import { importTokenUsage, runUsageCommand } from "./conversation-usage-repository";
@@ -27,6 +29,7 @@ initializeLifeChat(database);
 chats.initialize();
 importRuns(database);
 initializeLifeHarness(database);
+initializePluginAgent(database);
 importTaskSessions(database);
 importTokenUsage(database);
 importMoments(database);
@@ -161,6 +164,13 @@ function preserveAcceptedAdjustments(id: string, runId?: string): number {
 }
 
 async function execute(method: string, args: any[]): Promise<unknown> {
+  if(method==='services.deliveryCommit'){
+    const saved=serviceStateCommand(database,'services.get',['channel-delivery',args[1]]);
+    if(saved?.status==='delivered'&&saved.context?.boundConversationId)await importTranscript(saved.context.boundConversationId);
+  }
+  if(method.startsWith('pluginAgent.'))return pluginAgentCommand(database,method,args);
+  if(method==='services.historyBind')await importTranscript(args[2].conversationId);
+  if(method.startsWith('services.'))return serviceStateCommand(database,method,args);
   if(method.startsWith('harness.'))return harnessCommand(database,method,args);
   if(method.startsWith('life.')) {
     if((method==='life.mutate'||method==='life.beginTurn'||method==='life.memorySource'||method==='life.appendProactiveMessage')&&!args[0]?.startsWith('private:companion-chat:'))await importTranscript(args[0]);

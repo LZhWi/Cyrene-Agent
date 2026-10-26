@@ -6,6 +6,8 @@ import { PluginManager, type PluginManagerOptions } from "./manager";
 import { PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
 import { createPluginPromptRegistry } from "./prompts";
 import * as installer from "./installer";
+const durableHostEvent = vi.hoisted(() => vi.fn(async () => false));
+vi.mock("../main/storage/storage-backend", () => ({ persistStorageHostEvent: durableHostEvent, pluginStorageBackend: () => undefined }));
 
 let tmp: string;
 
@@ -39,6 +41,8 @@ function fixturePlugin(id: string, manifestId: string = id): string {
 }
 
 afterEach(() => {
+  durableHostEvent.mockReset();
+  durableHostEvent.mockResolvedValue(false);
   vi.useRealTimers();
   vi.restoreAllMocks();
   if (tmp) {
@@ -120,6 +124,19 @@ describe("PluginManager", () => {
     await mgr.setEnabled("demo", false);
     await mgr.publishHostEvent("runtime:ready", { phase: "background" });
     expect(readFileSync(marker, "utf8")).toBe("core");
+  });
+
+  it("正式 SQLite 无隔离环境变量时仍由持久化事件箱消费，JSON 继续旁路发布", async () => {
+    const h = harness(), mgr = new PluginManager(h.options);
+    const emit = vi.spyOn((mgr as any).eventBus, "emit").mockResolvedValue(undefined);
+    const payload = { runId: "formal-run" };
+    durableHostEvent.mockResolvedValue(true);
+    await mgr.publishHostEvent("turn:finished", payload);
+    expect(durableHostEvent).toHaveBeenCalledWith("turn:finished", payload);
+    expect(emit).not.toHaveBeenCalled();
+    durableHostEvent.mockResolvedValue(false);
+    await mgr.publishHostEvent("turn:finished", payload);
+    expect(emit).toHaveBeenCalledWith("host:turn:finished", payload);
   });
 
   it("普通宿主事件旁路发布，不等待监听器的未决 Promise", async () => {

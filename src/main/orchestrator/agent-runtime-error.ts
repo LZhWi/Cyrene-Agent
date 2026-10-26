@@ -5,6 +5,7 @@
  * AgUiBridge 据此把 `code` 透传给 renderer，renderer 据此显示不同文案。
  */
 export type AgentErrorCode =
+  | "E_HARNESS_SCOPE_BUSY"
   | "E_AGENT_NO_PROGRESS"
   | "E_AGENT_GRAPH_ITERATION_LIMIT"
   | "E_MODEL_REQUEST_FAILED"

@@ -126,6 +126,10 @@ export function createHostServiceFactory(options: PluginHostServicesOptions): Pl
         },
         ...(options.companionContext ? {
           companionContext: {
+            ...(options.companionContext.chatPreferences ? { chatPreferences: () => {
+              if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止");
+              return structuredClone(options.companionContext!.chatPreferences!());
+            } } : {}),
             ...(options.companionContext.memoryContext ? { memoryContext: async (input: Parameters<NonNullable<PluginCompanionContextService["memoryContext"]>>[0]) => {
               if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止");
               const result = await options.companionContext!.memoryContext!({ ...input, signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal });

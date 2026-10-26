@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "license": "OFL-1.1",
+  "fonts": [
+    {
+      "file": "NotoSansSC-VF.woff2",
+      "bytes": 7779480,
+      "sha256": "A5822F9D6EF83D113DD94741221C16BA7A321F63033A02BD164968188995D547",
+      "family": "Noto Sans SC",
+      "subfamily": "Regular",
+      "version": "Version 2.004;hotconv 1.0.118;makeotfexe 2.5.65603",
+      "copyright": "© 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.",
+      "glyphs": 31036,
+      "codepoints": 30890,
+      "weight": 100,
+      "axes": [
+        {
+          "tag": "wght",
+          "min": 100,
+          "max": 900
+        }
+      ],
+      "cssFamily": "Noto Sans SC",
+      "cssWeights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "source": {
+        "repository": "https://github.com/notofonts/noto-cjk",
+        "commit": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+        "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/Variable/TTF/Subset/NotoSansSC-VF.ttf",
+        "originalBytes": 17773132,
+        "originalSHA256": "D68BAFCB48A2707749396AA12BBBD833CB70401F3A9A689FD2902C7E0D295964",
+        "conversion": {
+          "fontTools": "4.60.1",
+          "brotli": "1.2.0",
+          "mode": "WOFF2 container conversion only; no glyph subsetting or axis instancing",
+          "cmapPreserved": true,
+          "axesPreserved": true
+        }
+      }
+    },
+    {
+      "file": "JetBrainsMono-Regular.woff2",
+      "bytes": 92164,
+      "sha256": "A9CB1CD82332B23A47E3A1239D25D13C86D16C4220695E34B243EFFA999F45F2",
+      "family": "JetBrains Mono",
+      "subfamily": "Regular",
+      "version": "Version 2.304; ttfautohint (v1.8.4.7-5d5b)",
+      "copyright": "Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)",
+      "glyphs": 1743,
+      "codepoints": 1363,
+      "weight": 400,
+      "axes": [],
+      "cssFamily": "JetBrains Mono",
+      "cssWeights": [
+        400
+      ],
+      "source": {
+        "repository": "https://github.com/JetBrains/JetBrainsMono",
+        "version": "2.304",
+        "commit": "cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9",
+        "url": "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9/fonts/webfonts/JetBrainsMono-Regular.woff2",
+        "conversion": "Unmodified upstream WOFF2"
+      }
+    },
+    {
+      "file": "JetBrainsMono-Medium.woff2",
+      "bytes": 93824,
+      "sha256": "086C48DFBEA9DDAFF1320F7E09399B8E2924E88CE67453721255DB3BDBB5A353",
+      "family": "JetBrains Mono",
+      "subfamily": "Regular",
+      "version": "Version 2.304; ttfautohint (v1.8.4.7-5d5b)",
+      "copyright": "Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)",
+      "glyphs": 1743,
+      "codepoints": 1363,
+      "weight": 500,
+      "axes": [],
+      "cssFamily": "JetBrains Mono",
+      "cssWeights": [
+        500
+      ],
+      "source": {
+        "repository": "https://github.com/JetBrains/JetBrainsMono",
+        "version": "2.304",
+        "commit": "cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9",
+        "url": "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9/fonts/webfonts/JetBrainsMono-Medium.woff2",
+        "conversion": "Unmodified upstream WOFF2"
+      }
+    }
+  ],
+  "files": [
+    {
+      "file": "NotoSansSC-VF.woff2",
+      "bytes": 7779480,
+      "sha256": "A5822F9D6EF83D113DD94741221C16BA7A321F63033A02BD164968188995D547"
+    },
+    {
+      "file": "JetBrainsMono-Regular.woff2",
+      "bytes": 92164,
+      "sha256": "A9CB1CD82332B23A47E3A1239D25D13C86D16C4220695E34B243EFFA999F45F2"
+    },
+    {
+      "file": "JetBrainsMono-Medium.woff2",
+      "bytes": 93824,
+      "sha256": "086C48DFBEA9DDAFF1320F7E09399B8E2924E88CE67453721255DB3BDBB5A353"
+    },
+    {
+      "file": "NotoSansSC-OFL.txt",
+      "bytes": 4301,
+      "sha256": "6A73F9541C2DE74158C0E7CF6B0A58EF774F5A780BF191F2D7EC9CC53EFE2BF2"
+    },
+    {
+      "file": "JetBrainsMono-OFL.txt",
+      "bytes": 4399,
+      "sha256": "30F0C136E3C88E422D0791ACD97238870F9054A9729BC34CF2FF0D4ED8CAC4AD"
+    },
+    {
+      "file": "NotoSansSC-COPYRIGHT.txt",
+      "bytes": 79,
+      "sha256": "4762F182755065608D55DA6207E84F2CBFDA9F93AC0BF5BACF21BA7676846EAD"
+    }
+  ],
+  "licenseSources": {
+    "JetBrainsMono-OFL.txt": "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9/OFL.txt",
+    "NotoSansSC-OFL.txt": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+    "NotoSansSC-COPYRIGHT.txt": "Copyright string preserved from the upstream font name table (name ID 0)"
+  },
+  "packaging": "Vite publicDir copies this folder to dist/renderer/fonts; electron-builder includes dist/**/*.",
+  "regeneration": "FontTools 4.60.1 / Brotli 1.2.0: TTFont(source, recalcTimestamp=False); font.flavor='woff2'; font.save(target, reorderTables=False). No glyph subset or axis instancing."
+}

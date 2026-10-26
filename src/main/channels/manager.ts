@@ -19,6 +19,8 @@ export type DispatchFn = (msg: IncomingMessage) => Promise<OutgoingMessage | nul
 export class ChannelManager {
   private adapters = new Map<ChannelId, ChannelAdapter>();
   private dispatchFn: DispatchFn | null = null;
+  private stopping = false;
+  private readonly pending = new Set<Promise<OutgoingMessage | null>>();
   /** 启动后已开启的 adapter（start 成功的才会调 stop） */
   private startedAdapters = new Set<ChannelId>();
 
@@ -45,6 +47,7 @@ export class ChannelManager {
 
   /** 启动所有已注册 adapter（失败的跳过、记 log） */
   async startAll(): Promise<void> {
+    this.stopping = false;
     for (const adapter of this.adapters.values()) {
       // 跳过已启动的 adapter（插件注册渠道场景：registerChannelAdapter 已 startOne）
       if (this.startedAdapters.has(adapter.id)) continue;
@@ -81,6 +84,7 @@ export class ChannelManager {
 
   /** 启动单个 adapter（运行时启用插件渠道用） */
   async startOne(id: ChannelId): Promise<void> {
+    this.stopping = false;
     const adapter = this.adapters.get(id);
     if (!adapter) return;
     if (this.startedAdapters.has(id)) return;
@@ -94,6 +98,9 @@ export class ChannelManager {
 
   /** 关闭所有已启动的 adapter */
   async stopAll(): Promise<void> {
+    this.stopping = true;
+    // Keep adapters alive until accepted messages finish sending and committing.
+    await Promise.allSettled([...this.pending]);
     for (const id of this.startedAdapters) {
       const adapter = this.adapters.get(id);
       if (!adapter) continue;
@@ -125,15 +132,20 @@ export class ChannelManager {
 
   private makeAdapterHandler(channel: ChannelId) {
     return async (msg: IncomingMessage): Promise<OutgoingMessage | null> => {
+      if (this.stopping) return null;
       if (!this.dispatchFn) {
         console.warn(LOG, `收到入站消息但 dispatcher 未注册 [${channel}]`);
         return null;
       }
+      const task = Promise.resolve().then(() => this.dispatchFn!(msg));
+      this.pending.add(task);
       try {
-        return await this.dispatchFn(msg);
+        return await task;
       } catch (err) {
         console.error(LOG, `dispatcher 处理失败 [${channel}]:`, err);
         return null;
+      } finally {
+        this.pending.delete(task);
       }
     };
   }

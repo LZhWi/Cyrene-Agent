@@ -1,12 +1,15 @@
 // channels/history-log 单元测试
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 // Mock electron
-const HISTORY_TMP = path.join(os.tmpdir(), "cyrene-history-test");
-fs.mkdirSync(HISTORY_TMP, { recursive: true });
+let HISTORY_TMP:string;
+import {sqliteFixture} from '../../../scripts/testing/sqlite-fixture';
+import {setServiceStateProvider} from '../storage/service-state';
+let fixture:ReturnType<typeof sqliteFixture>;
+afterEach(()=>{fixture.close();fs.rmSync(HISTORY_TMP,{recursive:true,force:true});});
 
 vi.mock("electron", () => ({
   app: {
@@ -18,13 +21,8 @@ import { appendHistory, loadRecentHistory, migrateHistory } from "./history-log"
 
 describe("channels/history-log", () => {
   beforeEach(() => {
-    // 清理测试目录
-    const dir = path.join(HISTORY_TMP, "channels", "history");
-    if (fs.existsSync(dir)) {
-      for (const f of fs.readdirSync(dir)) {
-        fs.unlinkSync(path.join(dir, f));
-      }
-    }
+    HISTORY_TMP=fs.mkdtempSync(path.join(os.tmpdir(),'cyrene-history-'));
+    fixture=sqliteFixture(HISTORY_TMP);setServiceStateProvider(fixture.provider);
   });
 
   it("loadRecentHistory: 不存在的 session → 空数组", () => {
@@ -81,7 +79,7 @@ describe("channels/history-log", () => {
     expect(b[0].content).toBe("B 说的话");
   });
 
-  it("文件超过 MAX_FILE_LINES 时自动截断 (不丢失最新)", () => {
+  it("SQLite 保留完整历史，读取窗口不改写数据", () => {
     const sid = "channel:feishu:trunc";
     // 写 250 条 (> MAX_FILE_LINES 200)
     for (let i = 0; i < 250; i++) {
@@ -89,11 +87,12 @@ describe("channels/history-log", () => {
     }
     const history = loadRecentHistory(sid, 250);
     // 截断后最多 200 条
-    expect(history.length).toBeLessThanOrEqual(200);
+    expect(history.length).toBe(250);
+    expect(fs.existsSync(path.join(HISTORY_TMP,'channels/history'))).toBe(false);
     // 最新一条应该是 msg249
     expect(history[history.length - 1].content).toBe("msg249");
     // 最老一条应该是 msg50 (250 - 200 = 50)
-    expect(history[0].content).toBe("msg50");
+    expect(history[0].content).toBe("msg0");
   });
 
   describe("migrateHistory", () => {

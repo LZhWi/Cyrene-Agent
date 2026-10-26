@@ -13,6 +13,7 @@ import type { HarnessEvent } from "./orchestrator/harness/types";
 import { ExecutionLedgerStore } from "./orchestrator/execution-ledger";
 import { buildToolSystemPrompt } from "./orchestrator/system-prompt-builder";
 import type { ToolDefinition } from "./orchestrator/tools/registry/tool-registry";
+import {beginPluginAgentRun} from './storage/plugin-agent-persistence';
 
 const DEFAULT_MAX_ROUNDS = 50;
 const DEFAULT_MAX_WALL_MS = 15 * 60_000;
@@ -166,7 +167,12 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
     const maxWallMs = positiveInteger(options.maxWallMs, DEFAULT_MAX_WALL_MS, "maxWallMs", 24 * 60 * 60_000);
     const tools = validateAndMapTools(deps.pluginId, options.tools);
     const label = diagnosticLabel(deps.pluginId, options.purpose);
+    const durable=deps.executionLedgers?undefined:beginPluginAgentRun(deps.pluginId,runId,{
+      goal,label,maxRounds,maxWallMs,tools:tools.map(({execute,...definition})=>definition),
+    });
+    if(durable?.result)return durable.result;
 
+    try {
     const deadline = deps.createDeadline?.(maxWallMs) ?? AbortSignal.timeout(maxWallMs);
     const signals = combineSignals({ external: options.signal, plugin: deps.pluginSignal, deadline });
     const built = await deps.agentRuntime.buildOptions({
@@ -225,7 +231,8 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
         metadata: { pluginAgentDiagnosticLabel: label },
       },
       toolOutputStore: new FileToolOutputStore(deps.userDataPath),
-      executionLedger: ledgers.forScope(runId),
+      executionLedger: durable?.ledger??ledgers.forScope(runId),
+      onCheckpoint:durable?.checkpoint,
     });
 
     const terminal = signals.firstAbortSource() === "deadline"
@@ -235,6 +242,12 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
         result.finalState.uncertainEffects.length > 0,
       );
     console.info("[plugin-agent] 无头任务结束", { label, runId, status: terminal.status });
-    return { text: result.finalAnswer, terminal, rounds: result.rounds } as PluginAgentRunResult;
+    const output={ text: result.finalAnswer, terminal, rounds: result.rounds } as PluginAgentRunResult;
+    durable?.complete(output);
+    return output;
+    }catch(error){
+      try{durable?.interrupt();}catch(persistenceError){console.error('[plugin-agent] 中断状态保存失败:',persistenceError);}
+      throw error;
+    }
   };
 }

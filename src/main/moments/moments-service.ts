@@ -1,3 +1,4 @@
+import { getServiceState } from "../storage/service-state";
 // Moments 对外唯一门面：IPC 与组合根都只碰它。
 //
 // 职责：
@@ -504,6 +505,10 @@ export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
   };
 
   const reactionQueue: ReactionQueue = createReactionQueue({
+    ...(!deps.reactionQueueFilePath ? { storage: {
+      read: () => getServiceState(app.getPath("userData"), "moments-reactions").get("state"),
+      write: (value: { tasks: ReactionTask[] }) => getServiceState(app.getPath("userData"), "moments-reactions").set("state", value),
+    } } : {}),
     filePath: deps.reactionQueueFilePath ?? defaultReactionQueueFilePath,
     executor: reactionExecutor,
     now,

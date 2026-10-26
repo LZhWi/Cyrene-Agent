@@ -3,7 +3,7 @@
 // 职责边界：
 // - 只管"什么时候执行"与"崩溃后怎么续"：去重入队、到期扫描、决策缓存、失败退避；
 //   "决策怎么产生、副作用怎么落库"全部委托给注入的执行器（昔涟与角色各自的执行器由 service 装配）；
-// - 持久化独立文件（与 moments.json / moments-state.json 分离）：任务入队即落盘，
+// - 生产持久化到统一 SQLite；显式文件适配仅用于隔离夹具：任务入队即落盘，
 //   执行成功才删除——执行中途崩溃，重启后任务还在，凭评论通道的 sourceTaskId 幂等续接；
 // - 决策幂等：模型返回合法决策后先把 resolvedDecision 落盘、再执行副作用，
 //   崩溃恢复时直接执行原决策、不再调模型——模型不是确定性的，重问一次
@@ -216,6 +216,7 @@ export interface EnqueueReactionInput {
 }
 
 export interface ReactionQueueDeps {
+  storage?: { read(): { tasks?: unknown }; write(value: { tasks: ReactionTask[] }): void };
   /**
    * 持久化文件路径。传函数可延迟解析——service 在 import 期构造，
    * 此时生产环境的 userData 路径还不该被触碰。
@@ -294,6 +295,7 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
   // 惰性加载：首次入队/扫描才读盘。service 在 import 期构造队列，
   // 那一刻不该有磁盘副作用；真正的"启动加载"发生在扫描器首轮补扫。
   let tasks: ReactionTask[] | null = null;
+  let committedTasks: ReactionTask[] = [];
   let resolvedPath: string | null = null;
   let draining = false;
   let paused = false;
@@ -310,6 +312,12 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
 
   function ensureLoaded(): void {
     if (tasks !== null) return;
+    if (deps.storage) {
+      const parsed = deps.storage.read();
+      tasks = Array.isArray(parsed.tasks) ? parsed.tasks.filter(isValidTask) : [];
+      committedTasks = structuredClone(tasks);
+      return;
+    }
     tasks = [];
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath(), "utf8")) as { tasks?: unknown };
@@ -328,6 +336,11 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
 
   /** 原子落盘：.tmp + rename，崩溃时不留半个文件 */
   function persist(): void {
+    if (deps.storage) {
+      try { deps.storage.write({ tasks: tasks! }); committedTasks = structuredClone(tasks!); }
+      catch (error) { tasks = structuredClone(committedTasks); throw error; }
+      return;
+    }
     const target = filePath();
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const tmp = target + ".tmp";
@@ -453,7 +466,8 @@ export function createReactionQueue(deps: ReactionQueueDeps): ReactionQueue {
       // 扫描时刻的到期快照逐条执行；执行期间新入队的任务（延迟都在未来）留给下一轮
       for (const task of due) {
         if (paused) break;
-        await execute(task);
+        const current = tasks!.find(item => item.id === task.id);
+        if (current) await execute(current);
       }
       return true;
     } finally {

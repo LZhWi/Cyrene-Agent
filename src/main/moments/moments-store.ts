@@ -14,6 +14,7 @@ import { app } from "electron";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { getServiceState, type ServiceState } from '../storage/service-state';
 import {
   MOMENT_ALLOWED_IMAGE_MIME,
   MOMENT_MAX_COMMENT_TEXT_LENGTH,
@@ -35,9 +36,7 @@ import {
   type MomentsStoreData,
 } from "../../shared/moments-types";
 
-const STORE_FILE_NAME = "moments.json";
 const MEDIA_ROOT_DIR_NAME = "moments-media";
-const CURRENT_SCHEMA_VERSION = 2;
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/png": "png",
@@ -45,9 +44,10 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/webp": "webp",
 };
 
-let storePath = "";
 let mediaRootDir = "";
 let cache: MomentsStoreData | null = null;
+let sql: ServiceState | undefined;
+let committed: MomentsStoreData | null = null;
 let tail: Promise<unknown> = Promise.resolve();
 const changeListeners = new Set<() => void>();
 
@@ -95,10 +95,12 @@ function isValidAuthor(author: string): boolean {
 export function initialize(): void {
   if (cache) return;
   const userData = app.getPath("userData");
-  storePath = path.join(userData, STORE_FILE_NAME);
   mediaRootDir = path.join(userData, MEDIA_ROOT_DIR_NAME);
   fs.mkdirSync(mediaRootDir, { recursive: true });
-  cache = loadFromDisk();
+  sql=getServiceState(userData,'moments');
+  cache=sql.get('state');
+  committed=structuredClone(cache);
+  cleanupMedia();
 }
 
 /** moments-media 根目录（moment-media:// 协议解析用；未初始化时先初始化）。 */
@@ -124,33 +126,37 @@ function notifyChanged(): void {
   }
 }
 
-function emptyStore(): MomentsStoreData {
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, posts: [], comments: [], reactions: [] };
-}
-
-function loadFromDisk(): MomentsStoreData {
-  if (!fs.existsSync(storePath)) return emptyStore();
-  try {
-    const parsed = JSON.parse(fs.readFileSync(storePath, "utf8")) as Partial<MomentsStoreData>;
-    return {
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      posts: Array.isArray(parsed.posts) ? parsed.posts : [],
-      comments: Array.isArray(parsed.comments) ? parsed.comments : [],
-      reactions: Array.isArray(parsed.reactions) ? parsed.reactions : [],
-    };
-  } catch {
-    return emptyStore();
+function cleanupMedia(): void {
+  if(!sql)return;
+  let pending: string[];
+  try { pending=sql.call('services.momentsCleanup','moments'); }
+  catch(error){console.warn('[Moments] 图片清理待重试:',error);return;}
+  for(const id of pending) {
+    try {
+      if(!/^[a-zA-Z0-9_-]+$/.test(id))throw Error('MOMENTS_MEDIA_ID_INVALID');
+      fs.rmSync(path.join(mediaRootDir,id),{recursive:true,force:true});
+      sql.call('services.momentsCleaned','moments',id);
+    }catch(error){console.warn('[Moments] 图片清理待重试:',error);}
   }
 }
 
 function persist(): void {
-  const tmpPath = storePath + ".tmp";
-  fs.writeFileSync(tmpPath, JSON.stringify(cache, null, 2), "utf8");
-  fs.renameSync(tmpPath, storePath);
+  if(sql){
+    const changes: any[]=[];
+    for(const kind of ['posts','comments','reactions'] as const){
+      const key=(row:any)=>kind==='reactions'?JSON.stringify([row.postId,row.actor,row.type]):row.id;
+      const previous=new Map(committed![kind].map((row:any,index:number)=>[key(row),{value:JSON.stringify(row),index}]));
+      cache![kind].forEach((row:any,seq:number)=>{const id=key(row),old=previous.get(id),value=JSON.stringify(row);if(old?.value!==value||old.index!==seq)changes.push({kind,key:id,before:old?.value??null,value,seq});previous.delete(id);});
+      for(const [id,old]of previous)changes.push({kind,key:id,before:old.value,value:null});
+    }
+    sql.call('services.momentsApply','moments',{id:randomUUID(),changes});
+    committed=structuredClone(cache);cleanupMedia();return;
+  }
+  throw Error("SQLITE_SERVICE_UNAVAILABLE:moments");
 }
 
 function enqueue<T>(task: () => T | Promise<T>): Promise<T> {
-  const next = tail.then(task);
+  const next = tail.then(async()=>{try{return await task();}catch(error){cache=structuredClone(committed);throw error;}});
   tail = next.catch(() => {
     // 单个任务失败不阻塞后续队列
   });
@@ -250,6 +256,7 @@ function commitCreatePost(author: MomentAuthor, input: MomentCreatePostInput): M
   const media: MomentMedia[] = [];
   if (images.length > 0) {
     const mediaDir = path.join(mediaRootDir, postId);
+    sql?.call('services.momentsReserve','moments',postId);
     fs.mkdirSync(mediaDir, { recursive: true });
     images.forEach((image, index) => {
       const fileName = `${index + 1}.${MIME_TO_EXT[image.mime]}`;
@@ -290,9 +297,6 @@ export function deletePost(postId: string): Promise<MomentCommitResult<null>> {
     store.posts.splice(index, 1);
     store.comments = store.comments.filter((comment) => comment.postId !== postId);
     store.reactions = store.reactions.filter((reaction) => reaction.postId !== postId);
-
-    const mediaDir = path.join(mediaRootDir, postId);
-    if (fs.existsSync(mediaDir)) fs.rmSync(mediaDir, { recursive: true, force: true });
 
     persist();
     notifyChanged();
@@ -555,3 +559,6 @@ export function getCharacterTimeline(
 function newPostId(): string {
   return `moment_${Date.now()}_${randomUUID().slice(0, 8)}`;
 }
+
+/** Wait for queued writes before the shared SQLite owner closes. */
+export async function drainMomentsWrites(): Promise<void> { await tail; }

@@ -1,0 +1,28 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),Module=require('node:module');
+const root=process.env.SQLITE_TEST_ROOT,runtime=process.env.SQLITE_TEST_RUNTIME,compiled=process.env.SQLITE_TEST_COMPILED;if(!root||!runtime||!compiled)throw Error('Isolated paths required');
+let profile,owner,failCreate=false,failFinish=false;const original=Module._load;
+Module._load=function(id,parent,...rest){if(id==='electron')return {app:{getPath:()=>profile,on(){}}};if(id==='../../../storage/storage-backend'&&parent.filename.endsWith('shell-job-manager.js'))return {getStorageRuntime:()=>({call:(method,...args)=>{if(failCreate&&method==='shellJobs.create')throw Error('CREATE_FAILED');if(failFinish&&method==='shellJobs.finish')throw Error('FINISH_FAILED');return owner.call(method,...args);}})};return original.call(this,id,parent,...rest);};
+const managerPath=path.join(compiled,'main/orchestrator/tools/builtin-tools/shell-job-manager.js');
+const fresh=()=>{delete require.cache[require.resolve(managerPath)];return require(managerPath);};
+test('shell jobs: real process, persistence, restart, terminal retry, shutdown and rollback guard',async t=>{
+ profile=fs.mkdtempSync(path.join(root,'shell-profile-'));let manager;
+ t.after(async()=>{failFinish=false;await manager?.disposeAllShellJobs().catch(()=>{});await owner?.stop();fs.rmSync(profile,{recursive:true,force:true});});
+ for(const [name,value]of Object.entries({'cyrene-chats/index.json':[],'plugin-data/companion-memory/memory-state.json':{turns:[],processed:[],l2:[]},'plugin-data/companion-chat/chat-state.json':{}})){const f=path.join(profile,name);fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,JSON.stringify(value));}fs.mkdirSync(path.join(profile,'cyrene-chats/sessions'));
+ const formal=require(path.join(runtime,'formal-storage.cjs'));await formal.migrate(profile,runtime);
+ const start=()=>{owner=require(path.join(runtime,'bridge.cjs'))(formal.options(profile,runtime));owner.start();};start();manager=fresh();
+ const options=code=>({command:'isolated-node-fixture',shell:'node',spec:{command:process.execPath,args:['-e',code],env:{...process.env,TEST_SECRET:'never-store-this'},cwd:profile,windowsVerbatimArguments:false,ranViaSandbox:false}});
+ const finished=async id=>{const deadline=Date.now()+10000;for(;;){const s=await manager.waitForShellJob(id,500);if(s.status!=='running')return s;assert(Date.now()<deadline,'child did not complete');}};
+ const job=manager.startShellJob(options("console.log('ISOLATED_OUTPUT')"));assert.equal(owner.call('shellJobs.get',job.jobId).status,'running');await finished(job.jobId);await manager.disposeAllShellJobs();
+ const saved=owner.call('shellJobs.get',job.jobId);assert.equal(saved.status,'exited');assert.equal(saved.exitCode,0);assert(!JSON.stringify(saved).includes('never-store-this'));assert(saved.endedAtMs);
+ await owner.stop();start();manager=fresh();const restored=await manager.waitForShellJob(job.jobId,0);assert.equal(restored.pid,null);assert(restored.tail.includes('ISOLATED_OUTPUT'));assert.deepEqual(Object.keys(restored).sort(),['jobId','pid','status','exitCode','reason','totalBytes','logFile','command','shell','startedAt','durationMs','tail'].sort());const duration=restored.durationMs;assert.equal((await manager.waitForShellJob(job.jobId,0)).durationMs,duration);
+ // Worker reconnection must not run process-level recovery again.
+ const live=manager.startShellJob(options('setTimeout(()=>{},1500)'));await owner.stop();start();await manager.waitForShellJob(job.jobId,0);assert.equal(owner.call('shellJobs.get',live.jobId).status,'running');await finished(live.jobId);
+ const marker=path.join(profile,'must-not-execute');failCreate=true;assert.throws(()=>manager.startShellJob(options(`require('fs').writeFileSync(${JSON.stringify(marker)},'bad')`)),/CREATE_FAILED/);failCreate=false;assert(!fs.existsSync(marker));
+ failFinish=true;const retry=manager.startShellJob(options('console.log("retry")'));await finished(retry.jobId);await new Promise(r=>setTimeout(r,50));assert.equal(owner.call('shellJobs.get',retry.jobId).status,'running');failFinish=false;await manager.waitForShellJob(retry.jobId,0);await manager.disposeAllShellJobs();assert.equal(owner.call('shellJobs.get',retry.jobId).status,'exited');
+ assert.throws(()=>manager.startShellJob(options('')),/STOPPING/);
+ // Host restart reconciles unowned running records; no command is replayed.
+ const unknown={...saved,jobId:'crashed',status:'running',exitCode:null,reason:null,endedAtMs:null,command:'must-not-replay'};owner.call('shellJobs.create',unknown);await owner.stop();start();manager=fresh();const recovered=await manager.waitForShellJob('crashed',0);assert.equal(recovered.status,'failed');assert.equal(recovered.reason,'app_restarted_execution_unknown');assert.equal(recovered.pid,null);
+ const stopping=manager.startShellJob(options('setTimeout(()=>{},10000)'));const pid=(await manager.waitForShellJob(stopping.jobId,0)).pid;await manager.disposeAllShellJobs();assert.equal(owner.call('shellJobs.get',stopping.jobId).reason,'app_exiting');
+ const end=Date.now()+5000;while(true){try{process.kill(pid,0);}catch{break;}assert(Date.now()<end,'stopped child still alive');await new Promise(r=>setTimeout(r,50));}
+ const before=owner.call('shellJobs.all');await owner.stop();const {rollback,resolveRollbackData}=require(path.join(runtime,'rollback-storage.cjs'));await assert.rejects(rollback(profile,runtime),/SQLITE_ROLLBACK_SHELL_JOBS_UNSUPPORTED/);assert.equal(resolveRollbackData(profile),profile);start();assert.deepEqual(owner.call('shellJobs.all'),before);
+});

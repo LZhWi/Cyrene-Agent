@@ -3,7 +3,7 @@ const {parentPort,workerData}=require('worker_threads'),fs=require('fs'),path=re
 const {DatabaseSync}=require('node:sqlite');
 const {ConversationDatabaseClient}=require(path.join(workerData.runtime,'upstream/src/main/storage/conversation-database-client.js'));
 const root=path.resolve(workerData.data),base=fs.realpathSync(workerData.runtime);
-if(!root.startsWith(base+path.sep))throw Error('JOINT_ISOLATION_REQUIRED');
+require('./data-boundary.cjs').dataRoot(root,base);
 const read=p=>JSON.parse(fs.readFileSync(p)),digest=v=>crypto.createHash('sha256').update(JSON.stringify(v)??'undefined').digest('hex');
 let client,lock,aggregate,checkpointStore,databaseFailure,epoch,projectionHash,tail=Promise.resolve(),closed=false;
 const file=path.join(root,'unified/plugin-state.json'),report={commands:[],conflicts:[],businessOwners:'actual-loaded-plugins-only'};
@@ -11,12 +11,13 @@ const file=path.join(root,'unified/plugin-state.json'),report={commands:[],confl
 const saveReport=()=>{try{fs.writeFileSync(workerData.report,JSON.stringify(report,null,2));}catch{report.diagnosticWriteFailures=(report.diagnosticWriteFailures||0)+1;}};
 function persist(value,writes){const saved=checkpointStore.commitKeys(value,writes);aggregate=saved.aggregate;}
 async function start(){
- checkpointStore=require('./pair-checkpoint.cjs').createCheckpointStore({isolationRoot:path.dirname(base),root});
+ checkpointStore=require('./pair-checkpoint.cjs').createCheckpointStore({isolationRoot:workerData.storageRoot??path.dirname(base),root,formal:Boolean(workerData.storageRoot)});
  fs.mkdirSync(root,{recursive:true});if(fs.realpathSync(root)!==root)throw Error('JOINT_PATH_REDIRECTION');
- lock=new DatabaseSync(path.join(root,'runtime-owner.sqlite'));lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');
+ lock=new DatabaseSync(path.toNamespacedPath(path.join(root,'runtime-owner.sqlite')));lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');
  const fresh=!fs.existsSync(path.join(root,'cyrene.sqlite'));
  if(fresh)fs.cpSync(path.join(workerData.snapshot,'cyrene-chats'),path.join(root,'cyrene-chats'),{recursive:true});
  if(fresh&&fs.existsSync(path.join(workerData.snapshot,'cyrene-runs')))fs.cpSync(path.join(workerData.snapshot,'cyrene-runs'),path.join(root,'cyrene-runs'),{recursive:true});
+ if(fresh&&fs.existsSync(path.join(workerData.snapshot,'plugin-agent-runs.json')))fs.copyFileSync(path.join(workerData.snapshot,'plugin-agent-runs.json'),path.join(root,'plugin-agent-runs.json'));
  client=new ConversationDatabaseClient(root,error=>{databaseFailure=error;parentPort.postMessage({kind:'fatal',error:error.message});});
  const sessions=await client.call('chats.listSessions');for(const s of sessions)await client.call('transcript.read',s.id);
  if(fresh){
@@ -129,6 +130,35 @@ async function execute(method,args){
   if(writes.length)persist({...aggregate,values:{...aggregate.values,[id]:values}},writes.map(({key})=>({pluginId:id,key})));return hashes;
  }
  if(method==='backup')return checkpointStore.backup(args[0]);
+ if(method==='exportJson'){
+  if((await client.call('life.pendingEvents')).length)throw Error('SQLITE_ROLLBACK_PENDING_EVENTS');
+  const db=new DatabaseSync(path.toNamespacedPath(path.join(root,'cyrene.sqlite')),{readOnly:true});
+  try{if(db.prepare("SELECT 1 FROM runs WHERE status IN ('prepared','running') LIMIT 1").get())throw Error('SQLITE_ROLLBACK_ACTIVE_RUN');}finally{db.close();}
+  const values=structuredClone(aggregate.values),memory=values['companion-memory']['memory-state'];
+  for(const [id,key]of [['companion-memory','isolated-native-prompt-receipts'],['companion-memory','isolated-proactive-prompt-receipts'],['companion-chat','isolated-chat-context-receipts']]){
+   const ledger=values[id][key];if(ledger&&(!Array.isArray(ledger.pending)||ledger.pending.length))throw Error('SQLITE_ROLLBACK_PENDING_RECEIPTS');
+  }
+  if(Object.keys(values['companion-memory']['sqlite-extraction-retry-state']??{}).length)throw Error('SQLITE_ROLLBACK_PENDING_RETRY');
+  const rows=await client.call('memory.queueRows');
+  for(const row of rows){const turn=memory.turns.find(t=>t.id===row.pluginTurn?.id);
+   if(!turn||!isDeepStrictEqual(turn,row.pluginTurn)||memory.processed.includes(turn.id)!==row.processed)throw Error('SQLITE_ROLLBACK_MEMORY_QUEUE_MISMATCH');}
+  // This is a backend ownership marker, not a user fact. Re-enable must import the JSON queue again.
+  delete values['companion-memory']['isolated-sqlite-pending-owner'];
+  const index=await client.call('chats.listSessions'),sessions=[],transcripts={};
+  for(const item of index){const record=await client.call('chats.getSessionRecord',item.id);
+   if(![1,2].includes(record.schemaVersion))throw Error('SQLITE_ROLLBACK_TRANSCRIPT_VERSION');
+   if(record.pendingDispatch||record.pendingWithdrawal||record.pendingMessages?.length)throw Error('SQLITE_ROLLBACK_PENDING_DISPATCH');
+   // The JSON backend stores a complete message array (schema 1), not SQL transcript references.
+   sessions.push({...await client.call('chats.getSession',item.id),schemaVersion:1});
+   if(Object.hasOwn(item,'schemaVersion'))item.schemaVersion=1;
+   transcripts[item.id]={record,entries:await client.call('transcript.audit',item.id)};
+  }
+  const runs=await client.call('harness.all'),events={};for(const run of runs)events[run.runId]=await client.call('harness.audit',run.runId);
+  const services=await client.call('services.export'),toolOperations=await client.call('services.exportLedger');
+  const pluginAgentRuns=await client.call('pluginAgent.export');
+  const shellJobs=await client.call('shellJobs.all');
+  return {index,sessions,values,runs,events,transcripts,services,toolOperations,pluginAgentRuns,shellJobs,pendingMemory:rows.filter(row=>!row.processed).length};
+ }
  if(method==='stop'){try{await client?.close();}finally{if(lock){lock.exec('ROLLBACK');lock.close();}closed=true;}report.stopped=true;saveReport();return true;}
  throw Error('JOINT_UNKNOWN_COMMAND:'+method);
 }

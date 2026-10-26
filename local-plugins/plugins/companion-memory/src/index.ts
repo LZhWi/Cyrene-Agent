@@ -71,15 +71,19 @@ const plugin: CyrenePlugin = {
       }
     };
     const entityGraph = createEntityGraph(storage);
-    const memory = createMemory(storage, (turn) => {
-      entityGraph.ingest([turn.user]);
-      entityGraph.ingest([turn.assistant]);
+    const memory = createMemory(storage, () => {
+      entityGraph.reconcile(memory.view().turns);
     });
     const invalidations = createSourceInvalidationQueue(storage);
     const contextSources = storage.get<any>(LEGACY_CONTEXT_KEY)?.sourceEvidence ?? [];
     for (const change of await findInvalidHostSources(ctx.deps.conversations, memory.view().turns, [...memory.view().evidence, ...contextSources], ctx.signal)) invalidations.enqueue(change);
     // Invalidate source facts before registering any prompt/tool/automation consumers.
     for (const change of invalidations.pending()) memory.invalidateHostSources(change);
+    entityGraph.reconcile(memory.view().turns);
+    const searchEntities = (query: string) => {
+      entityGraph.reconcile(memory.view().turns);
+      return entityGraph.search(query);
+    };
     const relationship = createRelationshipLog(storage);
     relationship.reconcile(memory.view().turns);
     const queryRouter = createQueryRouter(ctx);
@@ -435,7 +439,7 @@ const plugin: CyrenePlugin = {
           memory.reactivateLifecycleEntries({ entryIds: recall.reactivateIds, revision: memory.view().revision });
           semantic.memoryChanged();
         }
-      }, (query) => entityGraph.search(query), queryRouter.route, (ids) => {
+      }, searchEntities, queryRouter.route, (ids) => {
         const entries = memory.view().entries;
         const liveIds = new Set(entries.filter((entry) => entry.status === "active" || entry.status === "aging").map((entry) => entry.id));
         const recall = lifecycle.record(ids.filter((id) => liveIds.has(id)), entries, true);
@@ -545,7 +549,7 @@ const plugin: CyrenePlugin = {
         case "discard-proactive-receipt":
           if (durableProactiveReceipts) return durableProactiveReceipts.discard(data as string);
           proactiveReceipts.delete(data as string); return true;
-        case "entity-for-proactive": return typeof data === "string" ? entityGraph.search(data) : "";
+        case "entity-for-proactive": return typeof data === "string" ? searchEntities(data) : "";
         case "profile-for-proactive": return [memory.profileContext(), dream.context()].filter(Boolean).join("\n\n");
         case "search-for-tool": {
           const query = typeof data === "string" ? data : (data as { query?: unknown })?.query;
@@ -648,6 +652,7 @@ const plugin: CyrenePlugin = {
     const applyInvalidation = (event: SourceInvalidation) => {
       social.invalidate(event.conversationId, event.allMessages, event.invalidatedMessageIds);
       const result = memory.invalidateHostSources(event);
+      entityGraph.reconcile(memory.view().turns);
       native.invalidateColdRecall(event.conversationId, event.allMessages, event.invalidatedMessageIds);
       history.invalidateHostMessages(event.conversationId, event.allMessages, event.invalidatedMessageIds);
       for (const id of result.invalidatedEntryIds) {
@@ -687,7 +692,15 @@ const plugin: CyrenePlugin = {
       if (action === "get-query-router") return queryRouter.view();
       if (action === "save-query-router") return queryRouter.save(data);
       if (action === "test-query-router") return queryRouter.test(ctx.signal);
-      if (action === "save-native-integration") return native.configure(data);
+      if (action === "save-native-integration") {
+        const preferences = ctx.deps.companionContext?.chatPreferences?.();
+        if (preferences) {
+          const enabled = preferences.chatBackend === "companion" && preferences.chatSocialContextEnabled;
+          if (["captureEnabled", "autoExtractEnabled", "promptInjectionEnabled", "socialContextEnabled"]
+            .some(key => data?.[key] !== enabled)) throw new Error("聊天读取、提取和注入由主程序的聊天上下文增强开关统一管理");
+        }
+        return native.configure(data);
+      }
       if (action === "retry-native-integration") { const result = native.retry(); void maintenanceCycles.retry().catch(error => ctx.log(`[companion-memory] 维护重试失败：${String(error)}`)); return result; }
       if (action === "list-native-conversations") return nativeHistory.list(ctx.signal);
       if (action === "preview-native-history") return nativeHistory.preview(data, ctx.signal);

@@ -1,5 +1,5 @@
 // Isolated migration experiment only. Never accepted by the renderer patch gate.
-export const LIFE_LEGACY_KEYS = ["attachments", "modelContext", "weatherCard", "callEvent", "pluginDelivery"] as const;
+export const LIFE_LEGACY_KEYS = ["attachments", "modelContext", "weatherCard", "callEvent", "musicEvent", "pluginDelivery"] as const;
 export type LifeLegacyMetadata = Partial<Record<typeof LIFE_LEGACY_KEYS[number], unknown>>;
 
 export function lifeLegacyMetadata(message: object): LifeLegacyMetadata | undefined {

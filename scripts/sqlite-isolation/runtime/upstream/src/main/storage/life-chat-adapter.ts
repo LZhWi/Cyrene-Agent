@@ -297,13 +297,18 @@ export function lifeChatCommand(db:ConversationDatabase,chats:typeof Chats,metho
     } else if(name==='upsertMessage')put(raw);
     else if(name==='replaceMessages'||name==='replaceMessagesTail') {
       const start=name==='replaceMessages'?0:raw.startIndex,items=name==='replaceMessages'?raw:raw.messages;
+      if(name==='replaceMessagesTail') {
+        if(!Number.isInteger(start)||start<0||start>after.length)return null;
+        if(raw.expectedTailIds&&(after.length-start!==raw.expectedTailIds.length
+          ||raw.expectedTailIds.some((messageId:string,index:number)=>after[start+index].id!==messageId)))return null;
+      }
       if(!Number.isInteger(start)||start<0||start>after.length||!Array.isArray(items))throw Error('LIFE_INVALID_REPLACEMENT');
       after=after.slice(0,start).concat(items.map((m:any)=>preserveVisual(previous.get(m.id),m)));
     } else if(name==='deleteMessageRound') {
       const index=after.findIndex(m=>m.id===raw.messageId);if(index<0)return null;
       let start=index,end=index+1;
-      if(after[index].role==='model'&&after[index-1]?.role==='user')start--;
-      else if(after[index].role==='user'&&after[index+1]?.role==='model')end++;
+      if(after[index].role==='model'&&after[index-1]?.role==='user'&&!after[index-1].musicEvent)start--;
+      else if(after[index].role==='user'&&!after[index].musicEvent&&after[index+1]?.role==='model')end++;
       after.splice(start,end-start);
     } else if(name==='setMessageTtsCacheKey') {
       if(!/^(minimax|gptsovits|custom-cloud|mimo|mossland)-[a-f0-9]{64}$/.test(raw.cacheKey)
@@ -341,12 +346,15 @@ export function lifeChatCommand(db:ConversationDatabase,chats:typeof Chats,metho
         if(prior&&node&&memorySourceHash(prior)===memorySourceHash(message))memorySourceIds[message.id]=node.memoryEntryId??node.entryId;
       }
       db.append(id,{id:`life:${operationId}`,at:Date.now(),...(name==='completeTurn'?{runId:raw.runId}:{}),kind:work?'life_work_mutation':'life_chat_mutation',payload:{messages:changed,removeIds:removed,orderIds:after.map(m=>m.id),memorySourceIds}});
-      const record=db.record(id)! as any;record.messageCount=after.length;
-      if(work&&!record.titleIsCustom){const first=after.find(m=>m.role==='user'&&m.content.trim());const title=first?.content.replace(/\s+/g,' ').trim()??'';record.title=title?(title.length>30?title.slice(0,30)+'…':title):'新对话';}
-      if(!quiet)record.updatedAt=Date.now();db.saveRecord(record);
     }
+    const record=db.record(id)! as any;record.messageCount=after.length;
+    if(!quiet&&!record.titleIsCustom&&name!=='markPluginMessageIgnored'){
+      const first=after.find(m=>m.role==='user'&&m.content.trim());const title=first?.content.replace(/\s+/g,' ').trim()??'';
+      record.title=title?(title.length>30?title.slice(0,30)+'…':title):'新对话';
+    }
+    if(!quiet)record.updatedAt=Date.now();db.saveRecord(record);
     const next=chats.getSession(id)!;
-    const invalidated=before.filter(m=>{const n=after.find(n=>n.id===m.id);return !n||sourceFingerprint(m)!==sourceFingerprint(n);}).map(m=>m.id);
+    const invalidated=before.filter(m=>{const n=after.find(n=>n.id===m.id);return !n||memorySourceHash(m)!==memorySourceHash(n);}).map(m=>m.id);
     if(!work&&invalidated.length){
       const ids=new Set(invalidated);
       for(const row of db.db.prepare("SELECT r.run_id,q.dispatch_json FROM runs r JOIN conversation_requests q ON q.run_id=r.run_id WHERE r.conversation_id=? AND r.status IN ('prepared','running')").all(id)){

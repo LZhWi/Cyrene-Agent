@@ -181,6 +181,14 @@ export function createNativeIntegration(
   let settings = storedSettings === undefined
     ? { ...DEFAULT_NATIVE_INTEGRATION_SETTINGS }
     : validateSettings(storedSettings);
+  // Recovery starts below, before the host's post-activation preference event.
+  const initialPreferences = ctx.deps.companionContext?.chatPreferences?.();
+  if (initialPreferences) {
+    const enabled = initialPreferences.chatBackend === "companion" && initialPreferences.chatSocialContextEnabled;
+    settings = { ...settings, captureEnabled: enabled, autoExtractEnabled: enabled,
+      promptInjectionEnabled: enabled, socialContextEnabled: enabled };
+    ctx.storage.set(SETTINGS_KEY, settings);
+  }
   let queue = loadQueue(ctx);
   let running: Promise<void> | undefined;
   const promptReceipts = new Map<string, { includedMemoryIds: string[]; recalledMemoryIds: string[] }>();
@@ -682,6 +690,7 @@ export function createNativeIntegration(
       isolationTransaction?.assertHealthy();
       return structuredClone({
         settings,
+        hostPreferencesManaged: Boolean(ctx.deps.companionContext?.chatPreferences),
         pending: queue.pending.length,
         completed: queue.completed.length,
         lastError: queue.lastError,

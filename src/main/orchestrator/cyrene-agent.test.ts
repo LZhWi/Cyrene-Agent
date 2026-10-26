@@ -75,6 +75,18 @@ vi.mock("../user-choice", () => ({
 }));
 
 describe("CyreneAgent", () => {
+  it("forwards a scope conflict with a dedicated UI error code", async () => {
+    mockedRunHarnessWithAdapter.mockRejectedValueOnce(new Error("HARNESS_SCOPE_BUSY: internal details"));
+    const agent = new CyreneAgent({ threadId: "scope-error" });
+    const error = await new Promise<unknown>((resolve, reject) => {
+      agent.runWithEvents({
+        runId: "scope-error", executionMode: "work", conversationMode: "work",
+        settings: { provider: "test", model: "test" }, messages: [], tools: [],
+        timeoutMs: 60000, toolSystemContent: "", soulSystemBaseContent: "",
+      } as never).subscribe({ error: resolve, complete: () => reject(new Error("expected conflict")) });
+    });
+    expect(error).toMatchObject({ code: "E_HARNESS_SCOPE_BUSY", message: "此会话已有正在运行的任务，请等待其结束或取消后重试。" });
+  });
   it("maps reasoning lifecycle onto the standard AG-UI events", () => {
     expect(toAguiEvent({ type: "reasoning_message_start", messageId: "r1", role: "reasoning" }))
       .toMatchObject({ type: "REASONING_MESSAGE_START", messageId: "r1", role: "reasoning" });
@@ -91,6 +103,11 @@ describe("CyreneAgent", () => {
 });
 
 describe("classifyRunError", () => {
+  it("shows the safe Harness conflict hint without exposing database details", () => {
+    const result = classifyRunError(new Error("HARNESS_SCOPE_BUSY: private database details"), undefined, "run", "conv", "unknown", false);
+    expect(result.userMessage).toBe("此会话已有正在运行的任务，请等待其结束或取消后重试。");
+    expect(result.diagnostics.errorCode).toBe("HARNESS_SCOPE_BUSY");
+  });
   it("returns user_cancelled with empty message when source is user_cancelled", () => {
     const result = classifyRunError(
       new DOMException("aborted", "AbortError"),

@@ -20,6 +20,16 @@ vi.mock("electron", () => ({ app: { getPath: vi.fn(() => "C:\\cyrene-runtime") }
 import { prepareToolRuntime } from "./tool-runtime";
 
 describe("harness tool runtime", () => {
+  it("uses the prepared headless scope for tool context and child tasks", () => {
+    const runtime = prepareToolRuntime({
+      options: { conversationMode: "work", messages: [] } as never,
+      signal: new AbortController().signal,
+      prepared: { threadId: "harness-headless:r", runId: "r", systemPrompt: "", vendorConfig: {}, tools: [] } as never,
+      sendBaseEvent: vi.fn(),
+    });
+    expect(runtime.toolContext.conversationId).toBe("harness-headless:r");
+    expect(createTaskExecutor).toHaveBeenCalledWith(expect.objectContaining({ parent: expect.objectContaining({ parentConversationId: "harness-headless:r" }) }));
+  });
   beforeEach(() => {
     getById.mockReset();
     checkPermission.mockReset();

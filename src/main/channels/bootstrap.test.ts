@@ -285,6 +285,22 @@ describe("createChannelsSubsystem lifecycle", () => {
     expect(channelMocks.getSession).not.toHaveBeenCalled();
   });
 
+  it("uses stable mirror IDs without SQLite and separates source channel sessions", () => {
+    createChannelsSubsystem(makeChannelsDeps());
+    channelMocks.getSession.mockReturnValue({messages:[]});
+    channelMocks.appendMessage.mockReturnValue({messages:[]});
+    const append=channelMocks.appendBoundConversationMessage!;
+    const metadata={channel:'qq',chatType:'private',messageId:'same-platform-id',sourceSessionId:'channel:qq:a'} as any;
+    append('desktop-1','assistant','reply',metadata);
+    const message=channelMocks.appendMessage.mock.calls.at(-1)![1];
+    channelMocks.getSession.mockReturnValue({messages:[message]});
+    append('desktop-1','assistant','reply',metadata);
+    expect(channelMocks.appendMessage).toHaveBeenCalledTimes(1);
+    append('desktop-1','assistant','reply',{...metadata,sourceSessionId:'channel:qq:b'});
+    expect(channelMocks.appendMessage).toHaveBeenCalledTimes(2);
+    expect(channelMocks.appendMessage.mock.calls.at(-1)![1].id).not.toBe(message.id);
+  });
+
   it.each([false, true])("flushes binding observations after shutdown (failure=%s)", async (fail) => {
     const lifecycle = { initialize: vi.fn(), start: vi.fn(), shutdown: vi.fn(async () => {
       expect(channelMocks.flush).not.toHaveBeenCalled();

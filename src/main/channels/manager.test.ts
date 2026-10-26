@@ -21,6 +21,24 @@ function fakeAdapter(id: string): ChannelAdapter {
 }
 
 describe("ChannelManager", () => {
+  it("退出等待已接受的发送和提交，拒绝新入站，然后停止适配器", async () => {
+    const mgr = new ChannelManager(), adapter = fakeAdapter("qq");
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    adapter.stop = async () => { events.push("stop"); };
+    mgr.register(adapter);
+    mgr.setDispatcher(async () => { events.push("send"); await gate; events.push("commit"); return null; });
+    await mgr.startAll();
+    const incoming = adapter.onMessage!({} as never);
+    await Promise.resolve();
+    const stopped = mgr.stopAll();
+    expect(await adapter.onMessage!({} as never)).toBeNull();
+    expect(events).toEqual(["send"]);
+    release();
+    await Promise.all([incoming, stopped]);
+    expect(events).toEqual(["send", "commit", "stop"]);
+  });
   it("startOne 启动单个 adapter；unregister 先 stop 再移除", async () => {
     const mgr = new ChannelManager();
     const adapter = fakeAdapter("qq");

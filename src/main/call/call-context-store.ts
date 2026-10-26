@@ -1,7 +1,6 @@
 import { app } from "electron";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import { getServiceState } from "../storage/service-state";
 
 export interface CallContextEvent {
   id: string;
@@ -10,12 +9,7 @@ export interface CallContextEvent {
   summary: string;
 }
 
-const FILE_NAME = "phone-context-events.json";
 const MAX_EVENTS = 100;
-
-function storePath(): string {
-  return path.join(app.getPath("userData"), FILE_NAME);
-}
 
 function isEvent(value: unknown): value is CallContextEvent {
   if (!value || typeof value !== "object") return false;
@@ -25,24 +19,16 @@ function isEvent(value: unknown): value is CallContextEvent {
 }
 
 export function loadCallContextEvents(): CallContextEvent[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(storePath(), "utf8")) as unknown;
+    const parsed: unknown = getServiceState(app.getPath("userData"), "native-call-context").get("state");
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isEvent).sort((a, b) => a.startedAt - b.startedAt).slice(-MAX_EVENTS);
-  } catch {
-    return [];
-  }
 }
 
 export function saveCallContextEvent(input: Omit<CallContextEvent, "id">): CallContextEvent {
   const event = { id: randomUUID(), startedAt: input.startedAt, endedAt: input.endedAt,
     summary: input.summary.trim().slice(0, 1200) };
-  const target = storePath();
   const events = [...loadCallContextEvents(), event].slice(-MAX_EVENTS);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temporary = target + ".tmp";
-  fs.writeFileSync(temporary, JSON.stringify(events, null, 2), "utf8");
-  fs.renameSync(temporary, target);
+  getServiceState(app.getPath("userData"), "native-call-context").set("state", events);
   return event;
 }
 

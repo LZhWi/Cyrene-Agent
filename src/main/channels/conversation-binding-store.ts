@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { app } from "electron";
+import { renameWithRetrySync } from "../storage/rename-with-retry";
 import type { ChannelChatType } from "./types";
 
 const STORE_VERSION = 1;
@@ -194,7 +195,7 @@ export class ChannelConversationBindingStore {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const temporaryPath = `${this.filePath}.tmp`;
     fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(temporaryPath, this.filePath);
+    renameWithRetrySync(temporaryPath, this.filePath);
     this.dirty = false;
     this.lastPersistAt = Date.now();
   }
@@ -210,3 +211,4 @@ export function getChannelConversationBindingStore(): ChannelConversationBinding
   }
   return defaultStore;
 }
+

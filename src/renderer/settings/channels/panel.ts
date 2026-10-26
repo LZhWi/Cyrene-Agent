@@ -109,7 +109,7 @@ function renderQqBotDetail(status?: { detail?: Record<string, unknown> }): void 
 
 export interface LogEntry {
   at: string;
-  dir: "incoming" | "outgoing";
+  dir: "incoming" | "outgoing" | "error";
   channel: string;
   senderId: string;
   senderName?: string;
@@ -130,7 +130,7 @@ export function renderChannelsLog(entries: LogEntry[]): void {
       const hh = String(t.getHours()).padStart(2, "0");
       const mm = String(t.getMinutes()).padStart(2, "0");
       const ss = String(t.getSeconds()).padStart(2, "0");
-      const dir = e.dir === "incoming" ? "← 收到" : "→ 回复";
+      const dir = e.dir === "error" ? "⚠ 错误" : e.dir === "incoming" ? "← 收到" : "→ 回复";
       const who = e.senderName ? `${e.senderName} (${e.senderId})` : e.senderId;
       const safe = (s: string) =>
         s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

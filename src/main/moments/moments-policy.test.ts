@@ -3,7 +3,9 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sqliteFixture } from "../../../scripts/testing/sqlite-fixture";
+import { setServiceStateProvider } from "../storage/service-state";
 import {
   buildMomentsEventKey,
   canCharacterModelCall,
@@ -150,18 +152,22 @@ describe("角色模型调用预算", () => {
   });
 });
 
-describe("moments-state.json 持久化", () => {
+describe("moments policy SQLite 持久化", () => {
+  let fixture: ReturnType<typeof sqliteFixture>;
   beforeEach(() => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-moments-policy-"));
+    fixture = sqliteFixture(electronMock.userDataDir);
+    setServiceStateProvider(fixture.provider);
   });
+  afterEach(() => { fixture.close(); fs.rmSync(electronMock.userDataDir, { recursive: true, force: true }); });
 
-  it("save 后 load 能还原；坏文件回退默认状态", () => {
+  it("save 后 load 能还原；不重新读取旧 JSON", () => {
     const state = recordPost(recordEventKey(defaultMomentsPolicyState(), "key-1"), NOW);
     saveMomentsPolicyState(state);
     expect(loadMomentsPolicyState()).toEqual(state);
 
     fs.writeFileSync(path.join(electronMock.userDataDir, "moments-state.json"), "not-json{", "utf8");
-    expect(loadMomentsPolicyState()).toEqual(defaultMomentsPolicyState());
+    expect(loadMomentsPolicyState()).toEqual(state);
   });
 
   it("无文件时返回默认状态", () => {

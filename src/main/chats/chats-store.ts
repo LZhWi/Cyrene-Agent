@@ -1,11 +1,11 @@
-import * as legacy from "./chats-store-json";
-import { getStorageRuntime } from "../storage/storage-backend";
+import type * as legacy from "./chats-store-json";
+import { requireStorageRuntime } from "../storage/storage-backend";
 
 // Every caller, including IPC, plugin services and background writers, selects
 // the same backend. There is no per-operation fallback into the JSON store.
 function forward<K extends keyof typeof legacy>(key: K): typeof legacy[K] {
   return ((...args: unknown[]) => {
-    const store = getStorageRuntime()?.store ?? legacy;
+    const store = requireStorageRuntime().store;
     return (store[key] as (...args: unknown[]) => unknown)(...args);
   }) as typeof legacy[K];
 }
@@ -38,8 +38,8 @@ export const getWorkspaceBinding = forward("getWorkspaceBinding");
 export const clearWorkspaceBinding = forward("clearWorkspaceBinding");
 export const getStorageRecoveryIssues = forward("getStorageRecoveryIssues");
 export const approveStorageRecovery = forward("approveStorageRecovery");
-export const appendProactiveMessage = process.env.CYRENE_SQLITE_ISOLATION === "1" ? (id: string, input: unknown) => {
-  const owner = getStorageRuntime();
+export const appendProactiveMessage = (id: string, input: unknown) => {
+  const owner = requireStorageRuntime();
   if (!owner) throw new Error("SQLITE_DELIVERY_UNAVAILABLE");
   return owner.store.appendProactiveMessage(id, input);
-} : undefined;
+};

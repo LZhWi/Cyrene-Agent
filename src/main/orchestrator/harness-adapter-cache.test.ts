@@ -1,3 +1,7 @@
+import {sqliteFixture} from '../../../scripts/testing/sqlite-fixture';
+import {setServiceStateProvider} from '../storage/service-state';
+const sql=vi.hoisted(()=>({fixture:null as any}));
+vi.mock('../storage/storage-backend',()=>({requireStorageRuntime:()=>sql.fixture,getStorageRuntime:()=>sql.fixture}));
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,11 +26,13 @@ import type { HarnessRunSession } from "./harness/run-store";
 describe("adapter checkpoint cache persistence and recovery", () => {
   beforeEach(() => {
     userData.root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-adapter-cache-"));
+    sql.fixture=sqliteFixture(userData.root);setServiceStateProvider(sql.fixture.provider);
     callLLM.mockReset();
     summarizeHistory.mockReset();
     summarizeHistory.mockResolvedValue("## 原始任务与意图\n- 保留任务\n## 下一步\n- 继续回答");
   });
   afterEach(() => {
+    sql.fixture.close();
     const root = path.resolve(userData.root);
     if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith("cyrene-adapter-cache-")) {
       throw new Error("Unexpected test directory");
@@ -39,7 +45,7 @@ describe("adapter checkpoint cache persistence and recovery", () => {
     let observed: HarnessRunSession | undefined;
     callLLM.mockImplementation(async () => {
       // Inspect the real file before the next model request, not only final-state storage.
-      observed = JSON.parse(fs.readFileSync(path.join(userData.root, "cyrene-runs", "sessions", `${runId}.json`), "utf8"));
+      observed = sql.fixture.call('harness.get',runId);
       return { text: "done", toolCalls: [] };
     });
     await runHarnessWithAdapter({

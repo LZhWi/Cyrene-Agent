@@ -1,4 +1,5 @@
-import { startStorageSubscribers } from "./storage/storage-backend";
+import { getStorageRuntime, startStorageSubscribers } from "./storage/storage-backend";
+import { chatPreferencesSnapshot } from "./plugin-host/chat-preferences";
 import { chatModuleHasOverride } from "./settings/chat-module-routes";
 import { app, dialog, powerMonitor, safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
@@ -190,12 +191,12 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
               title: "昔涟的主动消息",
               identityId: null,
             });
-            // Isolation-only capability: the message and delivery proof commit together.
-            const durableDelivery = (chatsStore as unknown as {
+            // SQLite commits the message and delivery proof together.
+            const durableDelivery = getStorageRuntime() ? (chatsStore as unknown as {
               appendProactiveMessage?: (id: string, input: {
                 runId: string; pluginId: string; text: string; at: number; allowIgnoreFeedback: boolean;
               }) => { conversationId: string; messageId: string; at: string };
-            }).appendProactiveMessage;
+            }).appendProactiveMessage : undefined;
             if (contextRunId && durableDelivery) {
               const result = durableDelivery(session.id, { runId: contextRunId, pluginId, text, at: Date.now(), allowIgnoreFeedback });
               broadcastChatsChanged();
@@ -224,6 +225,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
           onSnapshotFinished: retryVisualHistoryAfterScreenObservation,
         }),
         companionContext: {
+          chatPreferences: () => chatPreferencesSnapshot(loadGeneralSettings()),
           memoryContext: async ({ conversationId, inputMessageId, kinds, signal }) => {
             if (signal?.aborted) throw new Error("通话记忆读取已取消");
             return kinds.includes("call") ? callMemoryContext(chatsStore.getSession(conversationId)?.messages ?? [], inputMessageId, loadCallContextEvents()) : "";

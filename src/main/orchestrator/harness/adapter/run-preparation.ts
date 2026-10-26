@@ -13,6 +13,7 @@ import {
 } from "./prompt-builder";
 import { preparePlanRunContext } from "./plan-lifecycle";
 import { app } from "electron";
+import { harnessRunScope } from "../run-scope";
 
 /**
  * 运行准备阶段：解析线程/运行 ID、计划上下文、恢复快照、提示词层和工具清单，
@@ -90,7 +91,7 @@ export async function prepareHarnessRun(
       "[HarnessAdapter] options.runId is required. CyreneAgent.runWithEvents must populate it before invoking the adapter.",
     );
   }
-  const threadId = options.conversationId ?? "default";
+  const threadId = harnessRunScope(options.conversationId, runId);
   const { planState, planContextBlock } = await preparePlanRunContext({
     mode: options.conversationMode,
     threadId,
@@ -115,7 +116,11 @@ export async function prepareHarnessRun(
   const recovered = options.resumeFromRunId
     ? (() => {
       const previous = runStore.get(options.resumeFromRunId!);
-      if (!previous || previous.conversationId !== threadId) throw new Error("HARNESS_RECOVERY_NOT_FOUND");
+      const sameScope = previous && (options.conversationId !== undefined
+        ? previous.conversationId === threadId
+        : previous.conversationId === "default"
+          || previous.conversationId === harnessRunScope(undefined, previous.runId));
+      if (!sameScope) throw new Error("HARNESS_RECOVERY_NOT_FOUND");
       return prepareHarnessRecovery(previous, {
         workspaceRoot: options.resolvedWorkspaceRoot,
         provider: options.settings.provider,

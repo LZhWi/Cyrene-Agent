@@ -1,3 +1,7 @@
+import {sqliteFixture} from '../../../scripts/testing/sqlite-fixture';
+import {setServiceStateProvider} from '../storage/service-state';
+const sql=vi.hoisted(()=>({fixture:null as any}));
+vi.mock('../storage/storage-backend',()=>({requireStorageRuntime:()=>sql.fixture,getStorageRuntime:()=>sql.fixture}));
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +44,7 @@ import type { HarnessInput } from "./harness";
 describe("runHarnessWithAdapter cancellation context", () => {
   beforeEach(() => {
     userData.root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-harness-adapter-cancel-"));
+    sql.fixture=sqliteFixture(userData.root);setServiceStateProvider(sql.fixture.provider);
     runHarness.mockReset();
     permissionCheck.mockReset();
     getById.mockReset();
@@ -52,6 +57,7 @@ describe("runHarnessWithAdapter cancellation context", () => {
   });
 
   afterEach(() => {
+    sql.fixture.close();
     const root = path.resolve(userData.root);
     if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith("cyrene-harness-adapter-cancel-")) {
       throw new Error("Unexpected test directory; refusing cleanup");

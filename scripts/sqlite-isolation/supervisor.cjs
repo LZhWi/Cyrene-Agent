@@ -3,18 +3,26 @@ const {Worker,parentPort,workerData}=require('node:worker_threads'),path=require
 const control=new Int32Array(workerData.control),requests=new Map();
 let owner,embedding,stopping=false,terminalError,termination,internalId=0;
 const heartbeat=setInterval(()=>Atomics.add(control,1,1),50);
+function settleShared(id,request,bytes){
+ requests.delete(id);clearTimeout(request.timer);
+ const head=new Int32Array(request.shared,0,8),body=new Uint8Array(request.shared,32);
+ body.set(bytes);head[1]=bytes.length;
+ Atomics.store(head,0,1);Atomics.notify(head,0);
+}
 function settle(id,result){
  const request=requests.get(id);if(!request)return;
  let bytes;if(request.shared){
   try{bytes=v8.serialize(result);}catch{return fail(Error('JOINT_RESPONSE_UNKNOWN_OUTCOME:SERIALIZATION'));}
-  if(bytes.length>request.shared.byteLength-32)return fail(Error('JOINT_RESPONSE_UNKNOWN_OUTCOME:TOO_LARGE'));
+  if(bytes.length>request.shared.byteLength-32){
+   // Retain the completed result; resizing must never dispatch a mutation twice.
+   request.responseBytes=bytes;const head=new Int32Array(request.shared,0,8);
+   head[1]=bytes.length;Atomics.store(head,0,2);Atomics.notify(head,0);return;
+  }
+  settleShared(id,request,bytes);return;
  }
  requests.delete(id);clearTimeout(request.timer);
  if(request.resolve){result.error?request.reject(Error(result.error)):request.resolve(result.value);return;}
  if(!request.shared){parentPort.postMessage({requestId:id,...result});return;}
- const head=new Int32Array(request.shared,0,8),body=new Uint8Array(request.shared,32);
- body.set(bytes);head[1]=bytes.length;
- Atomics.store(head,0,1);Atomics.notify(head,0);
 }
 function terminate(){
  return termination??=(async()=>{const results=await Promise.allSettled([owner,embedding].filter(Boolean).map(worker=>worker.terminate()));
@@ -56,6 +64,11 @@ async function stop(message){
 }
 owner=create('owner.cjs','OWNER');
 parentPort.on('message',message=>{
+ if(message.method==='receiveResponse'){
+  const request=requests.get(message.requestId);
+  if(!request?.responseBytes||!(message.shared instanceof SharedArrayBuffer)||message.shared.byteLength<32+request.responseBytes.length){fail(Error('JOINT_RESPONSE_UNKNOWN_OUTCOME:INVALID_BUFFER'));return;}
+  request.shared=message.shared;settleShared(message.requestId,request,request.responseBytes);return;
+ }
  if(message.method==='abort'){fail(Error(message.error??'JOINT_ABORTED_UNKNOWN_OUTCOME'));return;}
  if(terminalError||Atomics.load(control,0)===1){requests.set(message.requestId,message);settle(message.requestId,{error:terminalError??'JOINT_ABORTED_UNKNOWN_OUTCOME',terminal:true});return;}
  if(stopping){requests.set(message.requestId,message);settle(message.requestId,{error:'JOINT_OWNER_STOPPED'});return;}

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SocialAtom, ValidatedSocialAtomOperation } from "./types";
+import type { ServiceState } from "../storage/service-state";
 
 interface SocialAtomFile {
   schemaVersion: 1;
@@ -23,12 +24,18 @@ function isActive(atom: SocialAtom, now: number): boolean {
     && (typeof atom.expiresAt !== "number" || atom.expiresAt > now);
 }
 
-export function createSocialAtomStore(filePath?: string): SocialAtomStore {
+export function createSocialAtomStore(filePath?: string, storage?: () => Pick<ServiceState, "get" | "set">): SocialAtomStore {
   let loaded = false;
   let atoms: SocialAtom[] = [];
 
   const load = (): void => {
     if (loaded) return;
+    if (storage) {
+      const parsed = storage().get("state") as SocialAtomFile;
+      atoms = Array.isArray(parsed.atoms) ? parsed.atoms : [];
+      loaded = true;
+      return;
+    }
     loaded = true;
     if (!filePath || !fs.existsSync(filePath)) return;
     try {
@@ -40,6 +47,7 @@ export function createSocialAtomStore(filePath?: string): SocialAtomStore {
   };
 
   const save = (): void => {
+    if (storage) { storage().set("state", { schemaVersion: 1, atoms }); return; }
     if (!filePath) return;
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const temporaryPath = `${filePath}.tmp`;
@@ -65,6 +73,7 @@ export function createSocialAtomStore(filePath?: string): SocialAtomStore {
 
     applyOperations(conversationId, operations, now = Date.now()) {
       load();
+      const previous = storage ? structuredClone(atoms) : undefined;
       for (const operation of operations) {
         if (operation.operation === "resolve") {
           const target = atoms.find((atom) => (
@@ -101,7 +110,8 @@ export function createSocialAtomStore(filePath?: string): SocialAtomStore {
           atoms.push(operation.atom);
         }
       }
-      save();
+      try { save(); }
+      catch (error) { if (previous) atoms = previous; throw error; }
     },
 
     replaceForTest(next) {

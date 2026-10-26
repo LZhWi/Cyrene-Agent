@@ -1,7 +1,24 @@
 # SQLite 隔离运行支持
 
-这些运行支持文件来自已验收的隔离候选。普通 `npm start` 仍使用 JSON；没有自动迁移或正式 SQLite 开关。
+这些运行支持文件来自已验收的隔离候选。普通 `npm start` 在业务服务启动前完成一次性 SQLite 迁移；新目录也默认使用 SQLite。
 
-`getStorageRuntime()` 仅在 `CYRENE_SQLITE_ISOLATION=1` 时尝试加载，并必须通过 `isolation-boundary.cjs` 的临时安装、数据和用户目录校验。不要直接给正式启动设置这个变量。
+正式构建通过 `scripts/build/sqlite-runtime.mjs` 打包 worker 和运行支持到 `dist/sqlite-runtime`，安装包将其解包到真实路径。正式入口接受显式 `--enable-sqlite`，取得原有 Electron 单实例锁后，在业务服务初始化前执行迁移并退出。启用前应退出应用并备份当前有效用户目录；普通启动会执行同一迁移流程；显式命令用于仅迁移后退出。
+
+迁移在当前有效 userData 的 `.sqlite-storage/generations/<id>` 内创建完整源快照和独立数据库。校验原会话字段、消息字段、插件字段及数据库完整性后，才原子写入 `active.json`。插件回合的 `hostSourceVersion` 是来源绑定新增字段。重复执行已完成迁移返回 unchanged；未完成代保留诊断且不会被选择，重试新建一代。旧 JSON 文件保留。启动遇到损坏的已选指针、回执或缺失数据库会报错，不回退 JSON。
+
+`--rollback-sqlite` 已退役，启动脚本和 Electron 入口均拒绝执行。使用完整快照恢复，不能删除 active.json 切回 JSON。旧回退解析器仅用于识别既有目录切换记录；历史未完成回退仍会阻止启动，需恢复完整快照。
+
+`activation.json` 保留切换意图。意图存在但 active.json 缺失时，正常启动报错；显式重试迁移会复核源快照、回执和数据库后恢复同一代，不重新导入。源数据已变化时拒绝恢复。迁移操作须在主程序单实例锁内执行，不能直接从另一个进程调用模块修改正在运行的用户目录。
+
+`getStorageRuntime()` 在正式目录存在有效迁移指针时加载 SQLite；正式 ready 后缺失指针会报错，不能静默改写 JSON。`CYRENE_SQLITE_ISOLATION=1` 只用于另外的隔离测试入口，必须通过 `isolation-boundary.cjs` 校验。不要给正式启动设置这个变量。宿主事件和主动消息的原子送达按实际后端选择，不依赖隔离变量。
 
 隔离构建须将此目录的 CJS 文件放入隔离 app 根目录、runtime 放入隔离 stage/runtime，并单独构建 SQLite worker/client。当前可复现构建和验收记录位于 `.runtime/life-integration-results-20261025`。正式用户目录及已安装插件不会由这些源码自动替换。
+
+业务服务的任务、用量、动态、渠道历史、送达状态和执行账本在宿主启动时统一导入，校验与完成回执在同一事务中提交。已有 SQLite 命名空间优先；完成后不再读取旧 JSON。插件运行记录亦保存独立导入标记。旧代码仍保留测试及迁移兼容，未物理删除所有 JSON 实现。
+
+退出应用后，可用 npm start -- --snapshot-sqlite=绝对备份路径 创建本地完整配置目录快照，用 npm start -- --restore-sqlite=绝对备份路径 恢复到原有效目录。命令持有单实例锁，不启动业务服务；快照覆盖数据库、附件、配置、插件和 Shell 日志，排除运行锁及临时桥接数据库。恢复前核对文件哈希、迁移回执和数据库完整性，并另存恢复前安全副本。恢复中断会阻止普通启动；再次运行相同恢复命令继续。安全副本由用户确认后清理，不自动删除。快照只支持原目录恢复，不支持跨目录搬迁。
+
+
+业务 facade 现在必须取得 SQLite owner/provider；缺失时抛错，不读写旧业务 JSON。Harness 无宿主会话使用不可见数据库 scope，不创建可见聊天；已删除会话拒绝重新写入。当前目录后产生的旧 Harness 记录单次补导入，已有同 ID SQL 记录优先并记录为 retained，不自动清理冲突文件。
+
+`npm start -- --retire-legacy-json=绝对备份路径` 仅清理迁移回执和源哈希可证明的旧源：先建立并验证完整快照，再逐项复核删除；修改过的源会拒绝清理，未索引的孤立会话、无来源凭据的数据与冲突旧运行保留。该命令须在已完成新版启动导入后运行。配置、宿主原生记忆/RAG、其他插件存储及迁移代原始快照均不在清理范围内。

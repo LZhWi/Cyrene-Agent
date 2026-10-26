@@ -46,18 +46,52 @@ if (!userDataSafety.safe) {
 function startPrimary() {
   // Keep the lock on the stable root, not on a generation that changes after import.
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  const sqliteSupport = app.isPackaged ? path.join(process.resourcesPath, "app.asar.unpacked/dist/sqlite-runtime") : path.resolve(__dirname, "../../sqlite-runtime");
+  const rollbackSqlite = process.argv.includes("--rollback-sqlite");
+  if(rollbackSqlite){console.error("SQLITE_JSON_ROLLBACK_RETIRED: use --restore-sqlite");app.exit(78);return;}
   let committedThisLaunch = false;
   try {
     fs.mkdirSync(startupUserDataPath, { recursive: true });
     const candidate = process.argv.find(arg => arg.startsWith("--import-chat-package="))?.slice("--import-chat-package=".length);
     const rollback = process.argv.includes("--rollback-chat-migration");
+    const sqliteControl = path.join(resolveChatMigrationData(startupUserDataPath), ".sqlite-storage");
+    const sqliteSelected = ["active.json", "activation.json"].some(file => fs.existsSync(path.join(sqliteControl, file)));
+    if((candidate||rollback)&&fs.existsSync(sqliteControl))require(path.join(sqliteSupport,'formal-storage.cjs')).selection(path.dirname(sqliteControl));
+    if (rollbackSqlite && (candidate || rollback || process.argv.includes("--enable-sqlite"))) throw new Error("一次只能执行一个存储迁移操作");
+    if ((candidate || rollback) && (sqliteSelected || process.argv.includes("--enable-sqlite"))) throw new Error("SQLite 启用后不能用旧 JSON 导入或回滚，请先执行保留新数据的存储恢复流程");
     if (candidate && rollback) throw new Error("导入与回滚不能同时执行");
     if (rollback) rollbackChatMigration(startupUserDataPath);
     if (candidate) {
       const prepared = prepareChatMigration(startupUserDataPath, path.resolve(candidate));
       if (!prepared.unchanged && prepared.id) { commitChatMigration(startupUserDataPath, prepared.id); committedThisLaunch = true; }
     }
-    const selected = resolveChatMigrationData(startupUserDataPath);
+    let selected = resolveChatMigrationData(startupUserDataPath);
+    if (!rollbackSqlite && ["rollback.json", "rollback-intent.json"].some(file => fs.existsSync(path.join(selected, ".sqlite-storage", file)))) {
+      selected = require(path.join(sqliteSupport, "rollback-storage.cjs")).resolveRollbackData(selected);
+    }
+    const snapshotArg=process.argv.find(arg=>arg.startsWith('--snapshot-sqlite='))?.slice('--snapshot-sqlite='.length);
+    const restoreArg=process.argv.find(arg=>arg.startsWith('--restore-sqlite='))?.slice('--restore-sqlite='.length);
+    const retireArg=process.argv.find(arg=>arg.startsWith('--retire-legacy-json='))?.slice('--retire-legacy-json='.length);
+    if(retireArg){
+      if(snapshotArg||restoreArg||candidate||rollback||process.argv.includes('--enable-sqlite'))throw Error('一次只能执行一个存储操作');
+      void (async()=>{
+        const options=require(path.join(sqliteSupport,'formal-storage.cjs')).options(selected,sqliteSupport);
+        if(!options)throw Error('SQLITE_NOT_INITIALIZED');
+        const owner=require(path.join(sqliteSupport,'bridge.cjs'))(options);
+        try{owner.start();require(path.join(sqliteSupport,'startup-service-import.cjs')).importServices(selected,owner.call);}
+        finally{await owner.stop();}
+        const result=require(path.join(sqliteSupport,'legacy-retirement.cjs')).retire(selected,path.resolve(retireArg));
+        console.log('[LegacyRetirement]',JSON.stringify({removed:result.removed.length,backup:result.backup}));app.exit(0);
+      })().catch(error=>{console.error('[LegacyRetirement]',error);app.exit(78);});return;
+    }
+    if(snapshotArg||restoreArg){
+      if((snapshotArg&&restoreArg)||candidate||rollback||rollbackSqlite||process.argv.includes('--enable-sqlite'))throw Error('一次只能执行一个存储操作');
+      const snapshots=require(path.join(sqliteSupport,'profile-snapshot.cjs'));
+      const result=restoreArg?snapshots.restore(selected,path.resolve(restoreArg)):snapshots.capture(selected,path.resolve(snapshotArg!));
+      console.log('[SQLiteSnapshot]',JSON.stringify(result));app.exit(0);return;
+    }
+    if(fs.existsSync(path.join(selected,'.sqlite-restore-pending.json')))throw Error('SQLITE_RESTORE_INCOMPLETE: 请用原快照重新执行 --restore-sqlite 完成恢复');
+    if(fs.existsSync(path.join(selected,'.sqlite-storage')))require(path.join(sqliteSupport,'formal-storage.cjs')).selection(selected,process.argv.includes('--enable-sqlite'));
     const safety = inspectUserDataSafety({ userDataPath: selected, appDataPath: process.env.APPDATA || path.dirname(startupUserDataPath), supportedMemorySchemaVersion: CURRENT_MEMORY_SCHEMA_VERSION });
     if (!safety.safe) throw new Error(safety.reason);
     app.setPath("userData", selected);
@@ -67,6 +101,13 @@ function startPrimary() {
   } catch (error) {
     if (committedThisLaunch) rollbackChatMigration(startupUserDataPath);
     dialog.showErrorBox("聊天数据迁移失败", String(error)); app.exit(78); return;
+  }
+  if (process.argv.includes("--enable-sqlite") || rollbackSqlite) {
+    const operation = rollbackSqlite ? require(path.join(sqliteSupport, "rollback-storage.cjs")).rollback : require(path.join(sqliteSupport, "formal-storage.cjs")).migrate;
+    void operation(app.getPath("userData"), sqliteSupport)
+      .then((result: unknown) => { console.log("[SQLiteMigration]", JSON.stringify(result)); app.exit(0); })
+      .catch((error: Error) => { console.error("[SQLiteMigration]", error); app.exit(78); });
+    return;
   }
   try {
     // Lazy imports are required: several stores capture userData at module load.
@@ -83,7 +124,12 @@ function startPrimary() {
 
     if (application.isPrimaryProcess()) {
       void app.whenReady()
-        .then(() => application.start())
+        .then(async () => {
+          // Pre-ready scheme/GPU setup remains synchronous; storage is ready before business startup.
+          await require(path.join(sqliteSupport,'formal-storage.cjs')).migrate(app.getPath('userData'),sqliteSupport);
+          require('./storage/storage-backend').getStorageRuntime();
+          return application.start();
+        })
         .catch((error) => {
           if (committedThisLaunch) rollbackChatMigration(startupUserDataPath);
           return application.handleFatalStartup(error);

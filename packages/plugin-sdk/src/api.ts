@@ -693,7 +693,21 @@ export interface PluginCompanionContextItem {
   observedAt?: string;
 }
 
+export interface PluginChatPreferences {
+  chatBackend: "native" | "companion";
+  proactiveChatMode: "off" | "on";
+  companionProactivePace: "quiet" | "normal" | "lively";
+  proactiveDeliveryTarget: "local" | "wechat" | "feishu";
+  chatSocialContextEnabled: boolean;
+  companionFeedbackLearningEnabled: boolean;
+  companionScreenMonitorEnabled: boolean;
+  companionLifeEnabled: boolean;
+  companionImportantDatesText: string;
+}
+
 export interface PluginCompanionContextService {
+  /** Authoritative native switches, available before plugin background recovery starts. */
+  chatPreferences?(): PluginChatPreferences;
   /** Frozen-turn context for memory interpretation; never a verbatim user quote. Minecraft is reserved. */
   memoryContext?(input: { conversationId: string; inputMessageId: string; kinds: Array<"call" | "minecraft">; signal?: AbortSignal }): Promise<string>;
   /**

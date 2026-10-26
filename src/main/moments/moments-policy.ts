@@ -8,8 +8,7 @@
 // 省 token。去重键粒度是 run 不是 conversation：
 // 一个会话里上午发包、晚上修 bug 是两件事，按会话去重会误杀第二件。
 
-import * as fs from "fs";
-import * as path from "path";
+import { getServiceState } from "../storage/service-state";
 import { createHash } from "crypto";
 import { app } from "electron";
 import type { MomentsLiveliness } from "./character-reactions";
@@ -145,17 +144,10 @@ export function recordCharacterModelCall(state: MomentsPolicyState, now: number)
   return { ...state, characterModelCalls: { date, count } };
 }
 
-// ── 持久化（moments-state.json，照 proactive-state-store 模式） ───
-
-function getStatePath(): string {
-  return path.join(app.getPath("userData"), "moments-state.json");
-}
+// ── 持久化（统一 SQLite owner） ───
 
 export function loadMomentsPolicyState(): MomentsPolicyState {
-  try {
-    const p = getStatePath();
-    if (!fs.existsSync(p)) return defaultMomentsPolicyState();
-    const raw = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<MomentsPolicyState>;
+    const raw = getServiceState(app.getPath("userData"), "moments-policy").get("state") as Partial<MomentsPolicyState>;
     const base = defaultMomentsPolicyState();
     return {
       ...base,
@@ -164,15 +156,8 @@ export function loadMomentsPolicyState(): MomentsPolicyState {
       characterModelCalls: { ...base.characterModelCalls, ...(raw.characterModelCalls ?? {}) },
       recentEventKeys: Array.isArray(raw.recentEventKeys) ? raw.recentEventKeys : [],
     };
-  } catch {
-    return defaultMomentsPolicyState();
-  }
 }
 
 export function saveMomentsPolicyState(state: MomentsPolicyState): void {
-  try {
-    fs.writeFileSync(getStatePath(), JSON.stringify(state, null, 2), "utf8");
-  } catch (err) {
-    console.warn("[Moments] save policy state failed:", err);
-  }
+  getServiceState(app.getPath("userData"), "moments-policy").set("state", state);
 }

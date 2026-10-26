@@ -111,9 +111,9 @@ beforeAll(() => {
   (globalThis as Record<string, unknown>).__shellJobTestUserData = tmpDir;
 });
 
-afterAll(() => {
+afterAll(async () => {
   // 兜底收尸：断言失败提前退出时仍终止所有运行中的任务
-  disposeAllShellJobs();
+  await disposeAllShellJobs();
   try {
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   } catch {

@@ -1,6 +1,7 @@
 import * as fs from "fs"
 import * as path from "path"
 import { app } from "electron"
+import { getServiceState } from "../storage/service-state"
 import type { ChannelId } from "../channels/types"
 
 export type RelationshipChannel = "desktop" | ChannelId
@@ -41,10 +42,6 @@ const EMPTY_DATA: RelationshipLogData = {
 
 const MAX_ENTRIES = 500
 const MAX_DAILY_SUMMARIES = 90
-
-function defaultFilePath(): string {
-  return path.join(app.getPath("userData"), "relationship-log.json")
-}
 
 function localDate(ts: number): string {
   const d = new Date(ts)
@@ -117,7 +114,8 @@ function deriveSignal(userText: string, userMood: string): {
   }
 }
 
-function readData(filePath: string): RelationshipLogData {
+function readData(filePath?: string): RelationshipLogData {
+  if (filePath === undefined) return getServiceState(app.getPath("userData"), "native-relationship").get("state")
   try {
     if (!fs.existsSync(filePath)) return { ...EMPTY_DATA, entries: [], dailySummaries: [] }
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<RelationshipLogData>
@@ -130,7 +128,8 @@ function readData(filePath: string): RelationshipLogData {
   }
 }
 
-function writeData(filePath: string, data: RelationshipLogData): void {
+function writeData(filePath: string | undefined, data: RelationshipLogData): void {
+  if (filePath === undefined) { getServiceState(app.getPath("userData"), "native-relationship").set("state", data); return }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8")
 }
@@ -155,7 +154,8 @@ function summarizeDate(date: string, entries: RelationshipLogEntry[]): Relations
 }
 
 export class RelationshipLogStore {
-  constructor(private readonly filePath = defaultFilePath()) {}
+  // Explicit file paths are retained for isolated JSON comparison fixtures only.
+  constructor(private readonly filePath?: string) {}
 
   async recordTurn(input: RelationshipTurnInput): Promise<RelationshipLogEntry | null> {
     const userText = input.userText.trim()

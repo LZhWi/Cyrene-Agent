@@ -174,7 +174,7 @@ export class PluginManager {
    * 单个监听器同步抛错或异步失败只记录日志，不影响其余监听器。
    */
   async publishHostEvent<T = unknown>(event: string, payload: T): Promise<void> {
-    if (process.env.CYRENE_SQLITE_ISOLATION === "1"
+    if (["turn:started", "turn:finished", "prompt:accepted", "conversation:changed", "assistant-message:feedback"].includes(event)
       && await import("../main/storage/storage-backend").then(m => m.persistStorageHostEvent(event, payload))) return;
     return this.eventBus.emit(qualifyHostEvent(event), payload);
   }

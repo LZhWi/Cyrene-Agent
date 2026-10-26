@@ -99,6 +99,12 @@ vi.mock("./chats/chats-store", () => ({
   getSession: mocks.getSession,
 }));
 
+// Bridge unit tests do not start an Electron profile or the SQLite owner.
+vi.mock("./storage/storage-backend", () => ({
+  prepareNativeStorageTurn: vi.fn().mockResolvedValue(undefined),
+  failNativeStorageTurn: vi.fn().mockResolvedValue(undefined),
+}));
+
 
 vi.mock("./user-choice", () => ({
   requestUserClarification: mocks.requestUserClarification,
@@ -283,6 +289,21 @@ describe("agui-bridge sticker event ordering", () => {
         runId: ack.runId,
       },
     );
+  });
+
+  it("陪伴插件未就绪时拒绝运行并结束忙碌状态，不构建残缺提示词", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "not-ready", mode: "chat" });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const buildOptions = vi.fn();
+    const lifecycle = { onUserMessage: vi.fn(), onConversationStarted: vi.fn(), onConversationEnded: vi.fn() };
+    registerAgUiIpc(buildOptions, vi.fn(), () => null, lifecycle, undefined, undefined,
+      () => "companion", () => { throw new Error("陪伴聊天插件尚未运行"); });
+    await expect(mocks.handlers.get(IPC.AGUI_RUN)!({ sender: { isDestroyed: () => false, send: vi.fn() } },
+      { sessionId: "not-ready", messages: [] })).rejects.toThrow("陪伴聊天插件尚未运行");
+    expect(buildOptions).not.toHaveBeenCalled();
+    expect(lifecycle.onConversationEnded).toHaveBeenCalledOnce();
   });
 
   it("本轮固定桌面 Chat 记忆开关，设置中途变化也不写原生历史索引", async () => {

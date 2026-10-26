@@ -360,6 +360,7 @@ export function registerAgUiIpc(
   ipcOption?: IpcScope,
   pendingTurns?: PendingTurnLifecycle,
   getChatBackend?: () => "native" | "companion",
+  assertCompanionReady?: () => void,
 ): void {
   const ipc = ipcOption ?? createIpcScope();
   buildOptionsFn = buildOptions;
@@ -441,6 +442,10 @@ export function registerAgUiIpc(
     }
     const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
     const chatBackendSnapshot = getChatBackend?.() === "companion" ? "companion" : "native";
+    if (mode === "chat" && chatBackendSnapshot === "companion") {
+      try { assertCompanionReady?.(); }
+      catch (error) { lifecycle?.onConversationEnded(); throw error; }
+    }
     if ((mode === "work" || mode === "code" || mode === "learn") && !session.workspaceBinding?.workspaceRoot) {
       lifecycle?.onConversationEnded();
       throw new Error(`${mode} 模式需要先绑定项目工作区`);

@@ -4,6 +4,7 @@ import path from "node:path";
 import type * as Legacy from "../chats/chats-store-json";
 import type { PluginStorage } from "../../plugins/types";
 import type { PluginManager } from "../../plugins/manager";
+import { setServiceStateProvider } from './service-state';
 
 type Queue = { bootstrap(): Promise<void>; whenIdle(): Promise<void>; view(): unknown };
 interface Runtime {
@@ -17,18 +18,46 @@ interface Runtime {
 }
 let runtime: Runtime | undefined, pump: any;
 let ready: unknown;
-/** Opt-in is accepted only inside this disposable installation. No implicit migration. */
+let supportDirectory: string;
+setServiceStateProvider((root, namespace) => {
+  if(path.resolve(root)!==path.resolve(app.getPath('userData')))return undefined;
+  const owner=getStorageRuntime();if(!owner)return undefined;
+  if(!owner.call('services.initialized',namespace))throw Error('SQLITE_STARTUP_IMPORT_INCOMPLETE:'+namespace);
+  return {get:key=>owner.call('services.get',namespace,key),set:(key,value)=>owner.call('services.set',namespace,key,value),all:()=>owner.call('services.all',namespace),call:(method,...args)=>owner.call(method,...args)};
+});
+/** Desktop startup selects SQLite before services run; missing/invalid selection fails closed after ready. */
 export function getStorageRuntime(): Runtime | undefined {
   if (runtime) return runtime;
-  if (process.env.CYRENE_SQLITE_ISOLATION !== "1") return undefined;
-  const stage = path.resolve(app.getAppPath(), ".."), data = path.resolve(process.env.JOINT_DATA ?? "");
-  require(path.join(app.getAppPath(), "isolation-boundary.cjs"))(stage, data, app.getPath("userData"));
-  const candidate: Runtime = require(path.join(app.getAppPath(), "bridge.cjs"))({
-    runtime: path.join(stage, "runtime"), data, snapshot: path.join(stage, "snapshot"), report: process.env.JOINT_OWNER,
-  });
-  try { ready = candidate.start(); runtime = candidate; }
+  let options: unknown;
+  if (process.env.CYRENE_SQLITE_ISOLATION === "1") {
+    const stage = path.resolve(app.getAppPath(), ".."), data = path.resolve(process.env.JOINT_DATA ?? "");
+    supportDirectory = app.getAppPath();
+    require(path.join(supportDirectory, "isolation-boundary.cjs"))(stage, data, app.getPath("userData"));
+    options = { runtime: path.join(stage, "runtime"), data, snapshot: path.join(stage, "snapshot"), report: process.env.JOINT_OWNER };
+  } else {
+    const control = path.join(app.getPath("userData"), ".sqlite-storage");
+    if (!fs.existsSync(control)) {
+      if(app.isReady?.())throw Error('SQLITE_NOT_INITIALIZED');
+      return undefined;
+    }
+    supportDirectory = app.isPackaged ? path.join(process.resourcesPath, "app.asar.unpacked/dist/sqlite-runtime") : path.resolve(__dirname, "../../../sqlite-runtime");
+    options = require(path.join(supportDirectory, "formal-storage.cjs")).options(app.getPath("userData"), supportDirectory);
+    if(!options){if(app.isReady?.())throw Error('SQLITE_NOT_INITIALIZED');return undefined;}
+  }
+  const candidate: Runtime = require(path.join(supportDirectory, "bridge.cjs"))(options);
+  try {
+    ready = candidate.start();
+    require(path.join(supportDirectory,'startup-service-import.cjs')).importServices(app.getPath('userData'),candidate.call);
+    runtime = candidate;
+  }
   catch (error) { void candidate.stop().catch(() => {}); throw error; }
   return runtime;
+}
+export function requireStorageRuntime(profile?: string): Runtime {
+  if(profile&&path.resolve(profile)!==path.resolve(app.getPath('userData')))throw Error('SQLITE_PROFILE_MISMATCH');
+  const owner=getStorageRuntime();
+  if(!owner)throw Error('SQLITE_NOT_INITIALIZED');
+  return owner;
 }
 export function getStorageReady() { return ready; }
 export function pluginStorageBackend(rootDir: string): PluginStorage | undefined {
@@ -41,7 +70,7 @@ export async function startStorageSubscribers(manager: PluginManager) {
   const owner = getStorageRuntime(); if (!owner) return;
   if (pump) throw new Error("SQLITE_SUBSCRIBERS_ALREADY_STARTED");
   await owner.controllers.get("companion-memory")?.bootstrap();
-  pump = require(path.join(app.getAppPath(), "event-pump.cjs"))({
+  pump = require(path.join(supportDirectory, "event-pump.cjs"))({
     call: owner.callAsync,
     publish: (event: any) => manager.deliverStoredHostEvent(event.type, event),
     settle: async () => { await manager.drainHostEvents(); await owner.controllers.get("companion-memory")?.whenIdle(); },

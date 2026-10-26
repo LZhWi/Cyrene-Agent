@@ -5,12 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HarnessRunStore } from "./run-store";
 import type { AgentState } from "./types";
 import type { ChatMessage } from "../vendors/types";
+const backend=vi.hoisted(()=>({current:null as any}));
+vi.mock('../../storage/storage-backend',()=>({requireStorageRuntime:()=>{if(!backend.current)throw Error('SQLITE_NOT_INITIALIZED');return backend.current;}}));
+import {sqliteFixture} from '../../../../scripts/testing/sqlite-fixture';
+const fixtures:ReturnType<typeof sqliteFixture>[]=[];
 
 const roots: string[] = [];
 
 function createStore() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-harness-run-"));
   roots.push(root);
+  backend.current=sqliteFixture(root);fixtures.push(backend.current);
   let now = 1_000;
   return {
     root,
@@ -36,19 +41,25 @@ function createRun(store: HarnessRunStore) {
 }
 
 afterEach(() => {
+  for(const fixture of fixtures.splice(0))fixture.close();backend.current=null;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("HarnessRunStore", () => {
-  it.each(["missing", "corrupt", "incomplete"])("rebuilds a %s index from authoritative run files", (kind) => {
-    const { root, store } = createStore();
-    createRun(store);
-    const indexPath = path.join(root, "cyrene-runs", "index.json");
-    if (kind === "missing") fs.unlinkSync(indexPath);
-    else fs.writeFileSync(indexPath, kind === "corrupt" ? "broken" : "[]");
-    const restarted = new HarnessRunStore(root);
-    expect(restarted.getLatestInterrupted("chat-1")?.runId).toBe("run-1");
-    expect(restarted.get("run-1")?.messages).toEqual([{ role: "user", content: "整理项目结构" }]);
+  it('commits checkpoints without JSON and deletes session plus events',()=>{
+    const {root,store}=createStore();createRun(store);store.checkpoint('run-1',{rounds:3});store.markTerminal('run-1','completed');
+    expect(new HarnessRunStore(root).get('run-1')?.status).toBe('completed');
+    expect(fs.existsSync(path.join(root,'cyrene-runs'))).toBe(false);
+    store.deleteConversation('chat-1');expect(store.get('run-1')).toBeNull();expect(backend.current.call('harness.audit','run-1')).toEqual([]);
+  });
+  it('fails closed without a backend',()=>{backend.current=null;expect(()=>new HarnessRunStore('unused')).toThrow('SQLITE_NOT_INITIALIZED');});
+
+  it.each(["missing", "corrupt", "incomplete"])("ignores a %s legacy index while recovering SQLite", (kind) => {
+    const {root,store}=createStore();createRun(store);
+    if(kind!=="missing"){fs.mkdirSync(path.join(root,'cyrene-runs'));fs.writeFileSync(path.join(root,'cyrene-runs/index.json'),kind==='corrupt'?'broken':'[]');}
+    const restarted=new HarnessRunStore(root);
+    expect(restarted.getLatestInterrupted('chat-1')?.runId).toBe('run-1');
+    expect(restarted.get('run-1')?.messages).toEqual([{role:'user',content:'整理项目结构'}]);
   });
   it("persists a main-run checkpoint separately from the chat transcript", () => {
     const { root, store, tick } = createStore();
@@ -70,7 +81,7 @@ describe("HarnessRunStore", () => {
       state: { todoItems: [{ id: "inspect", status: "in_progress" }] },
       toolOutputs: [{ toolCallId: "call-1" }],
     });
-    expect(fs.existsSync(path.join(root, "cyrene-runs", "sessions", "run-1.json"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "cyrene-runs", "sessions", "run-1.json"))).toBe(false);
   });
 
   it("persists a committed compaction cache epoch in the run checkpoint", () => {
@@ -138,94 +149,10 @@ describe("HarnessRunStore", () => {
     expect(store.get("run-1")?.state.todoItems).toEqual([]);
   });
 
-  it("writes session and index files as single-line JSON", () => {
-    const { root, store } = createStore();
-    createRun(store);
 
-    const sessionRaw = fs.readFileSync(path.join(root, "cyrene-runs", "sessions", "run-1.json"), "utf8");
-    const indexRaw = fs.readFileSync(path.join(root, "cyrene-runs", "index.json"), "utf8");
-    // 机器格式（events.jsonl 本就单行）：去掉 pretty-print 后文件不得含换行
-    expect(sessionRaw).not.toContain("\n");
-    expect(indexRaw).not.toContain("\n");
-    expect(JSON.parse(sessionRaw)).toMatchObject({ runId: "run-1" });
-    expect(JSON.parse(indexRaw)).toEqual([expect.objectContaining({ runId: "run-1" })]);
-  });
 
-  it("debounces index writes during recordTool and checkpoint, flushing once", () => {
-    vi.useFakeTimers();
-    try {
-      const { root, store } = createStore();
-      createRun(store);
-      const indexPath = path.join(root, "cyrene-runs", "index.json");
-      const afterCreate = fs.readFileSync(indexPath, "utf8");
 
-      store.recordTool("run-1", { toolCallId: "call-1", toolName: "read_file", sideEffect: "read_only", status: "started" });
-      store.recordTool("run-1", { toolCallId: "call-1", toolName: "read_file", sideEffect: "read_only", status: "committed" });
-      store.checkpoint("run-1", { rounds: 2 });
 
-      // 防抖窗口内 index 不落盘（session 文件每次都写，index 是唯一防抖对象）
-      expect(fs.readFileSync(indexPath, "utf8")).toBe(afterCreate);
-
-      vi.advanceTimersByTime(500);
-      const flushed = JSON.parse(fs.readFileSync(indexPath, "utf8"));
-      expect(flushed).toEqual([expect.objectContaining({ runId: "run-1", status: "running" })]);
-      // 消费方侧的 session 数据不受 index 防抖影响
-      expect(store.get("run-1")?.rounds).toBe(2);
-      expect(store.get("run-1")?.toolCalls).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("flushes the index immediately on markTerminal and never writes stale state back", () => {
-    vi.useFakeTimers();
-    try {
-      const { root, store } = createStore();
-      createRun(store);
-      // 调度 lazy 写（pending 状态下进入终态）
-      store.recordTool("run-1", { toolCallId: "call-1", toolName: "read_file", sideEffect: "read_only", status: "committed" });
-      store.markTerminal("run-1", "completed");
-      const indexPath = path.join(root, "cyrene-runs", "index.json");
-      // 未推进 fake timer，index 已是终态（markTerminal 立即刷盘）
-      expect(JSON.parse(fs.readFileSync(indexPath, "utf8")))
-        .toEqual([expect.objectContaining({ runId: "run-1", status: "completed" })]);
-
-      // stale 防御：残留的 lazy 回调触发后也不得把 stale 状态写回
-      vi.advanceTimersByTime(1000);
-      expect(JSON.parse(fs.readFileSync(indexPath, "utf8")))
-        .toEqual([expect.objectContaining({ runId: "run-1", status: "completed" })]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("corrects stale index rows from session files on initialize", () => {
-    const { root, store } = createStore();
-    createRun(store);
-    store.markTerminal("run-1", "completed");
-
-    // 模拟防抖/崩溃遗留的 stale index：行还是 running，但 session 文件已是 completed
-    const indexPath = path.join(root, "cyrene-runs", "index.json");
-    const rows = JSON.parse(fs.readFileSync(indexPath, "utf8")) as Array<{ runId: string; status: string }>;
-    rows[0]!.status = "running";
-    fs.writeFileSync(indexPath, JSON.stringify(rows, null, 2), "utf8");
-
-    // 重启：以 session 文件为权威校正行状态
-    new HarnessRunStore(root);
-    expect(JSON.parse(fs.readFileSync(indexPath, "utf8")))
-      .toEqual([expect.objectContaining({ runId: "run-1", status: "completed" })]);
-  });
-
-  it("drops orphan index rows whose session file is missing on initialize", () => {
-    const { root, store } = createStore();
-    createRun(store);
-    fs.rmSync(path.join(root, "cyrene-runs", "sessions", "run-1.json"));
-
-    new HarnessRunStore(root);
-
-    const rows = JSON.parse(fs.readFileSync(path.join(root, "cyrene-runs", "index.json"), "utf8"));
-    expect(rows).toEqual([]);
-  });
 
   it("logs write amplification metrics on markTerminal", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

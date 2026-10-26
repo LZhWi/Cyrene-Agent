@@ -7,9 +7,10 @@ const FILES = ['cyrene.sqlite', 'unified/plugin-state.json'];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const json = value => JSON.stringify(value);
 
-function boundary(basePath) {
+function boundary(basePath, formal = false) {
   const base = fs.realpathSync(basePath);
-  if (path.resolve(basePath) !== base || !/^sqlite-candidate-[a-z0-9-]+$/.test(path.basename(base))
+  if (formal) require('./data-boundary.cjs').formalControl(base);
+  else if (path.resolve(basePath) !== base || !/^sqlite-candidate-[a-z0-9-]+$/.test(path.basename(base))
     || path.basename(path.dirname(base)) !== '.runtime') throw Error('PAIR_ISOLATION_REQUIRED');
   return value => {
     const target = path.resolve(value), relative = path.relative(base, target);
@@ -29,7 +30,7 @@ function writeNew(file, bytes) {
 }
 function open(file, readOnly = false) {
   if (!fs.existsSync(file)) throw Error('PAIR_DATABASE_MISSING');
-  const db = new DatabaseSync(file, { readOnly });
+  const db = new DatabaseSync(path.toNamespacedPath(file), { readOnly });
   db.exec('PRAGMA busy_timeout=5000');
   return db;
 }
@@ -82,8 +83,8 @@ function checkBundle(guard, directory, allowPartial = false) {
   } finally { db.close(); }
 }
 
-function createCheckpointStore({ isolationRoot, root: directory, point = () => {} }) {
-  const guard = boundary(isolationRoot), root = guard(directory);
+function createCheckpointStore({ isolationRoot, root: directory, point = () => {}, formal = false }) {
+  const guard = boundary(isolationRoot, formal), root = guard(directory);
   const databaseFile = guard(path.join(root, FILES[0])), aggregateFile = guard(path.join(root, FILES[1]));
   function load() {
     const db = open(databaseFile, true);

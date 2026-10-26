@@ -11,9 +11,9 @@ function makeServices(): CoreServices {
     cita: {} as never,
     social: {} as never,
     tts: {} as never,
-    ttsSession: {} as never,
+    ttsSession: { shutdown: vi.fn() } as never,
     embedding: { scheduleStartupRefreshes: vi.fn() } as never,
-    proactive: {} as never,
+    proactive: { shutdown: vi.fn() } as never,
     git: { dispose: vi.fn() } as never,
     lsp: { disposeAll: vi.fn() } as never,
     screenshot: { shutdown: vi.fn() } as never,
@@ -77,7 +77,7 @@ function makeCoreDeps(calls: string[], overrides: Partial<CoreDependencies> = {}
     } as never),
     startPlugins: async () => {
       calls.push("plugins-start");
-      return { stop: vi.fn(async () => { calls.push("plugins-stop"); }) } as never;
+      return { publishHostLifecycleBarrier: vi.fn(async () => undefined), stop: vi.fn(async () => { calls.push("plugins-stop"); }) } as never;
     },
     createScheduler: () => ({ initialize: () => { calls.push("scheduler-initialize"); }, start: vi.fn(() => { calls.push("scheduler-start"); }), stop: vi.fn() } as never),
     registerCoreIpc: () => { calls.push("register-core-ipc"); },
@@ -106,6 +106,7 @@ describe("startCore", () => {
     const calls: string[] = [];
     await startCore(makeCoreDeps(calls));
     expect(calls.indexOf("register-core-ipc")).toBeLessThan(calls.indexOf("chat-load"));
+    expect(calls.indexOf("register-core-ipc")).toBeLessThan(calls.indexOf("plugins-start"));
     // 提醒中心装配必须晚于 IPC 注册、早于任何渲染页加载（toast 窗口预加载会 invoke getAll）
     expect(calls.indexOf("wire-toast-center")).toBeGreaterThan(calls.indexOf("register-core-ipc"));
     expect(calls.indexOf("wire-toast-center")).toBeLessThan(calls.indexOf("chat-load"));

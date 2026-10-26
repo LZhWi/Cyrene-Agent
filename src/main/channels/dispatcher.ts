@@ -22,6 +22,7 @@ import type { ChannelRateLimiter } from "./rate-limiter";
 import type { KeyedQueue } from "./keyed-queue";
 import type { ChannelDeliveryService } from "./delivery-service";
 import type { OutgoingComposer } from "./outgoing-composer";
+import { channelReceipt } from './durable-delivery';
 import {
   makeSessionId,
   type ChannelContext,
@@ -139,6 +140,21 @@ export class ChannelDispatcher {
     context: DispatchContext,
   ): Promise<OutgoingMessage | null> {
     const { sessionId } = context;
+    const receipt=channelReceipt(msg);
+    if(receipt?.saved){
+      if(receipt.saved.status==='delivered'){
+        await receipt.commit(this.deps.context);return null;
+      }
+      // An interrupted/failed segmented send can already have external effects.
+      // Never automatically resend an outcome whose delivery is uncertain.
+      if(receipt.saved.status==='committed')return null;
+      if(['sending','failed'].includes(receipt.saved.status)) {
+        const warning='[发送回执待核对] 上次发送结果未确认，不自动重发。';
+        console.warn(LOG,warning);
+        appendLog({dir:'error',channel:msg.channel,senderId:msg.senderId,chatId:msg.chatId,text:warning});
+        return null;
+      }
+    }
     // 绑定只选择历史与消息镜像目标，Agent 运行身份始终属于原渠道。
     this.deps.context.recordIncomingSession(msg, context);
     rememberProactiveChannelRecipient(msg, sessionId);
@@ -221,8 +237,10 @@ export class ChannelDispatcher {
     });
 
     try {
+      receipt?.write({status:'sending',context,prepared:{assistantText:prepared.assistantText,stickerId:prepared.stickerId}});
       const deliveryResult = await this.deps.delivery.send(prepared.message);
       if (!deliveryResult.ok) {
+        receipt?.write({status:'failed',error:deliveryResult.error});
         console.warn(LOG, `发送失败 [${msg.channel}]:`, deliveryResult.error);
         try {
           appendLog({
@@ -238,6 +256,8 @@ export class ChannelDispatcher {
         }
         return null;
       }
+
+      receipt?.write({status:'delivered',context,prepared:{assistantText:prepared.assistantText,stickerId:prepared.stickerId}});
 
       // 出站消息广播到桌面端
       if (this.settings.mirrorToDesktop) {
@@ -272,7 +292,8 @@ export class ChannelDispatcher {
       }
 
       // 助手上下文只在渠道确认发送成功后提交。
-      await this.deps.context.appendAssistantContext(msg, context, prepared);
+      if(receipt)await receipt.commit(this.deps.context);
+      else await this.deps.context.appendAssistantContext(msg, context, prepared);
 
       return prepared.message;
     } finally {

@@ -1,5 +1,5 @@
 import { resolveChatModuleModel } from "../../settings/chat-module-routes";
-import path from "node:path";
+import { getServiceState } from "../../storage/service-state";
 import { getSession } from "../../chats/chats-store";
 import { app } from "electron";
 import { loadModelSettings } from "../../settings/model-settings";
@@ -33,7 +33,7 @@ export interface SocialContextServiceDeps {
 }
 
 export function createSocialContextService(deps: SocialContextServiceDeps): SocialContextService {
-  const store = createSocialAtomStore(path.join(app.getPath("userData"), "chat-social-atoms.json"));
+  const store = createSocialAtomStore(undefined, () => getServiceState(app.getPath("userData"), "native-social"));
 
   const scheduler = createSocialContextScheduler({
     store,

@@ -8,6 +8,7 @@
  */
 
 import type { IpcScope } from "./ipc-scope";
+import { disposeAllShellJobs } from "../orchestrator/tools/builtin-tools/shell-job-manager";
 import type { StartupReadiness } from "./readiness";
 import type { ShutdownCoordinator } from "./shutdown";
 import type { WindowActivationBroker } from "./window-activation";
@@ -161,11 +162,11 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
   const scheduler = deps.createScheduler(runtime, services);
   scheduler.initialize();
 
+  // 插件启动也可能打开渲染窗口；先注册其可能调用的宿主 IPC。
+  deps.registerCoreIpc({ ipc: shell.ipc, runtime, services, channels, scheduler });
+
   // 插件严格晚于内置 adapter id 预留，避免插件抢占 feishu/wechat/qq 等内置 id。
   const plugins = await timedStep("startPlugins", () => deps.startPlugins(services, scheduler, runtime));
-
-  // 注册聊天渲染进程可能调用的全部 IPC 处理器 —— 必须先于 chat.load()
-  deps.registerCoreIpc({ ipc: shell.ipc, runtime, services, channels, scheduler });
 
   // 提醒中心装配：IPC 注册先于 toast 窗口预加载（渲染页加载即可能 invoke getAll）
   deps.wireToastCenter({ ipc: shell.ipc, windowManager: shell.windowManager });
@@ -213,7 +214,9 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
       await plugins.stop();
     },
   });
-  shutdown.register({ id: "sqlite-owner", phase: "flushPersistence", dispose: stopStorageRuntime });
+  shutdown.register({ id: "moments-store", phase: "flushPersistence", dispose: drainMomentsWrites });
+  shutdown.register({ id: "sqlite-owner", phase: "closeStorage", dispose: stopStorageRuntime });
+  shutdown.register({ id: "shell-jobs", phase: "stopLocalResources", dispose: disposeAllShellJobs });
   shutdown.register({
     id: "channels",
     phase: "stopExternalConsumers",
@@ -260,3 +263,5 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
   return { runtime, services, channels, plugins, scheduler };
 }
 import { stopStorageRuntime, stopStorageSubscribers } from "../storage/storage-backend";
+
+import { drainMomentsWrites } from '../moments/moments-store';

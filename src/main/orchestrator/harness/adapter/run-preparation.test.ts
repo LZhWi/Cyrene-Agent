@@ -5,7 +5,7 @@ const { trace, preparePlanRunContext, buildHarnessPromptLayers, materializeHarne
   preparePlanRunContext: vi.fn(),
   buildHarnessPromptLayers: vi.fn(),
   materializeHarnessStartTranscript: vi.fn(),
-  runStore: { create: vi.fn() },
+  runStore: { create: vi.fn(), get: vi.fn() },
 }));
 
 vi.mock("./plan-lifecycle", () => ({ preparePlanRunContext }));
@@ -36,7 +36,31 @@ describe("harness run preparation", () => {
       return [...input.messages, { role: "user", content: "materialized" }];
     });
     runStore.create.mockReset();
+    runStore.get.mockReset();
     runStore.create.mockImplementation(() => trace.push("create"));
+  });
+
+  it("isolates headless runs without changing explicit conversation scopes", async () => {
+    const options = { settings: { provider: "test", model: "model" }, messages: [] };
+    const first = await prepareHarnessRun({ ...options, runId: "one" } as never, new AbortController().signal);
+    const second = await prepareHarnessRun({ ...options, runId: "two" } as never, new AbortController().signal);
+    expect(first.threadId).toBe("harness-headless:one");
+    expect(second.threadId).toBe("harness-headless:two");
+    const explicit = await prepareHarnessRun({ ...options, runId: "three", conversationId: "default" } as never, new AbortController().signal);
+    expect(explicit.threadId).toBe("default");
+  });
+
+  it.each(["default", "harness-headless:old"])("accepts headless recovery from %s", async (scope) => {
+    runStore.get.mockReturnValue({ runId: "old", conversationId: scope });
+    const result = await prepareHarnessRun({ runId: "new", resumeFromRunId: "old", settings: {}, messages: [] } as never, new AbortController().signal);
+    expect(result.threadId).toBe("harness-headless:new");
+    expect(runStore.create).toHaveBeenCalledWith(expect.objectContaining({ resumedFromRunId: "old" }));
+  });
+
+  it("rejects headless recovery of a visible conversation", async () => {
+    runStore.get.mockReturnValue({ runId: "old", conversationId: "visible-chat" });
+    await expect(prepareHarnessRun({ runId: "new", resumeFromRunId: "old", settings: {}, messages: [] } as never, new AbortController().signal)).rejects.toThrow("HARNESS_RECOVERY_NOT_FOUND");
+    expect(runStore.create).not.toHaveBeenCalled();
   });
 
   it("materializes the startup transcript before creating the run store", async () => {

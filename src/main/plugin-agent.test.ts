@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginTool } from "../plugins/api";
 import { createPluginAgentRunner } from "./plugin-agent";
+const durableFactory=vi.hoisted(()=>vi.fn());
+vi.mock('./storage/plugin-agent-persistence',()=>({beginPluginAgentRun:durableFactory}));
 
 function goalTool(patch: Partial<PluginTool> = {}): PluginTool {
   return {
@@ -44,6 +46,25 @@ function builtOptions() {
 }
 
 describe("plugin-agent", () => {
+  it('缓存的持久化终态不重新构建模型请求',async()=>{
+    const result={text:'cached',terminal:{status:'completed'},rounds:1};
+    durableFactory.mockReturnValueOnce({result});
+    const buildOptions=vi.fn(),runHarness=vi.fn();
+    const run=createPluginAgentRunner({pluginId:'minecraft-bot',pluginSignal:new AbortController().signal,userDataPath:'unused',agentRuntime:{buildOptions} as never,runHarness});
+    expect(await run({runId:'cached',goal:'fixture',tools:[goalTool()]})).toEqual(result);
+    expect(buildOptions).not.toHaveBeenCalled();expect(runHarness).not.toHaveBeenCalled();
+  });
+  it('接入检查点与终态提交，提交失败向调用者透传并标记中断',async()=>{
+    const checkpoint=vi.fn(),interrupt=vi.fn(),complete=vi.fn(()=>{throw Error('commit failed');}),ledger={};
+    durableFactory.mockReturnValueOnce({checkpoint,interrupt,complete,ledger});
+    const runHarness=vi.fn(async(input:any)=>{
+      expect(input.executionLedger).toBe(ledger);input.onCheckpoint({messages:[],state:{}});
+      return {finalAnswer:'done',finalState:{uncertainEffects:[]},rounds:1,terminal:{status:'completed'}};
+    });
+    const run=createPluginAgentRunner({pluginId:'minecraft-bot',pluginSignal:new AbortController().signal,userDataPath:'unused',agentRuntime:{buildOptions:vi.fn(async()=>builtOptions())} as never,runHarness:runHarness as never});
+    await expect(run({runId:'commit',goal:'fixture',tools:[goalTool()]})).rejects.toThrow('commit failed');
+    expect(checkpoint).toHaveBeenCalledOnce();expect(complete).toHaveBeenCalledOnce();expect(interrupt).toHaveBeenCalledOnce();
+  });
   it("拒绝缺少显式 effectKind 的目标工具", async () => {
     const runHarness = vi.fn();
     const runGoal = createPluginAgentRunner({

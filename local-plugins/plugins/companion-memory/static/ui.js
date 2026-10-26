@@ -125,6 +125,10 @@ async function refresh() {
     $("native-auto-extract").checked = nativeSettings.autoExtractEnabled;
     $("native-prompt-injection").checked = nativeSettings.promptInjectionEnabled;
     $("native-social-context").checked = nativeSettings.socialContextEnabled;
+    for (const id of ["native-capture", "native-auto-extract", "native-prompt-injection", "native-social-context"]) {
+      $(id).disabled = Boolean(state.native?.hostPreferencesManaged);
+      $(id).title = state.native?.hostPreferencesManaged ? "由主程序偏好设置中的聊天上下文增强统一控制" : "";
+    }
     $("native-moments-injection").checked = nativeSettings.momentsInjectionEnabled;
     $("native-retry").disabled = Boolean(state.native?.processing) || !nativeSettings.captureEnabled
       || !(state.native?.pending > 0 || (nativeSettings.autoExtractEnabled && state.native?.lastError?.kind === "extract"));

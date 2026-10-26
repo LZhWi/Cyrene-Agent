@@ -416,7 +416,7 @@ const plugin: CyrenePlugin = {
       },
       stopSignal: ctx.signal,
     });
-    const offChatPreferences = ctx.events.on<{
+    const applyChatPreferences = (preferences: {
       chatBackend?: "native" | "companion";
       proactiveChatMode?: "off" | "on";
       proactiveDeliveryTarget?: "local" | "wechat" | "feishu";
@@ -426,7 +426,7 @@ const plugin: CyrenePlugin = {
       companionScreenMonitorEnabled?: boolean;
       companionLifeEnabled?: boolean;
       companionImportantDatesText?: string;
-    }>("host:chat-preferences:changed", (preferences) => {
+    }) => {
       proactive.cancel();
       const companion = preferences.chatBackend === "companion";
       const nextMemoryEnabled = preferences.chatSocialContextEnabled === true;
@@ -454,7 +454,11 @@ const plugin: CyrenePlugin = {
         life.configure(nextLifeEnabled, nextImportantDatesText);
         proactive.cancel();
       }
-    });
+    };
+    const offChatPreferences = ctx.events.on("host:chat-preferences:changed", applyChatPreferences);
+    // Apply native switches before recovery promises can start background work.
+    const initialPreferences = ctx.deps.companionContext?.chatPreferences?.();
+    if (initialPreferences) applyChatPreferences(initialPreferences);
     const offTurnStarted = ctx.events.on<PluginTurnStartedEvent>("host:turn:started", (event) => {
       if (event.source === "desktop" && event.mode === "chat") {
         return proactive.noteUserActivity(event.conversationId === proactive.view().lastDeliveredConversationId);
@@ -543,6 +547,10 @@ const plugin: CyrenePlugin = {
     });
     ctx.onDispose(stop);
     registerUi(ctx, async (action, data) => {
+      if (["save-memory-link", "save-proactive-settings", "save-screen-monitor-settings", "save-life-settings"].includes(action)
+        && ctx.deps.companionContext?.chatPreferences) {
+        throw new Error("这些开关由主程序偏好设置统一管理，请在原生设置页面修改");
+      }
       switch (action) {
         case "state": return { chat: chat.view(), model: await models.view(), memoryEnabled, proactive: proactive.view(), screenMonitor: screenMonitor.view(), life: life.view(), worldbook: worldbook.view() };
         case "save-model": if (chat.view().busy || maintenance || proactive.view().busy || life.view().planning.busy) throw new Error("请等待当前模型请求结束"); return models.save(data);

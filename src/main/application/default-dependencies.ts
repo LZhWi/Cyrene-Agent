@@ -1,4 +1,5 @@
 import { ensureChatGptBridge } from "../chatgpt-oauth/service";
+import { chatPreferencesSnapshot } from "../plugin-host/chat-preferences";
 import { isChatGptOAuth } from "../../shared/chatgpt-oauth";
 /**
  * 默认应用依赖装配（真正的组合根胶水层）：
@@ -238,17 +239,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
   const publishChatPreferences = (manager = pluginManager): Promise<void> => {
     if (!manager) return Promise.resolve();
     const preferences = loadGeneralSettings();
-    return manager.publishHostEvent("chat-preferences:changed", {
-      chatBackend: preferences.chatBackend,
-      proactiveChatMode: preferences.proactiveChatMode,
-      companionProactivePace: preferences.companionProactivePace,
-      proactiveDeliveryTarget: preferences.proactiveDeliveryTarget,
-      chatSocialContextEnabled: preferences.chatSocialContextEnabled,
-      companionFeedbackLearningEnabled: preferences.companionFeedbackLearningEnabled,
-      companionScreenMonitorEnabled: preferences.companionScreenMonitorEnabled,
-      companionLifeEnabled: preferences.companionLifeEnabled,
-      companionImportantDatesText: preferences.companionImportantDatesText,
-    });
+    return manager.publishHostEvent("chat-preferences:changed", chatPreferencesSnapshot(preferences));
   };
   // 生命周期事件发布器：插件系统就绪前发布的事件没有监听器，直接丢弃
   const lifecyclePublisher = createLifecyclePublisher({
@@ -681,6 +672,12 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           ipc,
           pendingTurnLifecycle,
           () => loadGeneralSettings().chatBackend,
+          () => {
+            if (!pluginManager?.isRunning("companion-chat")) throw new Error("陪伴聊天插件尚未运行，请在插件页面启用独立陪伴聊天后重试");
+            if (loadGeneralSettings().chatSocialContextEnabled && !pluginManager?.isRunning("companion-memory")) {
+              throw new Error("已开启聊天上下文增强，但独立记忆引擎尚未运行，请启用后重试");
+            }
+          },
         );
 
         // 应用更新 IPC：安装走受控退出；autoUpdater 兜底路径进入同一协调器

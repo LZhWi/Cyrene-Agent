@@ -136,14 +136,16 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   const proactiveConversationLifecycle = {
-    onUserMessage: () => proactiveChatService?.invalidateForUserMessage(),
+    onUserMessage: () => {
+      if (options.loadGeneralSettings().chatBackend !== "companion") proactiveChatService?.invalidateForUserMessage();
+    },
     onConversationStarted: () => {
       updateNormalConversationBusy(1);
-      proactiveChatService?.normalConversationStarted();
+      if (options.loadGeneralSettings().chatBackend !== "companion") proactiveChatService?.normalConversationStarted();
     },
     onConversationEnded: () => {
       updateNormalConversationBusy(-1);
-      if (normalConversationBusyCount === 0) proactiveChatService?.normalConversationEnded();
+      if (normalConversationBusyCount === 0 && options.loadGeneralSettings().chatBackend !== "companion") proactiveChatService?.normalConversationEnded();
     },
   };
 

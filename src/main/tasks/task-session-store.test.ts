@@ -4,11 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TaskSessionStore } from "./task-session-store";
 
+import {sqliteFixture} from '../../../scripts/testing/sqlite-fixture';
+import {setServiceStateProvider} from '../storage/service-state';
+const fixtures:ReturnType<typeof sqliteFixture>[]=[];
 const temporaryRoots: string[] = [];
 
 function createStore() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-task-session-"));
   temporaryRoots.push(root);
+  const fixture=sqliteFixture(root);fixtures.push(fixture);setServiceStateProvider(fixture.provider);
   let now = 1_000;
   let nextId = 1;
   return {
@@ -35,6 +39,7 @@ function createInput() {
 }
 
 afterEach(() => {
+  for(const fixture of fixtures.splice(0))fixture.close();
   for (const root of temporaryRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -55,7 +60,7 @@ describe("TaskSessionStore", () => {
       messages: [{ role: "user", content: "检查取消传播并列出证据。" }],
       trace: [],
     });
-    expect(fs.existsSync(path.join(root, "cyrene-tasks", "sessions", "task-1.json"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "cyrene-tasks", "sessions", "task-1.json"))).toBe(false);
     expect(fs.existsSync(path.join(root, "cyrene-chats", "sessions", "task-1.json"))).toBe(false);
     expect(store.get("task-1")).toMatchObject({ id: "task-1" });
     expect(store.listForParent("chat-2")).toEqual([]);

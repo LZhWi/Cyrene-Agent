@@ -49,13 +49,20 @@ function broadcastChanged(senderWebContents?: WebContents | null): void {
   }
 }
 
-function messageSourceFingerprint(message: ChatMessage): string {
+export function messageSourceFingerprint(message: ChatMessage): string {
   return JSON.stringify({
     role: message.role,
     content: message.content,
     at: message.at,
     modelContext: message.modelContext,
-    attachments: message.attachments,
+    attachments: message.attachments?.map(attachment => {
+      if (attachment.kind !== "image") return attachment;
+      const { visualIndexCaption, visualIndexSummary, visualIndexedAt, ...source } = attachment;
+      return source;
+    }),
+    sticker: message.sticker,
+    callEvent: message.callEvent,
+    weatherCard: (message as ChatMessage & { weatherCard?: unknown }).weatherCard,
   });
 }
 

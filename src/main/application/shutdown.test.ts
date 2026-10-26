@@ -171,3 +171,12 @@ describe("createShutdownCoordinator", () => {
     expect(log).toHaveBeenCalled();
   });
 });
+
+it("closes shared storage only after asynchronous persistence finishes", async () => {
+ const events: string[]=[];
+ const coordinator=createShutdownCoordinator({readiness:createStartupReadiness()});
+ coordinator.register({id:'owner',phase:'closeStorage',dispose:async()=>{events.push('closed');}});
+ coordinator.register({id:'pending-write',phase:'flushPersistence',dispose:async()=>{await Promise.resolve();events.push('written');}});
+ await coordinator.requestControlledShutdown({reason:'test',finalAction:()=>{events.push('exit');}});
+ expect(events).toEqual(['written','closed','exit']);
+});

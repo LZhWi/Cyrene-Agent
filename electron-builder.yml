@@ -8,6 +8,7 @@ directories:
   output: release
 asar: true
 asarUnpack:
+  - "dist/sqlite-runtime/**/*"
   # Transformers.js 会静态加载 sharp；连同 libvips 依赖 DLL 一起解包，确保原生扩展能找到依赖。
   - "**/node_modules/sharp/**"
   - "**/vendor/srt-win/**"

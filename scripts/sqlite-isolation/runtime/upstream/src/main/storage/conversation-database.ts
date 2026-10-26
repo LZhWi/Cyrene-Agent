@@ -44,7 +44,7 @@ export class ConversationDatabase {
   private retired = false;
   constructor(readonly userDataRoot: string) {
     fs.mkdirSync(userDataRoot, { recursive: true });
-    this.db = new DatabaseSync(path.join(userDataRoot, "cyrene.sqlite"));
+    this.db = new DatabaseSync(path.toNamespacedPath(path.join(userDataRoot, "cyrene.sqlite")));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
    CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
    CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, record_json TEXT, max_seq INTEGER NOT NULL DEFAULT 0,

@@ -18,6 +18,8 @@ export interface DispatchContext {
 
 /** 写入绑定桌面会话时携带的渠道元数据。 */
 export interface BoundConversationMessageMetadata {
+  messageId?: string;
+  sourceSessionId?: string;
   channel: ChannelId;
   chatType: "private" | "group";
   senderName?: string;
@@ -27,6 +29,7 @@ export interface BoundConversationMessageMetadata {
 }
 
 export interface ChannelContext {
+  onJournalCommitted?: (conversationId:string|null)=>void;
   /** 解析一次绑定并生成本条消息使用的上下文快照。 */
   resolveDispatchContext(sessionId: string): DispatchContext;
   /** 迁移旧历史键并记录会话与原始发送者的关系。 */
@@ -50,6 +53,9 @@ export interface ChannelContext {
 }
 
 export interface CreateChannelContextOptions {
+  onJournalCommitted?: (conversationId:string|null)=>void;
+  appendJournal?: (sessionId: string, conversationId: string | null, role: 'user' | 'assistant', content: string, metadata: BoundConversationMessageMetadata) => boolean | Promise<boolean>;
+  durableHistory?: () => boolean;
   resolveBoundConversationId?: (sessionId: string) => string | null;
   loadRecentChannelHistory?: (
     sessionId: string,
@@ -63,6 +69,7 @@ export interface CreateChannelContextOptions {
     sessionId: string,
     role: "user" | "assistant",
     content: string,
+    messageId?: string,
   ) => void | Promise<void>;
   appendBoundConversationMessage?: (
     conversationId: string,
@@ -112,6 +119,7 @@ export function createChannelContext(
   options: CreateChannelContextOptions,
 ): ChannelContext {
   return {
+    onJournalCommitted:options.onJournalCommitted,
     resolveDispatchContext(sessionId): DispatchContext {
       let requestedBoundConversationId: string | null = null;
       try {
@@ -163,10 +171,15 @@ export function createChannelContext(
 
     async appendIncomingContext(msg, context): Promise<void> {
       const modelText = formatChannelUserText(msg);
+      if(await options.appendJournal?.(context.sessionId,context.boundConversationId,'user',msg.text,{
+        channel:msg.channel,chatType:msg.chatType??'private',senderName:msg.senderName,
+        messageId:msg.messageId,sourceSessionId:context.sessionId,modelContext:modelText===msg.text?undefined:modelText,
+      }))return;
       try {
-        await options.appendChannelHistory(context.sessionId, "user", modelText);
+        await options.appendChannelHistory(context.sessionId, "user", modelText, ...(msg.messageId ? [msg.messageId] : []));
       } catch (err) {
         console.warn(LOG, "渠道用户历史写入失败:", err);
+        if(options.durableHistory?.())throw err;
       }
 
       if (!context.boundConversationId || !options.appendBoundConversationMessage) {
@@ -179,6 +192,7 @@ export function createChannelContext(
           msg.text,
           {
             channel: msg.channel,
+            ...(msg.messageId ? { messageId: msg.messageId, sourceSessionId: context.sessionId } : {}),
             chatType: msg.chatType ?? "private",
             senderName: msg.senderName,
             modelContext: modelText === msg.text ? undefined : modelText,
@@ -186,18 +200,25 @@ export function createChannelContext(
         );
       } catch (err) {
         console.warn(LOG, "绑定会话用户消息写入失败:", err);
+        if(options.durableHistory?.())throw err;
       }
     },
 
     async appendAssistantContext(msg, context, prepared): Promise<void> {
+      if(await options.appendJournal?.(context.sessionId,context.boundConversationId,'assistant',prepared.assistantText,{
+        channel:msg.channel,chatType:msg.chatType??'private',senderName:msg.senderName,
+        messageId:msg.messageId,sourceSessionId:context.sessionId,sticker:prepared.stickerId??undefined,
+      }))return;
       try {
         await options.appendChannelHistory(
           context.sessionId,
           "assistant",
           prepared.assistantText,
+          ...(msg.messageId ? [msg.messageId] : []),
         );
       } catch (err) {
         console.warn(LOG, "渠道助手历史写入失败:", err);
+        if(options.durableHistory?.())throw err;
       }
 
       if (!context.boundConversationId || !options.appendBoundConversationMessage) {
@@ -210,6 +231,7 @@ export function createChannelContext(
           prepared.assistantText,
           {
             channel: msg.channel,
+            ...(msg.messageId ? { messageId: msg.messageId, sourceSessionId: context.sessionId } : {}),
             chatType: msg.chatType ?? "private",
             senderName: msg.senderName,
             modelContext: undefined,
@@ -218,6 +240,7 @@ export function createChannelContext(
         );
       } catch (err) {
         console.warn(LOG, "绑定会话助手消息写入失败:", err);
+        if(options.durableHistory?.())throw err;
       }
     },
   };

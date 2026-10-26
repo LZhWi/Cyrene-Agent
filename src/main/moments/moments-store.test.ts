@@ -1,7 +1,11 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {sqliteFixture} from '../../../scripts/testing/sqlite-fixture';
+let fixture:ReturnType<typeof sqliteFixture>;
+afterEach(()=>{fixture?.close();fs.rmSync(electronMock.userDataDir,{recursive:true,force:true});});
 
 const electronMock = vi.hoisted(() => ({
   userDataDir: "",
@@ -24,9 +28,28 @@ async function freshStore() {
 }
 
 describe("moments store", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-moments-"));
+    fixture=sqliteFixture(electronMock.userDataDir);
+    (await import('../storage/service-state')).setServiceStateProvider(fixture.provider);
+  });
+
+  it('SQLite 删除提交失败时保留内存动态和图片，清理读取失败不推翻已提交结果',async()=>{
+    const state={schemaVersion:2,posts:[{id:'protected',author:'user',text:'keep',createdAt:1,media:[]}],comments:[],reactions:[]};
+    let fail=true;
+    const {setServiceStateProvider}=await import('../storage/service-state');
+    setServiceStateProvider(()=>({get:()=>structuredClone(state),set:()=>{},all:()=>({}),call:(method:string)=>{
+      if(method==='services.momentsCleanup')throw Error('cleanup unavailable');
+      if(method==='services.momentsApply'&&fail)throw Error('commit failed');
+    }}));
+    const store=await freshStore(),directory=path.join(store.getMomentsMediaRootDir(),'protected');
+    fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(path.join(directory,'1.png'),'fixture');
+    await expect(store.deletePost('protected')).rejects.toThrow('commit failed');
+    expect(store.listFeed()[0].post.text).toBe('keep');expect(fs.existsSync(path.join(directory,'1.png'))).toBe(true);
+    fail=false;expect((await store.deletePost('protected')).applied).toBe(true);expect(store.listFeed()).toHaveLength(0);
+    // The durable cleanup queue retries later; a cleanup outage must not delete early.
+    expect(fs.existsSync(path.join(directory,'1.png'))).toBe(true);
   });
 
   it("创建用户动态并按 createdAt 倒序出现在 feed", async () => {
@@ -171,11 +194,13 @@ describe("moments store", () => {
     expect(store.listFeed()).toHaveLength(0);
   });
 
-  it("落盘后可恢复（moments.json 持久化）", async () => {
+  it("SQLite 落盘后可恢复且不写旧 JSON", async () => {
     const store = await freshStore();
     await store.createUserPost({ title: "持久", text: "重启还在" });
 
     vi.resetModules();
+    (await import('../storage/service-state')).setServiceStateProvider(fixture.provider);
+    expect(fs.existsSync(path.join(electronMock.userDataDir,'moments.json'))).toBe(false);
     const reloaded = await import("./moments-store");
     reloaded.initialize();
     const feed = reloaded.listFeed();
@@ -402,6 +427,8 @@ describe("moments store", () => {
 
     // 重启恢复：sourceTaskId 随 schemaVersion 2 持久化
     vi.resetModules();
+    (await import('../storage/service-state')).setServiceStateProvider(fixture.provider);
+    expect(fs.existsSync(path.join(electronMock.userDataDir,'moments.json'))).toBe(false);
     const reloaded = await import("./moments-store");
     reloaded.initialize();
     const item = reloaded.getFeedItem(post.value.id);

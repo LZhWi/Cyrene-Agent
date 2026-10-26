@@ -1,60 +1,25 @@
 // Token 用量持久化存储
 //
-// 存储位置：<userData>/token-usage.json
+// 存储位置：统一 SQLite owner 的 usage 命名空间
 // 数据结构：按天 ISO 日期聚合，方便查询任意时间段。
 //
 // 写入策略：record() 立即更新内存缓存，1 秒防抖落盘（避免高频写）。
 // 读取策略：首次访问时从磁盘加载到内存，后续直接读缓存。
 
 import { app } from "electron";
-import * as fs from "fs";
-import * as path from "path";
+import { getServiceState, type ServiceState } from './storage/service-state';
 
-export interface TokenUsageDay {
-  input: number;
-  output: number;
-  /** 厂商明确上报的缓存读取 token。 */
-  hit: number;
-  /** 同一批已上报缓存明细的输入中，未命中缓存的 token。 */
-  miss: number;
-  /** 厂商明确上报的缓存创建 token（cache_creation_input_tokens）。 */
-  cacheCreation: number;
-  /** 返回了缓存明细的请求数；0 表示该日没有可用的缓存数据。 */
-  cacheUsageRequests?: number;
-  requests: number;
-  /** 所有发出的模型请求数（含厂商未返回 usage 的）；用于统计覆盖率。 */
-  attemptedRequests?: number;
-  /** 从 v2 起按真实模型名聚合；旧数据不具备此维度。 */
-  models?: Record<string, TokenUsageModel>;
-}
-
-export interface TokenUsageModel {
-  input: number;
-  output: number;
-  hit: number;
-  miss: number;
-  /** 厂商明确上报的缓存创建 token（cache_creation_input_tokens）。 */
-  cacheCreation: number;
-  /** 厂商实际返回缓存统计的请求数；缺失代表历史数据或暂无可用数据。 */
-  cacheUsageRequests?: number;
-  requests: number;
-  /** 所有发出的模型请求数（含厂商未返回 usage 的）；用于统计覆盖率。 */
-  attemptedRequests?: number;
-}
-
+import { applyUsageToDay, type TokenUsageDay, type TokenUsageModel } from '../shared/token-usage-counters';
+export { applyUsageToDay, type TokenUsageDay, type TokenUsageModel } from '../shared/token-usage-counters';
+import { randomUUID } from 'node:crypto';
 interface TokenUsageStore {
   schemaVersion: 2;
   days: Record<string, TokenUsageDay>; // key = "2026-06-19"
 }
 
 
-const DEFAULT_STORE: TokenUsageStore = { schemaVersion: 2, days: {} };
 const DEBOUNCE_MS = 1000;
 const MAX_WAIT_MS = 5000;
-
-function getFilePath(): string {
-  return path.join(app.getPath("userData"), "token-usage.json");
-}
 
 function todayKey(): string {
   const d = new Date();
@@ -62,6 +27,8 @@ function todayKey(): string {
 }
 
 let cache: TokenUsageStore | null = null;
+let sql: ServiceState | undefined;
+let pendingUsage: Array<{id:string;day:string;kind:string;args:unknown[]}> = [];
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -70,26 +37,13 @@ function clearTimers(): void {
   if (maxWaitTimer) { clearTimeout(maxWaitTimer); maxWaitTimer = null; }
 }
 
-function loadFromDisk(): TokenUsageStore {
-  const filePath = getFilePath();
-  try {
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<TokenUsageStore>;
-      return {
-        schemaVersion: 2,
-        days: parsed.days && typeof parsed.days === "object" ? parsed.days : {},
-      };
-    }
-  } catch (err) {
-    console.warn("[token-usage] 加载失败，重置为空:", err);
-  }
-  return { ...DEFAULT_STORE, days: {} };
+function ensureLoaded(): TokenUsageStore {
+  if(!cache){sql=getServiceState(app.getPath('userData'),'usage');cache=sql.get('state');}
+  return cache!;
 }
 
-function ensureLoaded(): TokenUsageStore {
-  if (!cache) cache = loadFromDisk();
-  return cache;
+function flushScheduled(): void {
+  try { flushNow(); } catch (error) { console.warn('[token-usage] 定时落盘失败，保留内存等待下次请求或退出重试:', error); }
 }
 
 function scheduleFlush(): void {
@@ -97,83 +51,33 @@ function scheduleFlush(): void {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     if (maxWaitTimer) { clearTimeout(maxWaitTimer); maxWaitTimer = null; }
-    flushNow();
+    flushScheduled();
   }, DEBOUNCE_MS);
   if (!maxWaitTimer) {
     maxWaitTimer = setTimeout(() => {
       maxWaitTimer = null;
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-      flushNow();
+      flushScheduled();
     }, MAX_WAIT_MS);
   }
 }
 
 function flushNow(): void {
   if (!cache) return;
-  const filePath = getFilePath();
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  // 原子写：先写 .tmp 再 rename
-  const tmpPath = filePath + ".tmp";
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(cache, null, 2), "utf8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    console.warn("[token-usage] 落盘失败:", err);
-  }
+  if(sql){if(pendingUsage.length){sql.call('services.usageBatch','usage',pendingUsage);pendingUsage=[];}return;}
+  throw Error("SQLITE_SERVICE_UNAVAILABLE:usage");
 }
 
 // ── public API ──
 
 /** 将一次模型调用累加到指定日期；导出供统计逻辑测试与复用。 */
-export function applyUsageToDay(
-  day: TokenUsageDay,
-  input: number,
-  output: number,
-  requests = 1,
-  cachedInput?: number,
-  model?: string,
-  cacheCreation?: number,
-): void {
-  day.input += Math.max(0, Math.round(input || 0));
-  day.output += Math.max(0, Math.round(output || 0));
-  day.requests += Math.max(0, requests);
-  if (typeof cachedInput === "number" && Number.isFinite(cachedInput)) {
-    const normalizedInput = Math.max(0, Math.round(input || 0));
-    const normalizedCachedInput = Math.max(0, Math.min(normalizedInput, Math.round(cachedInput)));
-    day.hit += normalizedCachedInput;
-    day.miss += normalizedInput - normalizedCachedInput;
-    day.cacheUsageRequests = (day.cacheUsageRequests ?? 0) + Math.max(0, requests);
-  }
-  if (typeof cacheCreation === "number" && Number.isFinite(cacheCreation)) {
-    day.cacheCreation = (day.cacheCreation ?? 0) + Math.max(0, Math.round(cacheCreation));
-  }
-  const modelName = model?.trim() || "未归类";
-  const byModel = day.models ?? {};
-  const modelDay = byModel[modelName] ?? { input: 0, output: 0, hit: 0, miss: 0, cacheCreation: 0, requests: 0 };
-  modelDay.input += Math.max(0, Math.round(input || 0));
-  modelDay.output += Math.max(0, Math.round(output || 0));
-  modelDay.requests += Math.max(0, requests);
-  if (typeof cachedInput === "number" && Number.isFinite(cachedInput)) {
-    const normalizedInput = Math.max(0, Math.round(input || 0));
-    const normalizedCachedInput = Math.max(0, Math.min(normalizedInput, Math.round(cachedInput)));
-    modelDay.hit += normalizedCachedInput;
-    modelDay.miss += normalizedInput - normalizedCachedInput;
-    modelDay.cacheUsageRequests = (modelDay.cacheUsageRequests ?? 0) + Math.max(0, requests);
-  }
-  if (typeof cacheCreation === "number" && Number.isFinite(cacheCreation)) {
-    modelDay.cacheCreation = (modelDay.cacheCreation ?? 0) + Math.max(0, Math.round(cacheCreation));
-  }
-  byModel[modelName] = modelDay;
-  day.models = byModel;
-}
-
 /** 记录一次 API 调用的 token 用量（异步累加到当天）。 */
 export function recordUsage(input: number, output: number, requests = 1, cachedInput?: number, model?: string, cacheCreation?: number): void {
   const store = ensureLoaded();
   const key = todayKey();
   const day = store.days[key] ?? { input: 0, output: 0, hit: 0, miss: 0, cacheCreation: 0, requests: 0 };
   applyUsageToDay(day, input, output, requests, cachedInput, model, cacheCreation);
+  if(sql)pendingUsage.push({id:randomUUID(),day:key,kind:"usage",args:[input,output,requests,cachedInput,model,cacheCreation]});
   store.days[key] = day;
   scheduleFlush();
 }
@@ -183,6 +87,7 @@ export function recordRequest(model?: string): void {
   const store = ensureLoaded();
   const key = todayKey();
   const day = store.days[key] ?? { input: 0, output: 0, hit: 0, miss: 0, cacheCreation: 0, requests: 0 };
+  if(sql)pendingUsage.push({id:randomUUID(),day:key,kind:"request",args:[model]});
   day.attemptedRequests = (day.attemptedRequests ?? 0) + 1;
   const modelName = model?.trim() || "未归类";
   const byModel = day.models ?? {};
@@ -200,6 +105,8 @@ export function clearUsage(days?: Record<string, TokenUsageDay>): void {
     for (const key of Object.keys(days)) delete days[key];
     return;
   }
+  ensureLoaded();
+  if(sql){sql.call('services.usageClear','usage');pendingUsage=[];}
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -208,7 +115,7 @@ export function clearUsage(days?: Record<string, TokenUsageDay>): void {
     clearTimeout(maxWaitTimer);
     maxWaitTimer = null;
   }
-  cache = { ...DEFAULT_STORE, days: {} };
+  cache = { schemaVersion: 2, days: {} };
   flushNow();
 }
 

@@ -55,6 +55,16 @@ afterEach(() => {
 });
 
 describe("QQ 监听保存预检", () => {
+  it("回执警告显示为错误，不伪装成回复且转义内容", async () => {
+    document.body.innerHTML += '<div id="channels-log-list"></div>';
+    const { renderChannelsLog } = await import("./panel");
+    renderChannelsLog([{at:new Date().toISOString(),dir:"error",channel:"qq",senderId:"u",chatId:"g",text:"[发送回执待核对] <img src=x>"}]);
+    const list = document.getElementById("channels-log-list")!;
+    expect(list.textContent).toContain("⚠ 错误");
+    expect(list.textContent).not.toContain("→ 回复");
+    expect(list.querySelector("img")).toBeNull();
+    expect(list.textContent).toContain("发送回执待核对");
+  });
   it("auto 解析为 WSL 时先生成 Token，第二次点击才保存并重连", async () => {
     const bridge = await load();
     save();

@@ -8,6 +8,10 @@ const source = await readFile(new URL("../../electron-builder.yml", import.meta.
 const installerInclude = await readFile(new URL("../../build/installer/installer.nsh", import.meta.url), "utf8");
 const config = load(source);
 
+test("SQLite workers and support use unpacked runtime files", () => {
+  assert.ok(config.asarUnpack.some(pattern => minimatch("dist/sqlite-runtime/runtime/upstream/src/main/storage/conversation-database-worker.js", pattern)));
+});
+
 test("sharp native binaries and bundled libvips are unpacked", () => {
   for (const file of [
     "node_modules/sharp/build/Release/sharp-win32-x64.node",

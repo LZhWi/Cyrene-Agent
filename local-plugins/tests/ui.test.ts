@@ -5,6 +5,25 @@ import { describe, expect, it, vi } from "vitest";
 const { JSDOM } = require("jsdom");
 
 describe("聊天界面的模型来源入口", () => {
+  it("原生管理的读取提取开关只读显示，朋友圈独立开关仍可编辑", async () => {
+    const root = path.resolve("plugins/companion-memory/static");
+    const dom = new JSDOM(readFileSync(path.join(root, "ui.html"), "utf8"), { runScripts: "outside-only" });
+    const state = { revision: 0, pending: 0, turns: [], entries: [], evidence: [],
+      profiles: { l0: {}, l1: {}, l0Locked: false },
+      native: { hostPreferencesManaged: true, settings: { captureEnabled: true, autoExtractEnabled: true,
+        promptInjectionEnabled: true, socialContextEnabled: true, momentsInjectionEnabled: false }, pending: 0, completed: 0 } };
+    dom.window.companion = { invoke: async () => ({ ok: true, data: state }) };
+    try {
+      dom.window.eval(readFileSync(path.join(root, "ui.js"), "utf8"));
+      await vi.waitFor(() => expect(dom.window.document.getElementById("native-status").textContent).toContain("读取已启用"));
+      for (const id of ["native-capture", "native-auto-extract", "native-prompt-injection", "native-social-context"]) {
+        const input = dom.window.document.getElementById(id);
+        expect(input.disabled).toBe(true);
+        expect(input.title).toContain("主程序偏好设置");
+      }
+      expect(dom.window.document.getElementById("native-moments-injection").disabled).toBe(false);
+    } finally { dom.window.close(); }
+  });
   it("复选框不会继承文本输入框的宽度", () => {
     const css = readFileSync(path.resolve("plugins/companion-memory/static/ui.css"), "utf8");
     expect(css).toContain('input:not([type="checkbox"])');

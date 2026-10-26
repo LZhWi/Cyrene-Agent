@@ -14,7 +14,8 @@ export type ShutdownPhase =
   | "drainBackgroundWork"
   | "stopExternalProviders"
   | "stopLocalResources"
-  | "flushPersistence";
+  | "flushPersistence"
+  | "closeStorage";
 
 // 固定清理阶段顺序（与 composition-root 计划一致），不得用“反向注册顺序”替代。
 const SHUTDOWN_PHASE_ORDER: readonly ShutdownPhase[] = [
@@ -26,6 +27,7 @@ const SHUTDOWN_PHASE_ORDER: readonly ShutdownPhase[] = [
   "stopExternalProviders",
   "stopLocalResources",
   "flushPersistence",
+  "closeStorage",
 ];
 
 export interface ShutdownCoordinator {

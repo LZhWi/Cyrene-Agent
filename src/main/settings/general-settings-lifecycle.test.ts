@@ -42,6 +42,15 @@ function createHarness(petVisible = true) {
 
 describe("general settings window lifecycle", () => {
   beforeEach(() => vi.clearAllMocks());
+  it("切换后端立即使原生主动生成失效", () => {
+    const h = createHarness();
+    const invalidate = vi.fn();
+    handleGeneralSettingsChanged({ ...h.settings, chatBackend: "native" },
+      { ...h.settings, chatBackend: "companion" }, {
+        ...h.deps, proactiveLifecycle: { getProactiveChatService: () => ({ invalidate }) } as any,
+      });
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
 
   it("keeps a pet hidden from the tray hidden when changing ASR provider (#85)", () => {
     const h = createHarness();

@@ -7,7 +7,11 @@ type EntityType = typeof TYPES[number];
 export interface ExtractedEntity { name: string; type: EntityType; aliases?: string[] }
 interface EntityNode extends ExtractedEntity { id: string; aliases: string[]; mentionCount: number; firstMentionedAt: number; lastMentionedAt: number }
 interface EntityRelation { id: string; sourceId: string; targetId: string; relation: string; confidence: number; strength: number }
-interface State { version: 1; entities: EntityNode[]; relations?: EntityRelation[] }
+interface State { version: 1; entities: EntityNode[]; relations?: EntityRelation[]; provenance?: { baseline: State; ignored: string[]; sources: GraphSource[] } }
+interface GraphSource { key: string; at: number; items: ExtractedEntity[] }
+interface GraphTurn { id: string; sessionId: string; user: string; assistant: string; userAt: number; assistantAt: number }
+const turnKey = (turn: GraphTurn) => JSON.stringify([turn.sessionId, turn.id]);
+const legacyTurnKey = (turn: GraphTurn) => JSON.stringify([turnKey(turn), turn.user, turn.assistant, turn.userAt, turn.assistantAt]);
 
 const ENTITY_PATTERNS: Array<{ type: EntityType; patterns: RegExp[] }> = [
   { type: "person", patterns: [/我的朋友(.{1,6})/g, /我认识(.{1,6})/g, /同事(.{1,6})/g, /叫(.{1,4})(?:的人|的朋友|的同事|的老板)/g, /有.{0,4}朋友.{0,4}(.{1,6})/g, /(.{1,4})是我的朋友/g] },
@@ -37,6 +41,12 @@ function validate(value: unknown): State {
       || !Number.isFinite(entity.firstMentionedAt) || !Number.isFinite(entity.lastMentionedAt)) throw new Error("实体图谱损坏");
   }
   const state = value as State, ids = new Set(state.entities.map(e => e.id));
+  if (state.provenance) {
+    const p = state.provenance;
+    if (!p.baseline || p.baseline.provenance || !Array.isArray(p.ignored) || p.ignored.some(key => typeof key !== "string")
+      || !Array.isArray(p.sources) || p.sources.some(source => !source || typeof source.key !== "string" || !Number.isFinite(source.at) || !Array.isArray(source.items))) throw new Error("实体来源损坏");
+    validate(p.baseline);
+  }
   if (ids.size !== state.entities.length || (state.relations !== undefined && (!Array.isArray(state.relations) || new Set(state.relations.map(r => r.id)).size !== state.relations.length || state.relations.some(r => !r || !r.id || !ids.has(r.sourceId) || !ids.has(r.targetId) || typeof r.relation !== "string" || !r.relation || !Number.isFinite(r.confidence) || r.confidence < 0 || r.confidence > 1 || !Number.isFinite(r.strength) || r.strength < 0)))) throw new Error("实体关系损坏");
   return structuredClone(state);
 }
@@ -52,6 +62,24 @@ export function normalizeExtractedEntities(value: unknown): ExtractedEntity[] {
   return result;
 }
 
+
+function addEntities(state: State, items: ExtractedEntity[], at: number): State {
+  const entities = structuredClone(state.entities);
+
+  for (const item of items) {
+    const existing = entities.find((entity) => entity.name === item.name || entity.aliases.includes(item.name));
+    if (existing) {
+      existing.mentionCount += 1;
+      existing.lastMentionedAt = at;
+      existing.aliases = [...new Set([...existing.aliases, ...(item.aliases ?? [])].filter((alias) => alias !== existing.name))].slice(0, 20);
+    } else {
+      entities.push({ id: `entity-${at}-${entities.length}`, name: item.name, type: item.type, aliases: item.aliases ?? [], mentionCount: 1, firstMentionedAt: at, lastMentionedAt: at });
+    }
+
+  }
+  return { ...state, entities };
+}
+
 export function createEntityGraph(storage: PluginStorage, now: () => number = Date.now) {
   const stored = storage.get<unknown>(KEY) ?? legacyContextState(storage, KEY);
   let state: State = stored === undefined ? { version: 1, entities: [] } : validate(stored);
@@ -62,22 +90,27 @@ export function createEntityGraph(storage: PluginStorage, now: () => number = Da
         ? (input as string[]).flatMap(extractEntitiesFromText)
         : input as ExtractedEntity[];
       if (!items.length) return 0;
-      const entities = structuredClone(state.entities), at = now();
-      let changed = 0;
-      for (const item of items) {
-        const existing = entities.find((entity) => entity.name === item.name || entity.aliases.includes(item.name));
-        if (existing) {
-          existing.mentionCount += 1;
-          existing.lastMentionedAt = at;
-          existing.aliases = [...new Set([...existing.aliases, ...(item.aliases ?? [])].filter((alias) => alias !== existing.name))].slice(0, 20);
-        } else {
-          entities.push({ id: `entity-${at}-${entities.length}`, name: item.name, type: item.type, aliases: item.aliases ?? [], mentionCount: 1, firstMentionedAt: at, lastMentionedAt: at });
-        }
-        changed += 1;
-      }
-      state = { ...state, entities };
-      storage.set(KEY, state);
-      return changed;
+      const next = addEntities(state, items, now());
+      if (state.provenance) next.provenance = { ...state.provenance, baseline: addEntities(state.provenance.baseline, items, now()) };
+      storage.set(KEY, next);
+      state = next;
+      return items.length;
+    },
+    reconcile(turns: GraphTurn[]) {
+      // Legacy graphs have no reliable per-turn provenance. Freeze that baseline;
+      // do not invent sources or count pre-existing turns twice.
+      const provenance = state.provenance ?? { baseline: structuredClone(state), ignored: stored === undefined ? [] : turns.map(legacyTurnKey), sources: [] };
+      const ignored = new Set(provenance.ignored);
+      const sources = turns.filter(turn => !ignored.has(legacyTurnKey(turn))).map(turn => ({
+        key: turnKey(turn), at: turn.assistantAt,
+        items: [turn.user, turn.assistant].flatMap(extractEntitiesFromText),
+      }));
+      if (state.provenance && JSON.stringify(sources) === JSON.stringify(provenance.sources)) return;
+      let next = structuredClone(provenance.baseline);
+      for (const source of sources) next = addEntities(next, source.items, source.at);
+      next.provenance = { ...provenance, sources };
+      storage.set(KEY, next);
+      state = next;
     },
     search(query: string) {
       const normalized = query.normalize("NFC").toLowerCase();

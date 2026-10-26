@@ -17,13 +17,19 @@ module.exports=function createBridge(options){
  });
  function rpc(method,...args){
   assertRunning();if(stopped||stopping)throw Error('JOINT_OWNER_STOPPED');
-  const shared=new SharedArrayBuffer(32+32*1024*1024),head=new Int32Array(shared,0,8);
+  let shared=new SharedArrayBuffer(32+64*1024),head=new Int32Array(shared,0,8);
   const timeoutMs=method==='start'?(options.startTimeoutMs??180000):(options.rpcTimeoutMs??15000),deadline=performance.now()+timeoutMs+1000;
   let heartbeat=Atomics.load(control,1),aliveAt=performance.now();
-  worker.postMessage({method,args,shared,requestId:++sequence,timeoutMs});
-  while(Atomics.load(head,0)===0){
+  const requestId=++sequence;worker.postMessage({method,args,shared,requestId,timeoutMs});
+  while(Atomics.load(head,0)!==1){
+   if(Atomics.load(head,0)===2){
+    const size=head[1];if(size<=0){abort(Error('JOINT_RESPONSE_UNKNOWN_OUTCOME:INVALID_SIZE'));throw terminalError;}
+    try{shared=new SharedArrayBuffer(32+size);head=new Int32Array(shared,0,8);}
+    catch{abort(Error('JOINT_RESPONSE_UNKNOWN_OUTCOME:ALLOCATION'));throw terminalError;}
+    worker.postMessage({method:'receiveResponse',requestId,shared});
+   }
    Atomics.wait(head,0,0,100);
-   if(Atomics.load(head,0)!==0)break;
+   if(Atomics.load(head,0)===1)break;
    const now=performance.now(),next=Atomics.load(control,1);if(next!==heartbeat){heartbeat=next;aliveAt=now;}
    if(now-aliveAt>3000||now>deadline){abort(Error('JOINT_TIMEOUT_UNKNOWN_OUTCOME:'+method));throw terminalError;}
   }
@@ -36,9 +42,9 @@ module.exports=function createBridge(options){
   approveStorageRecovery:(file,isolate=false)=>rpc('approveRecovery',file,isolate),
   openStorageFolder:async()=>{const error=await require('electron').shell.openPath(options.data);if(error)throw Error(error);},
   listSessions:opts=>call('chats.listSessions',opts),getSession:id=>call('chats.getSession',id),
-  getSessionPage(id,before,limit){const s=store.getSession(id);if(!s)return null;const end=Math.max(0,Math.min(before??s.messages.length,s.messages.length)),start=Math.max(0,end-Math.max(1,Math.min(Math.floor(limit)||1,200))),{messages,...meta}=s;return {session:{...meta,messageCount:messages.length},messages:messages.slice(start,end),hasMore:start>0};},
-  getSessionByPurpose:purpose=>{const s=store.listSessions().find(s=>s.purpose===purpose);return s?store.getSession(s.id):null;},
-  getLatestSessionId:()=>store.listSessions()[0]?.id??null,
+  getSessionPage:(id,before,limit)=>call('chats.getSessionPage',id,before,limit),
+  getSessionByPurpose:purpose=>call('chats.getSessionByPurpose',purpose),
+  getLatestSessionId:()=>call('chats.getLatestSessionId'),
   getWorkspaceBinding:id=>store.getSession(id)?.workspaceBinding,
   appendMessage:(id,m)=>mutate(id,'appendMessage',m),upsertMessage:(id,m)=>mutate(id,'upsertMessage',m),
   appendProactiveMessage:(id,input)=>call('life.appendProactiveMessage',id,input),
@@ -48,7 +54,7 @@ module.exports=function createBridge(options){
   deleteSession:id=>call('life.deleteSession',id),
   migrateLegacyMessages:messages=>call('chats.migrateLegacyMessages',messages),
   replaceMessages:(id,m)=>mutate(id,'replaceMessages',m),deleteMessageRound:(id,messageId)=>mutate(id,'deleteMessageRound',{messageId}),
-  replaceMessagesTail:(id,startIndex,messages,expectedTailIds)=>{const old=store.getSession(id);if(expectedTailIds&&JSON.stringify(old?.messages.slice(startIndex).map(m=>m.id))!==JSON.stringify(expectedTailIds))throw Error('JOINT_TAIL_CHANGED');return mutate(id,'replaceMessagesTail',{startIndex,messages});},
+  replaceMessagesTail:(id,startIndex,messages,expectedTailIds)=>mutate(id,'replaceMessagesTail',{startIndex,messages,expectedTailIds}),
  };
  // No implicit fallback to the formal JSON store for unknown operations.
  for(const name of ['createSession','renameSession','setSessionPinned','setSessionModelProfile','setSessionContextUsage','setWorkspaceBinding','clearWorkspaceBinding'])store[name]=(...args)=>call('chats.'+name,...args);
@@ -95,5 +101,5 @@ module.exports=function createBridge(options){
    if(failure??terminalError)throw failure??terminalError;
   })();return stopping;
  }
- return {start:()=>rpc('start'),call,callAsync:(...args)=>asyncRpc('call',...args),backup:destination=>asyncRpc('backup',destination),embed:texts=>asyncRpc('embed',texts),store,pluginStorage,controllers,stop};
+ return {start:()=>rpc('start'),call,callAsync:(...args)=>asyncRpc('call',...args),exportJson:()=>asyncRpc('exportJson'),backup:destination=>asyncRpc('backup',destination),embed:texts=>asyncRpc('embed',texts),store,pluginStorage,controllers,stop};
 };

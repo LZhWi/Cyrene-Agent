@@ -19,6 +19,8 @@ export interface ShellJobRecord {
 export function runShellJobCommand(database: ConversationDatabase, method: string, args: any[]): unknown {
   const db = database.db;
   switch (method) {
+    case "shellJobs.all":
+      return db.prepare("SELECT record_json FROM shell_jobs ORDER BY job_id").all().map(row=>JSON.parse(row.record_json as string));
     case "shellJobs.create": {
       const record = args[0] as ShellJobRecord;
       db.prepare("INSERT INTO shell_jobs(job_id,status,ended_at,record_json) VALUES(?,?,?,?)")

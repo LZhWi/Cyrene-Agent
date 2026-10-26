@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { hasDurableChannelReceipts, recoverDeliveredChannelReceipts } from './durable-delivery';
 import type { BrowserWindow } from "electron";
 import type { IpcScope } from "../application/ipc-scope";
 import { IPC } from "../../shared/ipc-channels";
@@ -27,7 +28,7 @@ import {
   formatChannelUserText,
   type BoundConversationMessageMetadata,
 } from "./channel-context";
-import { appendHistory, migrateHistory } from "./history-log";
+import { appendHistory, appendBoundHistory, migrateHistory } from "./history-log";
 import { createKeyedQueue } from "./keyed-queue";
 import { createChannelRateLimiter } from "./rate-limiter";
 import { createChannelDeliveryService } from "./delivery-service";
@@ -114,8 +115,12 @@ export function createChannelsSubsystem(
     content: string,
     metadata: BoundConversationMessageMetadata,
   ) => {
+    const messageId=metadata.messageId
+      ? 'channel:'+createHash('sha256').update(JSON.stringify([metadata.channel,metadata.sourceSessionId,conversationId,metadata.messageId,role])).digest('hex') : randomUUID();
+    const existing=getSession(conversationId)?.messages.find(m=>m.id===messageId);
+    if(existing){if(existing.content!==content)throw Error('CHANNEL_MIRROR_CONFLICT');return;}
     const session = appendMessage(conversationId, {
-      id: randomUUID(),
+      id: messageId,
       role: role === "assistant" ? "model" : "user",
       content,
       at: Date.now(),
@@ -287,7 +292,15 @@ export function createChannelsSubsystem(
     }
   };
 
+  const notifyJournalCommitted=()=>{const win=deps.getReactChatWindow();if(win&&!win.isDestroyed())try{win.webContents.send(IPC.CHATS_CHANGED);}catch(error){console.warn('[Channels] bound conversation refresh failed:',error);}};
   const context = createChannelContext({
+    onJournalCommitted:notifyJournalCommitted,
+    appendJournal:(...args)=>{
+      const applied=appendBoundHistory(...args);
+      if(applied)notifyJournalCommitted();
+      return applied;
+    },
+    durableHistory:()=>hasDurableChannelReceipts(),
     resolveBoundConversationId,
     loadRecentChannelHistory,
     loadBoundConversationHistory,
@@ -330,7 +343,10 @@ export function createChannelsSubsystem(
       handleIncoming: (msg) => dispatcher.handleIncoming(msg),
       reloadDispatcherSettings: () => dispatcher.reloadSettings(),
     }),
-    start: (signal?: AbortSignal) => startChannels(signal),
+    start: async (signal?: AbortSignal) => {
+      await recoverDeliveredChannelReceipts(context, signal);
+      await startChannels(signal);
+    },
     shutdown: () => shutdownChannels(),
   };
   const adapter = lifecycle ?? defaultLifecycle;

@@ -51,6 +51,44 @@ function acceptPrompt(ctx: ReturnType<typeof createMockPluginContext>, runId: st
 }
 
 describe("原生聊天记忆接入", () => {
+  it.each(["native", "disabled"])("启动先服从宿主开关，不按旧设置恢复失败队列：%s", async (mode) => {
+    const preferences = {
+      chatBackend: "companion" as "native" | "companion", proactiveChatMode: "off" as const,
+      companionProactivePace: "normal" as const, proactiveDeliveryTarget: "local" as const,
+      chatSocialContextEnabled: true, companionFeedbackLearningEnabled: false,
+      companionScreenMonitorEnabled: false, companionLifeEnabled: false, companionImportantDatesText: "",
+    };
+    const getMessages = vi.fn().mockRejectedValue(new Error("offline"));
+    const ctx = createMockPluginContext({ deps: {
+      conversations: { list: vi.fn(), getMessages },
+      companionContext: { chatPreferences: () => ({ ...preferences }), snapshot: async () => ({ items: [] }) },
+    } });
+    const memory = createMemory(ctx.storage);
+    const first = createNativeIntegration(ctx, memory, { searchForPrompt: vi.fn() });
+    dispatch(ctx, event());
+    await first.whenIdle();
+    expect(first.view().pending).toBe(1);
+    await first.stop();
+    getMessages.mockClear();
+    if (mode === "native") preferences.chatBackend = "native";
+    else preferences.chatSocialContextEnabled = false;
+    const restarted = createNativeIntegration(ctx, memory, { searchForPrompt: vi.fn() });
+    try {
+      await restarted.whenIdle();
+      expect(getMessages).not.toHaveBeenCalled();
+      expect(restarted.view()).toMatchObject({ pending: 1, settings: {
+        captureEnabled: false, autoExtractEnabled: false, promptInjectionEnabled: false, socialContextEnabled: false,
+      } });
+      preferences.chatBackend = "companion";
+      preferences.chatSocialContextEnabled = true;
+      getMessages.mockResolvedValue({ items: messages(0), range: { fromMessageId: "user-0", throughMessageId: "assistant-0" } });
+      restarted.configure({ ...restarted.view().settings, captureEnabled: true, autoExtractEnabled: true,
+        promptInjectionEnabled: true, socialContextEnabled: true });
+      await restarted.whenIdle();
+      expect(getMessages).toHaveBeenCalledTimes(1);
+      expect(restarted.view().pending).toBe(0);
+    } finally { await restarted.stop(); }
+  });
   it("历史读取失败不丢弃有效 L2 注入", async () => {
     const ctx = createMockPluginContext();
     const native = createNativeIntegration(ctx, createMemory(ctx.storage), {

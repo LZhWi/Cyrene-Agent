@@ -348,6 +348,28 @@ describe("跨插件协议与路径边界", () => {
       await memoryPlugin.unregister?.();
     }
   });
+  it("无需等待偏好事件即可应用原生开关，并拒绝插件页覆盖这些开关", async () => {
+    const preferences = {
+      chatBackend: "companion" as const, proactiveChatMode: "off" as const,
+      companionProactivePace: "quiet" as const, proactiveDeliveryTarget: "local" as const,
+      chatSocialContextEnabled: false, companionFeedbackLearningEnabled: false,
+      companionScreenMonitorEnabled: false, companionLifeEnabled: false, companionImportantDatesText: "",
+    };
+    const ctx = createMockPluginContext({ pluginId: CHAT_ID, deps: {
+      llm: { generateText: vi.fn() },
+      companionContext: { chatPreferences: () => preferences, snapshot: async () => ({ items: [] }) },
+    } });
+    ctx.storage.rootDir = () => temporaryDirectory("startup-preferences");
+    try {
+      await chatPlugin.register(ctx);
+      const ui = ctx.ipcChannels.get("ui")!;
+      expect((await ui("state") as any).data).toMatchObject({ memoryEnabled: false,
+        proactive: { enabled: false, pace: "quiet" }, screenMonitor: { enabled: false }, life: { enabled: false } });
+      for (const action of ["save-memory-link", "save-proactive-settings", "save-screen-monitor-settings", "save-life-settings"]) {
+        expect(await ui(action, { enabled: true })).toMatchObject({ ok: false, error: expect.stringContaining("原生设置") });
+      }
+    } finally { await ctx.dispose(); await chatPlugin.unregister?.(); }
+  });
 
   it("两个实际插件通过 UI IPC 与真实协议完成聊天、检索注入、提取、停用", async () => {
     const generateText = vi.fn().mockImplementation(async (messages) => messages[0]?.content?.includes("记忆候选提取器") ? "[]" : "已经记住你喜欢乌龙茶");
