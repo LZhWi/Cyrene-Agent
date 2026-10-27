@@ -57,7 +57,7 @@
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/Playa-0v0/Cyrene-Agent.git
+git clone https://github.com/LZhWi/Cyrene-Agent.git
 cd Cyrene-Agent
 ```
 
