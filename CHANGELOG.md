@@ -17,6 +17,8 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 
 ### 修复
 
+* **MCP恢复:** 计入复用连接的成功数量 ([c661607](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/c66160797434ece86d2950f386a767ac7d6d35b7)), references [Playa-Cyrene/Cyrene-Agent#278](https://github.com/Playa-Cyrene/Cyrene-Agent/issues/278)
+* **MCP恢复:** 跳过内置同步已连接的服务 ([257d7df](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/257d7df1291d15688ee3666db92a8e2a83d9bb15))
 * **上下文:** 为损坏历史参数提供预算估算回退 ([a94b1a7](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/a94b1a71003620cfbd5e5eeee4324f0b47802d24))
 * **上下文:** 补全请求投影的历史消息预算计量 ([c6312ce](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/c6312ce4e76f3b66fc77ef39da0d1999a37e3102))
 * **主动消息:** 复用 Chat 模型档案解析 ([cc2cdd6](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/cc2cdd64d4b57d5e13b7fd9721d219add898265f))
@@ -30,6 +32,9 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 * **学习模式:** 隐藏后台续轮的出卷草稿工具 ([0ba1744](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/0ba1744ee78ed5cf35bf09dbf8d43a705aa6a2c2))
 * **学习:** 隔离会话运行与进度写回工作区 ([7a97542](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/7a97542864609ae55ca7df1012c334044b14da51))
 * **定时任务:** 保留重启前的用户任务模式 ([4bb7725](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/4bb772580d51172efedb4c44591d579b4cccdf99))
+* **文档工具:** 修复 ExcelJS 导入并补充原生读写回归 ([b0bc234](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/b0bc2346706c8d7a8b476c690ee50e1250162931))
+* **文档工具:** 修复 PDF 字体回退并保护生成失败输出 ([6687df5](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/6687df501cf958c91f3653fb59017c990de18689))
+* **文档工具:** 避免 PDF 临时输出依赖目标目录写权限 ([f594a72](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/f594a72678f2c85e98756297be44685248c95029))
 * **构建:** 更新 mpv 下载清单到 20261018 ([b36683b](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/b36683b01e48c6224d8cf011e153e8593a5d0e19))
 * **检索:** 原生分词恢复后刷新缓存并对齐查询词元 ([53de43a](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/53de43aaf9463ae2f4d354d7ed90bf9e6e30df79))
 * **检索:** 原生初始化失败后按调用重试并记录诊断 ([3b1fef0](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/3b1fef0388484997cd79f298585109c16a1dac4a))
@@ -37,6 +42,7 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 * **检索:** 统一三处排名入口的分词恢复批次 ([69c96ff](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/69c96ffd655e9b4485f44b0f436cda48d05291a2))
 * **模型:** 保留 MiniMax M3.1 Flash 预览版名称为非推荐历史型号 ([e7d57ed](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/e7d57ed01f528bd15348b37819b318c74665536c))
 * **模型:** 官方核验只记在 MiniMax M3.1 Flash 正式型号上 ([5684f33](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/5684f339dccc590746acfccefd0b1b33485c0503))
+* **模型检测:** 补齐分词器配置完整性校验 ([4fad2f0](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/4fad2f090d13c43bad122882b90314b2ae174833))
 * **浏览器:** Agent 控制或元素选择结束后补做被延后的身份刷新 ([01415d2](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/01415d2f7adcfa08973a7ef9fd07b8c4b3cad3ea))
 * **浏览器:** 修复视口身份切换时打断导航与最小化误切换 ([dddc60b](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/dddc60b6db051fcf7fd8bbb24f4a26d2e699cef3))
 * **浏览器:** 停止或加载失败后不补刷新，探测后到达的输入也阻止刷新 ([f5aa4e2](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/f5aa4e2a441805d3c38132ce0ba64421fc82c2e8))
