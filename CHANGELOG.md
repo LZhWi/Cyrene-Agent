@@ -5,7 +5,7 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 
 > 本文件由 `pnpm run release` 生成，请勿手工编辑；需要调整措辞请改写对应的提交信息。
 
-## [1.3.5](https://github.com/Playa-Cyrene/Cyrene-Agent/compare/v1.3.4...v1.3.5) (2026-10-31)
+## [1.3.5](https://github.com/Playa-Cyrene/Cyrene-Agent/compare/v1.3.4...v1.3.5) (2026-11-01)
 
 ### 新增
 
@@ -24,6 +24,7 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 * **主动消息:** 复用 Chat 模型档案解析 ([cc2cdd6](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/cc2cdd64d4b57d5e13b7fd9721d219add898265f))
 * **会话运行:** 清理前台失败运行已消费的 Shell 事件 ([e7128cb](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/e7128cba9f2f8106d8e844805e275ed4f765112f))
 * **后台续轮:** 退休失败运行已确认的 Shell 事件 ([ab20f30](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/ab20f300927e7225f0aa0dfd06a163c801b6080b))
+* **启动退出:** 取消退出后的启动推进并清理迟到资源 ([dd43465](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/dd43465a656219f41aaf99f4c5d49c8708dfa1b3))
 * **字体:** 打包本地 JetBrains Mono 字体 ([cdbf24e](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/cdbf24e3fcec7ebcaa3b2dd7c466578de1baf826))
 * **字体:** 清理远程字体 CSP 白名单 ([4206ced](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/4206ced0b9a7b0052bbfc6e32ca5fce8f772858f))
 * **学习:** 串行化续跑并固定异步进度来源 Vault ([3c599ef](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/3c599ef4be9d90c2db748cf48eefb64252e13520))
@@ -31,6 +32,8 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 * **学习:** 持久化忙碌拒绝的恢复轨迹 ([9aa0cee](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/9aa0cee87de73a50477ca87b9004b8c934faa577))
 * **学习模式:** 隐藏后台续轮的出卷草稿工具 ([0ba1744](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/0ba1744ee78ed5cf35bf09dbf8d43a705aa6a2c2))
 * **学习:** 隔离会话运行与进度写回工作区 ([7a97542](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/7a97542864609ae55ca7df1012c334044b14da51))
+* **安装器:** 校验安装结束前的关键文件 ([cac8d0d](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/cac8d0d70df6044efe9c49ef2f1308500c04b7ac))
+* **安装器测试:** 显式使用 UTF-8 编译夹具 ([e98481a](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/e98481a8ef274a077bb4216261c00c13d31bade5))
 * **定时任务:** 保留重启前的用户任务模式 ([4bb7725](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/4bb772580d51172efedb4c44591d579b4cccdf99))
 * **文档工具:** 修复 ExcelJS 导入并补充原生读写回归 ([b0bc234](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/b0bc2346706c8d7a8b476c690ee50e1250162931))
 * **文档工具:** 修复 PDF 字体回退并保护生成失败输出 ([6687df5](https://github.com/Playa-Cyrene/Cyrene-Agent/commit/6687df501cf958c91f3653fb59017c990de18689))
