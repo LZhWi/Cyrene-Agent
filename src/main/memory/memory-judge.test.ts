@@ -53,25 +53,33 @@ function validL2Raw(sourceQuote?: string, facets?: Record<string, unknown>, evid
 
 describe("MemoryJudge sourceQuote", () => {
   it.each([
-    ["眼前景色只是梦境", "眼前景色在梦里面", true],
-    ["用户只喝茶", "用户喝茶", false],
-    ["用户只喝茶", "用户只是喜欢喝茶", false],
-    ["用户永远喝茶", "用户喝茶", false],
-    ["用户只喝茶", "用户只喝茶", true],
-  ])("reviews risky wording within two calls: %s", async (summary, quote, accepted) => {
+    ["眼前景色只是梦境", "眼前景色在梦里面"],
+    ["用户只喝茶", "用户喝茶"],
+    ["用户只喝茶", "用户只是喜欢喝茶"],
+    ["用户永远喝茶", "用户喝茶"],
+    ["用户只喝茶", "用户只喝茶"],
+  ])("returns lexical risks without blocking or requesting a semantic retry: %s", async (summary, quote) => {
     const [raw] = JSON.parse(validL2Raw());
     mocks.llmText = JSON.stringify([{ ...raw, summary, evidenceQuotes: [quote] }]);
-    if (accepted) {
-      mocks.llmTexts = [mocks.llmText, JSON.stringify([{...raw,summary,evidenceQuotes:[quote],
-        reason:"语义复核通过：原文与摘要表达相同范围，没有增加限制或确定性。"}])];
-      const candidates = await memoryJudge.judgeRecentTurns([{ userInput: quote, assistantReply: "好的" }], "s");
-      expect(candidates).toHaveLength(1);
-    } else {
-      await expect(memoryJudge.judgeRecentTurns([{ userInput: quote, assistantReply: "好的" }], "s")).rejects.toThrow("需要语义复核");
-      expect(fetch).toHaveBeenCalledTimes(2);
-      expect(mocks.capturedMessages[1].content).toContain(quote);
-      expect(mocks.capturedMessages[1].content).toContain("不要为通过检查机械删除词语");
-    }
+    const candidates = await memoryJudge.judgeRecentTurns([{ userInput: quote, assistantReply: "好的" }], "s");
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].content).toBe(summary);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the bicycle paraphrase and unrelated candidates in the same incremental batch", async () => {
+    const [raw] = JSON.parse(validL2Raw());
+    const quote = "我自行车还没修，因为要推车推好远，不想动";
+    mocks.llmText = JSON.stringify([
+      { ...raw, summary: "用户的自行车尚未修理，因修车点较远，推车麻烦，懒得去", evidenceQuotes: [quote] },
+      raw,
+    ]);
+    const candidates = await memoryJudge.judgeRecentTurns([
+      { conversationId: "chat", userMessageId: "u1", userInput: quote, assistantReply: "嗯" },
+      { conversationId: "chat", userMessageId: "u2", userInput: "我在做前端", assistantReply: "嗯" },
+    ], "chat", { priorTurnCount: 0, previousMemories: [] });
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map(item => item.sourceMessageIds)).toEqual([["u1"], ["u2"]]);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("includes the persisted user and assistant timestamps for every turn", async () => {
     mocks.llmText = "[]"

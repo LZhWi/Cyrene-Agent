@@ -78,8 +78,9 @@ export async function startAsrTest(
       : { ok: false, error: "测试已停止" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error("[ASR Test] 启动失败:", message);
     send(IPC.ASR_TEST_ERROR, { message });
-    setState("error");
+    setState("error", message);
     stream?.stop();
     stream = null;
     config = null;

@@ -1,5 +1,6 @@
 {
   "name": "live2d-cyrene",
+  "productName": "Cyrene-Agent-Local",
   "version": "0.3.0",
   "description": "Live2D desktop pet — Cyrene",
   "main": "dist/main/main/index.js",

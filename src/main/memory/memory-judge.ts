@@ -7,7 +7,6 @@ import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, MemoryJudgeTurn, MemoryJudgeCon
 import { assertNoTemporaryTurnRefs, validateIncrementalCandidates } from "./memory-write-validation"
 import { recordUsage } from "../token-usage-store"
 import { normalizeMemoryFacets, tryNormalizeModelFacets, type MemoryFacets } from "./memory-facets"
-import { requireSemanticReview } from "./memory-semantic-review"
 
 interface ModelSettings {
   provider: string
@@ -443,7 +442,6 @@ export class MemoryJudge {
 
       let candidates: MemoryCandidate[] = []
       let repair = ""
-      const semanticRequests = new Set<string>()
       for (let attempt = 0; attempt < 2; attempt++) {
         const raw = await callChatCompletions(
           settings,
@@ -467,7 +465,6 @@ export class MemoryJudge {
               .filter((item) => item.shouldWrite === true)
               .filter((item) => item.layer !== "L0" || (item.certainty === "explicit" && item.attribution === "user_explicit"))
           for (const candidate of candidates) assertNoTemporaryTurnRefs(candidate.content)
-          requireSemanticReview(candidates, semanticRequests, attempt > 0)
           break
         } catch (error) {
           if (attempt === 1) throw error

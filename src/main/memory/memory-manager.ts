@@ -10,6 +10,7 @@ import { wasRecentlyInjectedMemory } from "./recent-injected-memory"
 import { addL2MemoryVector, getEntriesBySource, searchMemoryEntries } from "../rag/index"
 import { getEmbeddingProvider } from "../rag/embedding"
 import { cosineSimilarity } from "../rag/vectorstore"
+import { semanticRisk } from "./memory-semantic-review"
 
 type L1Field = "recentGoals" | "recentPreferences"
 
@@ -47,7 +48,7 @@ function getImpactScope(memory: L2Memory): "low" | "medium" | "high" {
 }
 
 function shouldSkipCandidate(candidate: MemoryCandidate): boolean {
-  return candidate.shouldWrite === false || Boolean(candidate.forbiddenOverclaims && candidate.forbiddenOverclaims.length > 0)
+  return candidate.shouldWrite === false
 }
 
 function canWriteCoreProfile(candidate: MemoryCandidate): boolean {
@@ -95,6 +96,13 @@ export function selectSuspectedDuplicateL2(
 }
 
 export class MemoryManager {
+  private async recordSemanticReview(candidate: MemoryCandidate, content: string, target: { field?: string; memoryId?: string }): Promise<void> {
+    const reason = semanticRisk(candidate)
+    if (!reason) return
+    await memoryStore.addSemanticReview({ layer: candidate.layer, ...target, content, reason,
+      evidenceQuotes: candidate.evidenceQuotes ?? [] })
+  }
+
   private async appendToPermanentNote(content: string): Promise<void> {
     const l0 = await memoryStore.getL0()
     const existing = l0.permanentNote || ""
@@ -119,7 +127,7 @@ export class MemoryManager {
     for (const candidate of candidates) {
       if (isSourceCurrent && !await isSourceCurrent()) return
       if (shouldSkipCandidate(candidate)) {
-        console.log("[MemoryManager] 候选标记为不写入或存在过度概括，跳过")
+        console.log("[MemoryManager] 候选标记为不写入，跳过")
         continue
       }
 
@@ -157,10 +165,12 @@ export class MemoryManager {
         // 情况三：合法字段，直接写入
         if (isSourceCurrent && !await isSourceCurrent()) return
         await memoryStore.upsertL0Field(candidate.field as L0WritableField, candidate.content)
+        await this.recordSemanticReview(candidate, candidate.content, { field: candidate.field })
         console.log(`[MemoryManager] L0 更新字段: ${candidate.field} = "${candidate.content.slice(0, 20)}"`)
       } else if (candidate.layer === "L1") {
         const field = getL1Field(candidate.content)
         await memoryStore.replaceL1Field(field, candidate.content)
+        await this.recordSemanticReview(candidate, candidate.content, { field })
         console.log(`[MemoryManager] L1 更新字段: ${field}`)
       } else if (candidate.layer === "L2") {
         await this.writeL2(candidate, isSourceCurrent)
@@ -170,6 +180,7 @@ export class MemoryManager {
 
   private async patchL2(candidate: MemoryCandidate, isSourceCurrent: () => Promise<boolean>): Promise<void> {
     const { memory, oldRagId } = await memoryStore.applyL2MemoryPatch(candidate, isSourceCurrent)
+    await this.recordSemanticReview(candidate, memory.content, { memoryId: memory.id })
     const version = memoryContentVersion(memory)
     const oldVectors = getEntriesBySource("user_memory").filter(e => e.metadata?.l2Id === memory.id).map(e => e.id)
     if (oldRagId) oldVectors.push(oldRagId)
@@ -213,6 +224,7 @@ export class MemoryManager {
       l2Input,
       candidate.createdAt !== undefined ? { createdAt: candidate.createdAt } : undefined,
     )
+    await this.recordSemanticReview(candidate, l2.content, { memoryId: l2.id })
 
     let ragId: string | undefined
     try {

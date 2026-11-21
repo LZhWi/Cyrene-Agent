@@ -1,9 +1,10 @@
 import * as fs from "fs"
 import * as path from "path"
+import { randomUUID } from "crypto"
 import { getUserDataDir } from "../runtime/runtime-paths"
 import { ConflictLog, DreamNarrative, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryRoundCountState, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
-import type { MemoryCandidate } from "./memory-types"
+import type { MemoryCandidate, MemorySemanticReview } from "./memory-types"
 import { applyMemoryContentPatch, memoryContentVersion } from "./memory-write-validation"
 import { createPendingMemoryFacets, repairStoredMemoryFacets, type MemoryFacets } from "./memory-facets"
 
@@ -90,6 +91,15 @@ function cloneDefaultStore(): MemoryStore {
   }
 }
 
+function isSemanticReviewCurrent(store: MemoryStore, review: MemorySemanticReview): boolean {
+  const content = review.layer === "L2"
+    ? store.l2.find(memory => memory.id === review.memoryId)?.content
+    : review.layer === "L0"
+      ? store.l0[review.field as keyof L0Profile]
+      : store.l1[review.field as keyof L1Profile]
+  return content === review.content
+}
+
 function snippet(text: string | undefined, maxLength: number): string | undefined {
   if (!text) return undefined
   return text.length > maxLength ? text.slice(0, maxLength) : text
@@ -128,6 +138,7 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       facets: repairStoredMemoryFacets(memory.facets, `${memory.content ?? ""} ${memory.triggerText ?? ""}`),
     })) : [],
     evidence: Array.isArray(store.evidence) ? store.evidence : [],
+    semanticReviews: Array.isArray(store.semanticReviews) ? store.semanticReviews : [],
     reflectionLogs: Array.isArray(store.reflectionLogs) ? store.reflectionLogs : [],
     conflictLogs: Array.isArray(store.conflictLogs) ? store.conflictLogs.map((log) => ({
       ...log,
@@ -216,6 +227,7 @@ class MemoryStoreManager {
   }
 
   async save(store: MemoryStore): Promise<void> {
+    if (store.semanticReviews) store.semanticReviews = store.semanticReviews.filter(review => isSemanticReviewCurrent(store, review))
     const filePath = getMemoryPath()
     const dir = path.dirname(filePath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
@@ -229,6 +241,27 @@ class MemoryStoreManager {
   async getL0(): Promise<L0Profile> {
     const store = await this.load()
     return store.l0
+  }
+
+  async addSemanticReview(review: Omit<MemorySemanticReview, "id" | "createdAt">): Promise<void> {
+    const store = await this.load()
+    store.semanticReviews = (store.semanticReviews ?? []).filter(item =>
+      item.layer !== review.layer || item.memoryId !== review.memoryId || item.field !== review.field)
+    store.semanticReviews.push({ ...structuredClone(review), id: randomUUID(), createdAt: Date.now() })
+    await this.save(store)
+  }
+
+  async getSemanticReviews(): Promise<MemorySemanticReview[]> {
+    const store = await this.load()
+    // 手动编辑、删除或后续自动更新之后，旧正文的提示不再适用。
+    return structuredClone((store.semanticReviews ?? []).filter(review => isSemanticReviewCurrent(store, review))
+      .sort((a, b) => b.createdAt - a.createdAt))
+  }
+
+  async dismissSemanticReview(id: string): Promise<void> {
+    const store = await this.load()
+    store.semanticReviews = (store.semanticReviews ?? []).filter(review => review.id !== id)
+    await this.save(store)
   }
 
   async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField]): Promise<void> {

@@ -460,7 +460,7 @@ async function initModelConfig(): Promise<void> {
 // ── 多会话存储桥接 ───────────────────────────────────────────
 // 旧版聊天记录从 localStorage 一次性迁移到主进程 chats 存储，之后整窗口
 // 所有读写都走 IPC（window.chatStore）。所有 saveHistory 调用点改成
-// saveSession，本质是把 messages 全量回写当前 session 文件。
+// saveSession，只按 ID 回写有变化的消息，避免覆盖后台追加的主动消息。
 // 会话元数据类型用 shared 的 ChatSessionMetaUI（跟设置面板共用）。
 
 interface ChatStoreSession {
@@ -495,6 +495,7 @@ interface ChatStoreApi {
   getPage: (id: string, before: number | null, limit: number) => Promise<{ session: Omit<ChatStoreSession, "messages">; messages: ChatStoreSession["messages"]; hasMore: boolean } | null>;
   create: (payload?: { title?: string; identityId?: string | null }) => Promise<ChatStoreSession>;
   append: (id: string, message: unknown) => Promise<ChatStoreSession | null>;
+  upsertMessages: (id: string, messages: unknown[]) => Promise<ChatStoreSession | null>;
   replaceMessages: (id: string, messages: unknown[]) => Promise<ChatStoreSession | null>;
   replaceTail: (id: string, startIndex: number, messages: unknown[]) => Promise<ChatStoreSession | null>;
   rename: (id: string, title: string) => Promise<ChatStoreSession | null>;
@@ -558,14 +559,30 @@ function toPersistableMessages(arr: Message[]): Array<{
     }));
 }
 
-async function saveSession(): Promise<void> {
+let persistedMessageSnapshots = new Map<string, string>();
+
+async function saveSession(clear = false): Promise<void> {
   if (!currentSessionId || !window.chatStore) return;
+  const sessionId = currentSessionId;
+  const snapshots = persistedMessageSnapshots;
+  const pending = toPersistableMessages(messages)
+    .filter((message) => snapshots.get(message.id) !== JSON.stringify(message));
+  if (!clear && pending.length === 0) return;
+  const submittedSnapshots = pending.map((message) => [message.id, JSON.stringify(message)] as const);
   try {
-    await window.chatStore.replaceTail(currentSessionId, sessionTailStart, toPersistableMessages(messages));
-    // 更新 seenAt：本窗口 saveSession 触发的 onChanged 不应被当作"外部写入"而重载
-    // proactive-chat 会话（会导致 UI 闪烁 / ttsCacheKey 丢失）。
-    const updated = await window.chatStore.get(currentSessionId);
-    if (updated) seenSessionUpdatedAt.set(updated.id, updated.updatedAt);
+    const updated = clear
+      ? await window.chatStore.replaceTail(sessionId, sessionTailStart, [])
+      : await window.chatStore.upsertMessages(sessionId, pending);
+    if (!updated || currentSessionId !== sessionId || persistedMessageSnapshots !== snapshots) return;
+    for (const [id, snapshot] of submittedSnapshots) snapshots.set(id, snapshot);
+    const visibleIds = new Set(messages.map((message) => message.id));
+    if (updated.messages.slice(sessionTailStart).some((message) => !visibleIds.has(message.id))) {
+      // 保存期间到达的后台消息已被保留；不能把它们仅标成已见而不展示。
+      pendingProactiveReloadId = sessionId;
+      if (!sending) await flushPendingProactiveReload();
+    } else {
+      seenSessionUpdatedAt.set(updated.id, updated.updatedAt);
+    }
   } catch (err) {
     console.warn("[Cyrene Chat] saveSession 失败:", err);
   }
@@ -596,6 +613,7 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
       minecraftEvent: m.minecraftEvent,
     });
   }
+  persistedMessageSnapshots = new Map(toPersistableMessages(messages).map((message) => [message.id, JSON.stringify(message)]));
   // 上报活跃 sessionId（设置面板“删除当前会话”差异化提示用）
   void window.chatStore?.setActiveSession(session.id);
   render();
@@ -623,6 +641,9 @@ async function loadEarlierMessages(): Promise<void> {
   if (!page) return;
   sessionTailStart = Math.max(0, sessionTailStart - page.messages.length);
   messages.unshift(...page.messages);
+  for (const message of toPersistableMessages(page.messages)) {
+    persistedMessageSnapshots.set(message.id, JSON.stringify(message));
+  }
   render(true);
   messagesEl.scrollTop = messagesEl.scrollHeight - beforeHeight;
 }
@@ -3173,7 +3194,7 @@ let pendingProactiveReloadId: string | null = null;
 /**
  * 发送结束后调用：若有排队的外部变更，重载当前会话。
  *
- * 依赖 IPC 有序处理：发送的最终 saveSession（replaceTail）在 finally 之前已同步
+ * 依赖 IPC 有序处理：发送的最终 saveSession（upsertMessages）在 finally 之前已同步
  * 发出 IPC，flush 这里的 getPage IPC 一定排在它之后被主进程处理，所以重载读到的
  * 是已落库的回复，不会把它冲掉。
  */
@@ -4098,7 +4119,8 @@ function clearChat(): void {
   const ok = window.confirm("清空当前对话？");
   if (!ok) return;
   messages.length = 0;
-  void saveSession();
+  persistedMessageSnapshots = new Map();
+  void saveSession(true);
   render();
 }
 

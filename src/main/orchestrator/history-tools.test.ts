@@ -768,6 +768,25 @@ describe("chat history occurrence backfill", () => {
     fs.rmSync(mocks.dataDir, { recursive: true, force: true });
   });
 
+  it("queues an old missing message even when the completed cursor and file signature are current", async () => {
+    const sessionFile = path.join(mocks.dataDir, "cyrene-chats", "sessions", "session-a.json");
+    const session = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+    mocks.getSession.mockReturnValue(session);
+    mocks.addHistoryMemory.mockResolvedValue("entry");
+    await backfillChatHistoryFromChatLogs();
+    const pending = path.join(mocks.dataDir, "cyrene-chats", "pending-history-turns.json");
+    fs.writeFileSync(pending, "[]");
+    mocks.getEntriesBySource.mockReturnValue(session.messages.slice(1).map((message: any) => ({
+      text: message.content, metadata: { sessionId: "session-a", turnId: message.id,
+        role: message.role === "user" ? "user" : "assistant", ts: message.at },
+    })));
+    mocks.addHistoryMemory.mockClear();
+    await backfillChatHistoryFromChatLogs();
+    expect(mocks.addHistoryMemory).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(pending, "utf8"))).toEqual([{ sessionId: "session-a", turnId: "turn-1" }]);
+    mocks.getSession.mockReset();
+  });
+
   it("resumes at the failed message and incrementally self-heals messages appended after completion", async () => {
     mocks.addHistoryMemory
       .mockResolvedValueOnce("entry-1")

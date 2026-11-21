@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { IPC } from "../../shared/ipc-channels";
 
 const mocks = vi.hoisted(() => ({
   createAsrStream: vi.fn(),
@@ -54,6 +55,27 @@ describe("ASR test manager", () => {
     const result = await startAsrTest(sender() as never, () => false, () => true);
     expect(result).toEqual({ ok: false, error: "长音频转写正在进行，请先停止转写" });
     expect(mocks.createAsrStream).not.toHaveBeenCalled();
+  });
+
+  it("preserves and logs the model loading error when startup fails", async () => {
+    const message = "页面文件太小，无法完成操作。 (os error 1455)";
+    const stop = vi.fn();
+    mocks.createAsrStream.mockReturnValue({
+      start: vi.fn().mockRejectedValue(new Error(message)),
+      stop,
+    });
+    const webContents = sender();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await startAsrTest(webContents as never, () => false)).toEqual({ ok: false, error: message });
+      expect(webContents.sent.filter(([channel]) => channel === IPC.ASR_TEST_STATE).at(-1)).toEqual([
+        IPC.ASR_TEST_STATE, { state: "error", message },
+      ]);
+      expect(log).toHaveBeenCalledWith("[ASR Test] 启动失败:", message);
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("streams PCM, emits recognition text and restarts after a VAD turn", async () => {

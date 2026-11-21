@@ -22,6 +22,44 @@ describe("chats store", () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-chats-store-"));
   });
 
+  it("keeps background proactive messages when an older paged window saves a reply or TTS cache", async () => {
+    let store = await import("./chats-store");
+    const policy = await import("../proactive/proactive-policy");
+    store.initialize();
+    const session = store.createSession({ purpose: "proactive-chat", initialMessages: [
+      { id: "older", role: "user", content: "older page", at: 1 },
+      { id: "u", role: "user", content: "hello", at: 2 },
+      { id: "a", role: "model", content: "reply", at: 3 },
+    ] });
+    const page = store.getSessionPage(session.id, null, 2)!;
+    const state = policy.createDefaultProactiveState();
+    const first = { sceneId: "topic_followup" as const, score: 90, sceneCooldownMs: 0 };
+    store.appendMessage(session.id, { id: "p1", role: "model", content: "first proactive", at: 4 });
+    policy.markProactiveCommitted(state, first, 4);
+
+    store.upsertMessages(session.id, [
+      { ...page.messages[1], ttsCacheKey: "cached-reply" },
+      { id: "next-user", role: "user", content: "new user message", at: 5 },
+    ]);
+    store.appendMessage(session.id, { id: "p2", role: "model", content: "second proactive", at: 6 });
+    policy.markProactiveCommitted(state, { ...first, sceneId: "sunny_day" }, 6);
+    // A delayed repeat save from the same window must neither duplicate nor remove messages.
+    store.upsertMessages(session.id, [{ ...page.messages[1], ttsCacheKey: "cached-reply" }]);
+
+    expect(state.unansweredCount).toBe(2);
+    vi.resetModules();
+    store = await import("./chats-store");
+    store.initialize();
+    const saved = store.getSession(session.id)!;
+    expect(saved.messages.map((message) => message.id)).toEqual(["older", "u", "a", "p1", "next-user", "p2"]);
+    expect(saved.messages[2].ttsCacheKey).toBe("cached-reply");
+    expect(store.listSessions()[0].messageCount).toBe(6);
+    const primary = path.join(store.getRootDir(), "sessions", `${session.id}.json`);
+    expect(fs.readFileSync(primary, "utf8")).toBe(fs.readFileSync(primary.replace(/\.json$/, ".last-good.json"), "utf8"));
+    // An explicit clear still replaces the visible tail rather than merging it.
+    expect(store.replaceMessagesTail(session.id, 1, [])?.messages.map((message) => message.id)).toEqual(["older"]);
+  });
+
   it("includes messageCount in paged session metadata", async () => {
     const { createSession, getSessionPage, initialize } = await import("./chats-store");
     initialize();

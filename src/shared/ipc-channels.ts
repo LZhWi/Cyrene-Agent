@@ -121,6 +121,7 @@ export const IPC = {
   CHATS_GET_PAGE: "chats:get-page",
   CHATS_CREATE: "chats:create",
   CHATS_APPEND: "chats:append",
+  CHATS_UPSERT_MESSAGES: "chats:upsert-messages",
   CHATS_REPLACE_MESSAGES: "chats:replace-messages",
   CHATS_REPLACE_TAIL: "chats:replace-tail",
   CHATS_RENAME: "chats:rename",
@@ -207,6 +208,7 @@ export const IPC = {
 
   // memory panel
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",
+  MEMORY_PANEL_RESOLVE_REVIEW: "memory-panel:resolve-review",
   MEMORY_PANEL_EDIT_L2: "memory-panel:edit-l2",
   MEMORY_PANEL_DELETE_L2: "memory-panel:delete-l2",
   MEMORY_PANEL_DELETE_IMPORTED_DOC: "memory-panel:delete-imported-doc",

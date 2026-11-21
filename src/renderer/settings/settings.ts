@@ -30,6 +30,7 @@ import type { WorkModelSettings } from "../../shared/work-types";
 import type { CallModelSettings } from "../../shared/call-types";
 import type { ChatIndexRecoveryResult, ChatSessionRecoveryResult, ChatStorageStatus } from "../../shared/chat-types";
 import type { GptsovitsSynthesizeRequest } from "../../shared/tts-types";
+import type { MemorySemanticReview } from "../../main/memory/memory-types";
 import { type LoginFlowState } from "../../shared/music-types";
 import type { HoloCubicSettings, HoloCubicStatus } from "../../shared/holocubic-types";
 import {
@@ -345,6 +346,7 @@ interface LocationApi {
 }
 
 interface MemoryPanelPayload {
+  semanticReviews: MemorySemanticReview[];
   l0: {
     preferredName: string;
     occupation: string;
@@ -384,6 +386,7 @@ interface MemoryPanelPayload {
 
 interface MemoryPanelApi {
   getData: () => Promise<MemoryPanelPayload>;
+  resolveReview: (id: string, expectedContent: string, action: "keep" | "edit" | "delete", content?: string) => Promise<{ ok: boolean; indexed?: boolean; error?: string }>;
   editL2: (id: string, content: string) => Promise<{ ok: boolean; indexed: boolean; error?: string }>;
   deleteL2: (id: string) => Promise<{ ok: boolean; deleted: boolean; deletedVectors: number; error?: string }>;
   deleteImportedDoc: (importId: string, fileName?: string) => Promise<{ ok: boolean; deleted: number }>;
@@ -3409,6 +3412,7 @@ function switchSection(section: string): void {
   disclaimerPanel.classList.toggle("is-hidden", !isDisclaimer);
   const memoryPanel = document.getElementById("memory-panel");
   if (memoryPanel) memoryPanel.classList.toggle("is-hidden", !isMemory);
+  if (isMemory) void refreshMemorySemanticReviews();
   const userPanel = document.getElementById("user-panel");
   if (userPanel) userPanel.classList.toggle("is-hidden", !isUser);
   const chatPanel = document.getElementById("chat-panel");
@@ -4538,6 +4542,8 @@ const memoryL1EditBtn = document.getElementById("memory-l1-edit-btn") as HTMLBut
 const memoryL1CancelBtn = document.getElementById("memory-l1-cancel-btn") as HTMLButtonElement | null;
 
 let memoryPanelCache: MemoryPanelPayload | null = null;
+const memoryReviewList = document.getElementById("memory-review-list");
+let memorySemanticReviews: MemorySemanticReview[] = [];
 let memorySandboxCandidateCache: MemoryRetrievalSandboxCandidate[] = [];
 let l0Editing = false;
 let l1Editing = false;
@@ -4618,6 +4624,81 @@ function renderInfoList(
     })
     .join("\n");
 }
+
+function renderMemorySemanticReviews(): void {
+  const count = document.getElementById("memory-review-count");
+  if (count) count.textContent = memorySemanticReviews.length ? `（${memorySemanticReviews.length}）` : "";
+  if (!memoryReviewList) return;
+  if (!memorySemanticReviews.length) {
+    renderEmptyState(memoryReviewList, "暂无待复核记忆", "需要留意的记忆会显示在这里，其他记忆照常保存");
+    return;
+  }
+  const fieldNames: Record<string, string> = { preferredName: "称呼", occupation: "职业 / 身份", longTermInterests: "长期兴趣",
+    language: "常用语言", permanentNote: "永久备注", recentGoals: "近期目标", recentPreferences: "近期偏好", currentProject: "当前项目" };
+  memoryReviewList.innerHTML = memorySemanticReviews.map(item => [
+    `<article class="memory-record memory-record--doc" data-review-id="${escapeHtml(item.id)}">`,
+    '  <div class="memory-record__main">',
+    `    <h3 class="memory-record__title">${escapeHtml(item.layer === "L2" ? "事件记忆" : `${item.layer === "L0" ? "长期画像" : "近期状态"} · ${fieldNames[item.field ?? ""] ?? item.field}`)}</h3>`,
+    `    <p class="memory-record__body">${escapeHtml(item.content)}</p>`,
+    `    <p class="memory-record__meta">${escapeHtml(`复核提示：${item.reason}（词语命中不代表错误）`)}</p>`,
+    `    <p class="memory-record__body">${escapeHtml(`用户原话：${item.evidenceQuotes.join("\n")}`)}</p>`,
+    '  </div>',
+    '  <div class="memory-record__actions">',
+    '    <button type="button" class="memory-record__save" data-review-action="keep">确认无误</button>',
+    '    <button type="button" class="memory-record__edit" data-review-action="edit" aria-label="修改此记忆" title="修改此记忆">✏️</button>',
+    '    <button type="button" class="memory-record__delete" data-review-action="delete" aria-label="删除此记忆" title="删除此记忆">🗑️</button>',
+    '  </div>',
+    '</article>',
+  ].join("\n")).join("\n");
+}
+
+async function refreshMemorySemanticReviews(): Promise<void> {
+  try {
+    const payload = await window.memoryPanel?.getData();
+    if (!payload) return;
+    memorySemanticReviews = payload.semanticReviews ?? [];
+    renderMemorySemanticReviews();
+  } catch (error) { console.error("[settings] load memory reviews failed:", error); }
+}
+
+document.getElementById("memory-review-refresh")?.addEventListener("click", () => { void refreshMemorySemanticReviews(); });
+memoryReviewList?.addEventListener("click", async event => {
+  const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-review-action]");
+  const record = button?.closest<HTMLElement>("[data-review-id]");
+  const item = memorySemanticReviews.find(review => review.id === record?.dataset.reviewId);
+  if (!button || !record || !item) return;
+  const action = button.dataset.reviewAction;
+  if (action === "cancel") { renderMemorySemanticReviews(); return; }
+  if (action === "edit") {
+    const main = record.querySelector(".memory-record__main");
+    const body = main?.querySelector(".memory-record__body");
+    if (body) {
+      const editor = document.createElement("textarea");
+      editor.className = "memory-record__editor";
+      editor.maxLength = 2000;
+      editor.setAttribute("aria-label", "修改待复核记忆");
+      editor.value = item.content;
+      body.replaceWith(editor);
+      editor.focus();
+    }
+    const actions = record.querySelector(".memory-record__actions");
+    if (actions) actions.innerHTML = '<button type="button" class="memory-record__save" data-review-action="save">保存修改</button><button type="button" class="memory-record__cancel" data-review-action="cancel">取消</button>';
+    return;
+  }
+  if (action !== "keep" && action !== "save" && action !== "delete") return;
+  if (action === "delete" && !await showModal({ title: "删除记忆", message: `确定删除这条已写入的记忆？\n\n${item.content}`, icon: "⚠️", confirmText: "删除", cancelText: "取消" })) return;
+  record.querySelectorAll<HTMLButtonElement>("button").forEach(control => { control.disabled = true; });
+  try {
+    const content = record.querySelector<HTMLTextAreaElement>(".memory-record__editor")?.value;
+    const result = await window.memoryPanel?.resolveReview(item.id, item.content, action === "save" ? "edit" : action, content);
+    if (!result?.ok) throw new Error(result?.error || "操作失败");
+    await loadMemoryPanel();
+    if (result.indexed === false) await showModal({ title: "修改已保存", message: "语义索引暂未建立，修复前这条记忆不会被自动召回。", icon: "⚠️", confirmText: "知道了" });
+  } catch (error) {
+    record.querySelectorAll<HTMLButtonElement>("button").forEach(control => { control.disabled = false; });
+    await showModal({ title: "复核操作失败", message: error instanceof Error ? error.message : String(error), icon: "⚠️", confirmText: "知道了" });
+  }
+});
 
 function formatL2MemoryTimeMeta(item: MemoryPanelPayload["l2"][number]): string {
   const summaryLabel = item.isSummary ? "合并摘要 · " : "";
@@ -4804,6 +4885,8 @@ async function loadMemoryPanel(): Promise<void> {
     const payload = await window.memoryPanel?.getData();
     if (!payload) return;
     memoryPanelCache = payload;
+    memorySemanticReviews = payload.semanticReviews ?? [];
+    renderMemorySemanticReviews();
 
     if (memoryL0NameInput) memoryL0NameInput.value = payload.l0.preferredName || "";
     if (memoryL0OccupationInput) memoryL0OccupationInput.value = payload.l0.occupation || "";

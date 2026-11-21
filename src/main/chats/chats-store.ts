@@ -616,6 +616,29 @@ export function appendMessage(id: string, message: ChatMessage): ChatSession | n
   return session;
 }
 
+// 普通窗口保存只更新提交的消息，保留窗口尚未看到的后台追加消息。
+export function upsertMessages(id: string, messages: ChatMessage[]): ChatSession | null {
+  requireWritable();
+  const session = readSessionFile(id);
+  if (!session) return null;
+  const positions = new Map(session.messages.map((message, index) => [message.id, index]));
+  for (const message of messages) {
+    const index = positions.get(message.id);
+    if (index === undefined) {
+      positions.set(message.id, session.messages.length);
+      session.messages.push(message);
+    } else {
+      session.messages[index] = message;
+    }
+  }
+  session.updatedAt = Date.now();
+  if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  notifyMessagesChanged(id);
+  return session;
+}
+
 // 批量覆盖整个 messages 数组（聊天窗口流式结束/清空/错误等场景用）。
 // updatedAt 一并刷新；用户没手动改名时根据新内容重新派生。
 export function replaceMessages(id: string, messages: ChatMessage[]): ChatSession | null {

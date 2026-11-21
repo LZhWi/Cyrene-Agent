@@ -657,6 +657,17 @@
             </div>
           </div>
           <div class="panel-body">
+            <div class="memory-card" id="memory-review-card">
+              <div class="memory-card__head">
+                <span>🔎</span>
+                <div>
+                  <h2>待复核记忆 <span id="memory-review-count"></span></h2>
+                  <p>这些记忆已写入并正常使用。提示仅表示可能有歧义，你可以确认、修改或删除。</p>
+                </div>
+                <button type="button" class="ghost-btn" id="memory-review-refresh">刷新</button>
+              </div>
+              <div class="memory-list" id="memory-review-list" aria-live="polite"></div>
+            </div>
             <!-- L0 -->
             <div class="memory-card">
               <div class="memory-card__head">

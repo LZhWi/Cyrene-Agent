@@ -12,6 +12,8 @@ import * as path from "path";
 import type { ChatMessage } from "../../shared/chat-types";
 import { getSession } from "../chats/chats-store";
 import { historyIndexText } from "../chats/history-index-text";
+import { missingHistoryTurns } from "../chats/history-index-coverage";
+import { queueHistoryTurnReconciliation } from "../chats/history-turn-reconciliation";
 import { describeMarkersForLlm } from "../channels/mobile-markers";
 import {
   addHistoryMemory,
@@ -972,6 +974,11 @@ export async function backfillChatHistoryFromChatLogs(): Promise<void> {
 
       const sessions = JSON.parse(fs.readFileSync(indexFile, "utf8")) as Array<{ id?: string }>;
       const sessionIds = sessions.flatMap((session) => typeof session?.id === "string" ? [session.id] : []);
+      const indexedEntries = getEntriesBySource("chat_history");
+      for (const id of sessionIds) {
+        const session = getSession(id);
+        if (session) queueHistoryTurnReconciliation(id, missingHistoryTurns(id, session.messages, indexedEntries));
+      }
       let progress = fs.existsSync(marker)
         ? readBackfillProgress(marker)
         : { complete: false, doneSessions: [], sessionOffsets: {}, sessionFileSignatures: {}, indexed: 0, at: 0 };

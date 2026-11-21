@@ -120,10 +120,11 @@ import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegat
 import { registerRecallHistoryTool, backfillChatHistoryFromChatLogs, runHistoryRetrievalSandbox } from "./orchestrator/history-tools";
 import { backfillVisualHistoryIndex, configureVisualHistoryIndex, registerRecallImagesTool } from "./chat/visual-history-index";
 import { auditUnlinkedDesktopHistory, retrySessionHistoryDeletions } from "./chats/history-deletion-retry";
-import { retryHistoryTurnReconciliations } from "./chats/history-turn-reconciliation";
+import { retryHistoryTurnReconciliations, queueHistoryTurnReconciliation } from "./chats/history-turn-reconciliation";
 import { backfillL2FromChatLogs } from "./memory/memory-backfill";
 import { backfillMemoryFacets } from "./memory/memory-facet-backfill";
 import { deleteL2MemoryForUser, editL2MemoryForUser } from "./memory/l2-user-management";
+import { resolveMemorySemanticReview } from "./memory/memory-review";
 import { runReflectionCatchupOnce } from "./memory/memory-compressor";
 import { notifyDreamUserActivity, startDreamScheduler, stopDreamScheduler } from "./memory/memory-dream";
 import { registerDocumentTools } from "./orchestrator/document-tools";
@@ -1036,10 +1037,11 @@ interface ImportedDocItem {
 }
 
 async function loadMemoryPanelData() {
-  const [l0, l1, l2] = await Promise.all([
+  const [l0, l1, l2, semanticReviews] = await Promise.all([
     memoryStore.getL0(),
     memoryStore.getL1(),
     memoryStore.getAllL2(),
+    memoryStore.getSemanticReviews(),
   ]);
 
   let importedDocs: ImportedDocItem[] = [];
@@ -1097,6 +1099,7 @@ async function loadMemoryPanelData() {
   return {
     l0,
     l1,
+    semanticReviews,
     l2: l2.sort((a, b) => (
       (b.sourceEndAt ?? b.sourceAt ?? b.createdAt) - (a.sourceEndAt ?? a.sourceAt ?? a.createdAt)
     )),
@@ -2257,6 +2260,7 @@ function appendProactiveAssistantToDesktopChat(text: string): { sessionId: strin
   });
   const at = Date.now();
   const messageId = randomUUID();
+  queueHistoryTurnReconciliation(session.id, [messageId]);
   const appended = chatsStore.appendMessage(session.id, {
     id: messageId,
     role: "model",
@@ -2264,6 +2268,7 @@ function appendProactiveAssistantToDesktopChat(text: string): { sessionId: strin
     at,
   });
   if (!appended) throw new Error("主动聊天会话写入失败");
+  void retryHistoryTurnReconciliations().catch(error => console.warn("[Chats] 主动消息索引待重试:", error));
   broadcastChatsChanged();
   chatMessageNotifier.notify({ messageId, sessionId: session.id, text });
   return { sessionId: session.id, at };
@@ -4275,6 +4280,14 @@ ipcMain.handle(IPC.USER_GET_AVATAR, () => {
 });
 
 ipcMain.handle(IPC.MEMORY_PANEL_GET_DATA, () => loadMemoryPanelData());
+ipcMain.handle(IPC.MEMORY_PANEL_RESOLVE_REVIEW, (_event, payload: { id?: unknown; expectedContent?: unknown; action?: unknown; content?: unknown }) => (
+  resolveMemorySemanticReview(
+    typeof payload?.id === "string" ? payload.id : "",
+    typeof payload?.expectedContent === "string" ? payload.expectedContent : "",
+    typeof payload?.action === "string" ? payload.action : "",
+    typeof payload?.content === "string" ? payload.content : undefined,
+  )
+));
 ipcMain.handle(IPC.MEMORY_PANEL_EDIT_L2, (_event, payload: { id?: unknown; content?: unknown }) => (
   editL2MemoryForUser(
     typeof payload?.id === "string" ? payload.id : "",

@@ -249,6 +249,18 @@ export interface MemoryCandidate {
   replaceText?: string
 }
 
+/** 已写入并正常使用的记忆；词语风险仅供用户复核，不阻断写入。 */
+export interface MemorySemanticReview {
+  id: string
+  layer: "L0" | "L1" | "L2"
+  field?: string
+  memoryId?: string
+  content: string
+  reason: string
+  evidenceQuotes: string[]
+  createdAt: number
+}
+
 export interface MemorySourceEvidence {
   conversationId: string
   messageId: string
@@ -307,6 +319,7 @@ export interface MemoryStore {
   evidence?: MemoryEvidence[]
   reflectionLogs?: ReflectionLog[]
   conflictLogs?: ConflictLog[]
+  semanticReviews?: MemorySemanticReview[]
   /** 上次 L2 生命周期衰减的时间戳，用于每日限频 */
   lastDecayAt?: number
   /** 尚未被 MemoryJudge 提取的残余轮次，重启后恢复，避免丢轮 */

@@ -161,6 +161,23 @@ export function registerChatsIpc(): void {
   );
 
   ipcMain.handle(
+    IPC.CHATS_UPSERT_MESSAGES,
+    (event, payload: { id: string; messages: ChatMessage[] }) => {
+      if (!payload?.id || !Array.isArray(payload.messages)) return null;
+      const before = chatsStore.getSession(payload.id)?.messages ?? [];
+      const replacements = new Map(payload.messages.map((message) => [message.id, message]));
+      const changed = changedIndexedTurnIds(before, before.map((message) => replacements.get(message.id) ?? message));
+      queueHistoryTurnReconciliation(payload.id, changed);
+      const session = chatsStore.upsertMessages(payload.id, payload.messages);
+      if (session) {
+        if (changed.length) void retryHistoryTurnReconciliations();
+        for (const message of changedImageMessages(before, session.messages)) scheduleVisualHistoryIndex(payload.id, message.id);
+        broadcastChanged(event.sender);
+      }
+      return session;
+    },
+  );
+  ipcMain.handle(
     IPC.CHATS_REPLACE_MESSAGES,
     (event, payload: { id: string; messages: ChatMessage[] }) => {
       if (!payload || !payload.id || !Array.isArray(payload.messages)) return null;

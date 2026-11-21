@@ -501,6 +501,8 @@ const locationApi = {
 
 const memoryPanelApi = {
   getData: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_DATA),
+  resolveReview: (id: string, expectedContent: string, action: "keep" | "edit" | "delete", content?: string) =>
+    ipcRenderer.invoke(IPC.MEMORY_PANEL_RESOLVE_REVIEW, { id, expectedContent, action, content }),
   editL2: (id: string, content: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_EDIT_L2, { id, content }),
   deleteL2: (id: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_L2, { id }),
   deleteImportedDoc: (importId: string, fileName?: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, { importId, fileName }),
@@ -605,6 +607,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),
+  upsertMessages: (id: string, messages: unknown[]) =>
+    ipcRenderer.invoke(IPC.CHATS_UPSERT_MESSAGES, { id, messages }),
   replaceMessages: (id: string, messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_REPLACE_MESSAGES, { id, messages }),
   replaceTail: (id: string, startIndex: number, messages: unknown[]) =>
